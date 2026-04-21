@@ -1,1 +1,3 @@
-"""Bushfire risk score: vegetation + slope + fire history. (Phase 2)"""
+"""Bushfire risk score using Australian state government planning overlays."""
+
+from property_scores.bushfire.score import bushfire_score

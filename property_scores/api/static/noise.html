@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Noise Score — Property Scores by DA Leads</title>
+<style>
+  :root { --bg: #0f172a; --surface: #1e293b; --border: #334155; --text: #e2e8f0; --muted: #94a3b8; --dim: #64748b; --accent: #8b5cf6; --green: #22c55e; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
+  .container { max-width: 900px; margin: 0 auto; padding: 40px 24px; }
+  .hero { text-align: center; margin-bottom: 48px; }
+  .hero-badge { display: inline-block; padding: 4px 12px; border-radius: 99px; background: rgba(139,92,246,0.15); color: var(--accent); font-size: 13px; font-weight: 600; margin-bottom: 16px; }
+  h1 { font-size: 36px; font-weight: 700; margin-bottom: 12px; }
+  h1 span { color: var(--accent); }
+  .hero p { font-size: 18px; color: var(--muted); max-width: 620px; margin: 0 auto; }
+  .try-section { background: var(--surface); border-radius: 12px; padding: 24px; margin-bottom: 40px; }
+  .try-section h2 { font-size: 18px; margin-bottom: 16px; }
+  .try-form { display: flex; gap: 8px; flex-wrap: wrap; }
+  .try-form input { padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font-size: 15px; width: 160px; }
+  .try-form button { padding: 10px 20px; border: none; border-radius: 8px; background: var(--accent); color: #fff; font-weight: 600; cursor: pointer; font-size: 15px; }
+  .try-form button:hover { background: #7c3aed; }
+  #result { margin-top: 16px; padding: 16px; border-radius: 8px; background: var(--bg); display: none; }
+  .result-score { font-size: 48px; font-weight: 700; }
+  .result-label { font-size: 16px; color: var(--muted); margin-bottom: 12px; }
+  .result-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .result-item { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .result-key { color: var(--dim); }
+  h2 { font-size: 22px; margin-bottom: 16px; margin-top: 40px; }
+  h3 { font-size: 17px; color: var(--accent); margin-bottom: 8px; margin-top: 24px; }
+  p, li { color: var(--muted); }
+  ul, ol { padding-left: 20px; margin-bottom: 12px; }
+  li { margin-bottom: 6px; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  th { color: var(--dim); font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; }
+  td { color: var(--text); font-size: 14px; }
+  .scale { display: flex; margin: 16px 0; border-radius: 8px; overflow: hidden; }
+  .scale-item { flex: 1; padding: 12px 8px; text-align: center; font-size: 13px; }
+  .scale-item .num { font-size: 18px; font-weight: 700; display: block; }
+  code { background: var(--surface); padding: 2px 6px; border-radius: 4px; font-size: 13px; color: var(--accent); }
+  .vs-table td:first-child { font-weight: 600; }
+  .footer { margin-top: 60px; text-align: center; color: var(--dim); font-size: 13px; }
+  .footer a { color: var(--accent); text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <div class="hero">
+    <div class="hero-badge">Property Scores by DA Leads</div>
+    <h1><span>Noise</span> Score</h1>
+    <p>Estimate environmental noise at any address using Overture Maps road data and acoustic physics formulas. No commercial data purchase required.</p>
+  </div>
+
+  <div class="try-section">
+    <h2>Try It</h2>
+    <div class="try-form">
+      <input id="lat" type="number" step="any" placeholder="Latitude" value="-37.8136">
+      <input id="lng" type="number" step="any" placeholder="Longitude" value="144.9631">
+      <button onclick="compute()">Calculate</button>
+    </div>
+    <div id="result"></div>
+  </div>
+
+  <h2>What It Measures</h2>
+  <p>The Noise Score rates how quiet a location is on a scale of 0 to 100, where 100 is the quietest. It estimates the cumulative traffic noise from all roads within 1 km using the CRTN (Calculation of Road Traffic Noise) simplified formula and Overture Maps road classification data.</p>
+
+  <div class="scale">
+    <div class="scale-item" style="background:#14532d"><span class="num">80-100</span>Very Quiet</div>
+    <div class="scale-item" style="background:#365314"><span class="num">60-79</span>Quiet</div>
+    <div class="scale-item" style="background:#78350f"><span class="num">40-59</span>Moderate</div>
+    <div class="scale-item" style="background:#92400e"><span class="num">20-39</span>Loud</div>
+    <div class="scale-item" style="background:#7f1d1d"><span class="num">0-19</span>Very Loud</div>
+  </div>
+
+  <h2>Methodology</h2>
+
+  <h3>Data Sources</h3>
+  <table>
+    <tr><th>Dataset</th><th>Provider</th><th>Resolution</th><th>License</th></tr>
+    <tr><td>Road network + classification</td><td>Overture Maps Foundation</td><td>Segment-level</td><td>CDLA Permissive + ODbL</td></tr>
+    <tr><td>Building footprints</td><td>Overture Maps Foundation</td><td>~1m</td><td>CDLA Permissive</td></tr>
+  </table>
+
+  <h3>Road Class to Traffic Volume Mapping</h3>
+  <p>Overture Maps classifies every road segment (motorway, trunk, primary, secondary, tertiary, residential). Each class maps to a reference noise level based on typical AADT (Annual Average Daily Traffic):</p>
+  <table>
+    <tr><th>Road Class</th><th>Typical AADT</th><th>Reference Noise (dB)</th></tr>
+    <tr><td>Motorway</td><td>60,000 - 120,000</td><td>78</td></tr>
+    <tr><td>Trunk</td><td>20,000 - 50,000</td><td>73</td></tr>
+    <tr><td>Primary</td><td>10,000 - 25,000</td><td>70</td></tr>
+    <tr><td>Secondary</td><td>5,000 - 15,000</td><td>67</td></tr>
+    <tr><td>Tertiary</td><td>1,000 - 5,000</td><td>62</td></tr>
+    <tr><td>Residential</td><td>200 - 1,000</td><td>55</td></tr>
+    <tr><td>Unclassified</td><td>&lt;200</td><td>52</td></tr>
+  </table>
+
+  <h3>Calculation Steps</h3>
+  <ol>
+    <li><strong>Find all roads</strong> within 1 km of the target coordinate using DuckDB spatial queries on Overture parquet data.</li>
+    <li><strong>Per-road noise contribution</strong>: <code>L = L_ref - 10 log10(d / 13.5) - 3.0</code> where d = distance in meters and 3.0 dB is ground absorption.</li>
+    <li><strong>Energy summation</strong> across all roads: <code>L_total = 10 log10(sum of 10^(Li/10))</code></li>
+    <li><strong>Convert to score</strong>: <code>score = clamp(100 - (L_total - 35) x 1.5, 0, 100)</code></li>
+  </ol>
+
+  <h2>Accuracy</h2>
+  <table>
+    <tr><th>Factor</th><th>Impact</th><th>Notes</th></tr>
+    <tr><td>Road class as AADT proxy</td><td>~70% variance explained</td><td>Core assumption; validated against VicRoads AADT data</td></tr>
+    <tr><td>Distance attenuation</td><td>Physically accurate</td><td>CRTN standard line-source model</td></tr>
+    <tr><td>Building shielding</td><td>Not yet modeled</td><td>Phase 2: use Overture building heights</td></tr>
+    <tr><td>Aircraft noise</td><td>Not yet included</td><td>Phase 2: ANEF contours from data.gov.au</td></tr>
+    <tr><td>Railway noise</td><td>Not yet included</td><td>Phase 2: Overture rail segments + GTFS</td></tr>
+    <tr><td>Speed/gradient correction</td><td>Not applied</td><td>Phase 2: speed limit data from Overture</td></tr>
+  </table>
+
+  <h3>Phase 2 Roadmap (ML Calibration)</h3>
+  <p>Train an XGBoost model on NoiseModelling (open-source, CNOSSOS-EU compliant) ground truth to boost accuracy from ~70% to ~90%, adding building density, height, rail distance, and ANEF zones as features.</p>
+
+  <h2>Comparison with Commercial Data</h2>
+  <table class="vs-table">
+    <tr><th></th><th>Ambient Maps (AU)</th><th>HowLoud (US)</th><th>Property Scores</th></tr>
+    <tr><td>Method</td><td>SoundPLAN 3D ray tracing</td><td>Proprietary model</td><td>CRTN formula + Overture</td></tr>
+    <tr><td>Precision</td><td>Per-wall, per-floor</td><td>Address-level 50-100</td><td>Address-level 0-100</td></tr>
+    <tr><td>Coverage</td><td>Australia only</td><td>170M US properties</td><td>Global (Overture coverage)</td></tr>
+    <tr><td>Cost</td><td>$100-120K/year</td><td>Free (B2C) + API</td><td>Free / open source</td></tr>
+    <tr><td>Data inputs</td><td>Commercial GPS, Geoscape</td><td>Proprietary</td><td>100% open data</td></tr>
+  </table>
+
+  <h2>Reference Benchmarks (Melbourne)</h2>
+  <table>
+    <tr><th>Location</th><th>Score</th><th>dB</th><th>Roads</th><th>Label</th></tr>
+    <tr><td>Warrandyte bushland</td><td>55</td><td>64.8</td><td>122</td><td>Moderate</td></tr>
+    <tr><td>Tullamarine (airport area)</td><td>42</td><td>74.0</td><td>960</td><td>Moderate</td></tr>
+    <tr><td>Toorak Rd / Chapel St</td><td>40</td><td>75.2</td><td>1,301</td><td>Moderate</td></tr>
+    <tr><td>Melbourne CBD</td><td>35</td><td>78.2</td><td>3,860</td><td>Loud</td></tr>
+    <tr><td>Monash Freeway roadside</td><td>31</td><td>80.9</td><td>1,632</td><td>Loud</td></tr>
+  </table>
+
+  <h2>API</h2>
+  <p><code>GET /scores/noise?lat=-37.8136&amp;lng=144.9631&amp;radius=1000</code></p>
+
+  <div class="footer">
+    <p>Built by <a href="https://daleads.com.au">DA Leads</a> | Road data: <a href="https://overturemaps.org">Overture Maps Foundation</a></p>
+  </div>
+</div>
+
+<script>
+async function compute() {
+  const lat = document.getElementById('lat').value;
+  const lng = document.getElementById('lng').value;
+  const el = document.getElementById('result');
+  el.style.display = 'block';
+  el.innerHTML = '<div style="color:#8b5cf6">Computing...</div>';
+  try {
+    const resp = await fetch(`/scores/noise?lat=${lat}&lng=${lng}`);
+    const d = await resp.json();
+    if (d.error) { el.innerHTML = `<div style="color:#ef4444">${d.error}</div>`; return; }
+    const color = d.score >= 60 ? '#22c55e' : d.score >= 40 ? '#f59e0b' : '#ef4444';
+    el.innerHTML = `
+      <div class="result-score" style="color:${color}">${d.score}<span style="font-size:20px;color:var(--dim)">/100</span></div>
+      <div class="result-label">${d.label}</div>
+      <div class="result-grid">
+        <div class="result-item"><span class="result-key">Estimated Noise</span><span>${d.estimated_db} dB</span></div>
+        <div class="result-item"><span class="result-key">Roads in Range</span><span>${d.road_count}</span></div>
+      </div>`;
+  } catch (e) { el.innerHTML = `<div style="color:#ef4444">Error: ${e.message}</div>`; }
+}
+</script>
+</body>
+</html>

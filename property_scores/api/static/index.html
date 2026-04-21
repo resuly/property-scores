@@ -37,6 +37,9 @@
   .score-solar .score-bar-fill { background: linear-gradient(90deg, #f59e0b, #eab308); }
   .score-noise .score-bar-fill { background: linear-gradient(90deg, #ef4444, #22c55e); }
   .score-walk .score-bar-fill { background: linear-gradient(90deg, #ef4444, #3b82f6); }
+  .score-flood .score-bar-fill { background: linear-gradient(90deg, #ef4444, #06b6d4); }
+  .score-bushfire .score-bar-fill { background: linear-gradient(90deg, #ef4444, #f97316); }
+  .score-heat .score-bar-fill { background: linear-gradient(90deg, #ef4444, #22c55e); }
 
   .category-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; font-size: 12px; margin-top: 8px; }
   .cat-item { display: flex; justify-content: space-between; padding: 2px 0; }
@@ -51,6 +54,14 @@
   <div id="panel">
     <h1>Property Scores</h1>
     <p class="subtitle">Click map or enter coordinates to compute scores</p>
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
+      <a href="/solar" style="padding:6px 12px;border-radius:6px;background:#1e293b;color:#eab308;font-size:13px;text-decoration:none;border:1px solid #334155;">Solar</a>
+      <a href="/noise" style="padding:6px 12px;border-radius:6px;background:#1e293b;color:#8b5cf6;font-size:13px;text-decoration:none;border:1px solid #334155;">Noise</a>
+      <a href="/walkability" style="padding:6px 12px;border-radius:6px;background:#1e293b;color:#3b82f6;font-size:13px;text-decoration:none;border:1px solid #334155;">Walkability</a>
+      <a href="/flood" style="padding:6px 12px;border-radius:6px;background:#1e293b;color:#06b6d4;font-size:13px;text-decoration:none;border:1px solid #334155;">Flood</a>
+      <a href="/bushfire" style="padding:6px 12px;border-radius:6px;background:#1e293b;color:#f97316;font-size:13px;text-decoration:none;border:1px solid #334155;">Bushfire</a>
+      <a href="/heat-island" style="padding:6px 12px;border-radius:6px;background:#1e293b;color:#ef4444;font-size:13px;text-decoration:none;border:1px solid #334155;">Heat Island</a>
+    </div>
 
     <div class="coord-bar">
       <input id="lat" type="number" step="any" placeholder="Latitude" value="-37.8136">
@@ -67,9 +78,10 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 const map = L.map('map').setView([-37.8136, 144.9631], 12);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution: '&copy; OpenStreetMap contributors',
-  maxZoom: 19,
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',
+  maxZoom: 20,
+  subdomains: 'abcd',
 }).addTo(map);
 
 let marker = null;
@@ -103,6 +115,9 @@ async function fetchScores() {
     { key: 'solar', url: `/scores/solar?lat=${lat}&lng=${lng}` },
     { key: 'noise', url: `/scores/noise?lat=${lat}&lng=${lng}` },
     { key: 'walkability', url: `/scores/walkability?lat=${lat}&lng=${lng}` },
+    { key: 'flood', url: `/scores/flood?lat=${lat}&lng=${lng}` },
+    { key: 'bushfire', url: `/scores/bushfire?lat=${lat}&lng=${lng}` },
+    { key: 'heat_island', url: `/scores/heat-island?lat=${lat}&lng=${lng}` },
   ];
 
   const promises = endpoints.map(async (ep) => {
@@ -201,6 +216,69 @@ function renderResults(lat, lng, scores) {
       </div>`;
   } else {
     html += renderError('Walkability', scores.walkability);
+  }
+
+  // Flood
+  if (scores.flood && !scores.flood.error && scores.flood.score != null) {
+    const s = scores.flood;
+    const zones = s.flood_zones?.length ? s.flood_zones.join(', ') : 'None';
+    html += `
+      <div class="score-card score-flood">
+        <div class="score-header">
+          <span class="score-name">Flood Risk</span>
+          <span class="score-badge" style="color:${scoreColor(s.score)}">${s.score}</span>
+        </div>
+        <div class="score-label">${s.label} (${s.state || 'N/A'})</div>
+        <div class="score-bar"><div class="score-bar-fill" style="width:${s.score}%"></div></div>
+        <dl class="score-details">
+          <dt>Flood Zones</dt><dd>${zones}</dd>
+          <dt>Zone Count</dt><dd>${s.zone_count}</dd>
+        </dl>
+      </div>`;
+  } else {
+    html += renderError('Flood Risk', scores.flood);
+  }
+
+  // Bushfire
+  if (scores.bushfire && !scores.bushfire.error && scores.bushfire.score != null) {
+    const s = scores.bushfire;
+    const zones = s.bushfire_zones?.length ? s.bushfire_zones.join(', ') : 'None';
+    html += `
+      <div class="score-card score-bushfire">
+        <div class="score-header">
+          <span class="score-name">Bushfire Risk</span>
+          <span class="score-badge" style="color:${scoreColor(s.score)}">${s.score}</span>
+        </div>
+        <div class="score-label">${s.label}${s.category ? ' — ' + s.category : ''}</div>
+        <div class="score-bar"><div class="score-bar-fill" style="width:${s.score}%"></div></div>
+        <dl class="score-details">
+          <dt>Overlay</dt><dd>${zones}</dd>
+        </dl>
+      </div>`;
+  } else {
+    html += renderError('Bushfire Risk', scores.bushfire);
+  }
+
+  // Heat Island
+  if (scores.heat_island && !scores.heat_island.error && scores.heat_island.score != null) {
+    const s = scores.heat_island;
+    html += `
+      <div class="score-card score-heat">
+        <div class="score-header">
+          <span class="score-name">Heat Island</span>
+          <span class="score-badge" style="color:${scoreColor(s.score)}">${s.score}</span>
+        </div>
+        <div class="score-label">${s.label}</div>
+        <div class="score-bar"><div class="score-bar-fill" style="width:${s.score}%"></div></div>
+        <dl class="score-details">
+          <dt>Summer Mean Max</dt><dd>${s.summer_mean_c}°C</dd>
+          <dt>Summer P90 Max</dt><dd>${s.summer_p90_c}°C</dd>
+          ${s.building_density != null ? `<dt>Building Density</dt><dd>${s.building_density}</dd>` : ''}
+          ${s.greenspace_factor != null ? `<dt>Green Space</dt><dd>${s.greenspace_factor}</dd>` : ''}
+        </dl>
+      </div>`;
+  } else {
+    html += renderError('Heat Island', scores.heat_island);
   }
 
   el.innerHTML = html;

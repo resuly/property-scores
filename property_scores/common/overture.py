@@ -4,20 +4,23 @@ import duckdb
 
 from property_scores.common.config import data_path
 
-_DB = None
+import threading
 
 ROADS_FILE = "overture_roads.parquet"
 POIS_FILE = "overture_pois.parquet"
 
+_install_lock = threading.Lock()
+_installed = False
+
 
 def get_db() -> duckdb.DuckDBPyConnection:
-    global _DB
-    if _DB is not None:
-        return _DB
+    global _installed
     db = duckdb.connect()
-    db.install_extension("spatial")
+    with _install_lock:
+        if not _installed:
+            db.install_extension("spatial")
+            _installed = True
     db.load_extension("spatial")
-    _DB = db
     return db
 
 

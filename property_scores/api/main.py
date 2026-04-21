@@ -1,14 +1,20 @@
 """FastAPI entry point for property scores."""
 
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from property_scores.noise import noise_score
 from property_scores.walkability import walkability_score
 from property_scores.solar import solar_score
+from property_scores.flood import flood_score
+from property_scores.bushfire import bushfire_score
+from property_scores.heat_island import heat_island_score
+
+logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -39,6 +45,21 @@ def walkability_page():
     return FileResponse(STATIC_DIR / "walkability.html")
 
 
+@app.get("/flood")
+def flood_page():
+    return FileResponse(STATIC_DIR / "flood.html")
+
+
+@app.get("/bushfire")
+def bushfire_page():
+    return FileResponse(STATIC_DIR / "bushfire.html")
+
+
+@app.get("/heat-island")
+def heat_island_page():
+    return FileResponse(STATIC_DIR / "heat_island.html")
+
+
 @app.get("/scores")
 def get_all_scores(
     lat: float = Query(..., description="Latitude (WGS84)"),
@@ -52,6 +73,9 @@ def get_all_scores(
         "noise": noise_score(lat, lng, source=source_roads),
         "walkability": walkability_score(lat, lng, source=source_pois),
         "solar": solar_score(lat, lng),
+        "flood": flood_score(lat, lng),
+        "bushfire": bushfire_score(lat, lng),
+        "heat_island": heat_island_score(lat, lng),
     }
 
 
@@ -60,7 +84,13 @@ def get_noise(
     lat: float = Query(...), lng: float = Query(...),
     radius: int = Query(1000), source: str | None = Query(None),
 ):
-    return noise_score(lat, lng, radius, source=source)
+    try:
+        return noise_score(lat, lng, radius, source=source)
+    except FileNotFoundError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        logger.exception("noise score failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @app.get("/scores/walkability")
@@ -68,7 +98,13 @@ def get_walkability(
     lat: float = Query(...), lng: float = Query(...),
     radius: int = Query(1500), source: str | None = Query(None),
 ):
-    return walkability_score(lat, lng, radius, source=source)
+    try:
+        return walkability_score(lat, lng, radius, source=source)
+    except FileNotFoundError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        logger.exception("walkability score failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @app.get("/scores/solar")
@@ -78,3 +114,30 @@ def get_solar(
     orientation: str = Query("optimal"),
 ):
     return solar_score(lat, lng, roof_area_m2=roof_area, orientation=orientation)
+
+
+@app.get("/scores/flood")
+def get_flood(lat: float = Query(...), lng: float = Query(...)):
+    try:
+        return flood_score(lat, lng)
+    except Exception as e:
+        logger.exception("flood score failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/scores/bushfire")
+def get_bushfire(lat: float = Query(...), lng: float = Query(...)):
+    try:
+        return bushfire_score(lat, lng)
+    except Exception as e:
+        logger.exception("bushfire score failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/scores/heat-island")
+def get_heat_island(lat: float = Query(...), lng: float = Query(...)):
+    try:
+        return heat_island_score(lat, lng)
+    except Exception as e:
+        logger.exception("heat island score failed")
+        return JSONResponse({"error": str(e)}, status_code=500)

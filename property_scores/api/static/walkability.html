@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Walkability Score — Property Scores by DA Leads</title>
+<style>
+  :root { --bg: #0f172a; --surface: #1e293b; --border: #334155; --text: #e2e8f0; --muted: #94a3b8; --dim: #64748b; --accent: #3b82f6; --green: #22c55e; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
+  .container { max-width: 900px; margin: 0 auto; padding: 40px 24px; }
+  .hero { text-align: center; margin-bottom: 48px; }
+  .hero-badge { display: inline-block; padding: 4px 12px; border-radius: 99px; background: rgba(59,130,246,0.15); color: var(--accent); font-size: 13px; font-weight: 600; margin-bottom: 16px; }
+  h1 { font-size: 36px; font-weight: 700; margin-bottom: 12px; }
+  h1 span { color: var(--accent); }
+  .hero p { font-size: 18px; color: var(--muted); max-width: 620px; margin: 0 auto; }
+  .try-section { background: var(--surface); border-radius: 12px; padding: 24px; margin-bottom: 40px; }
+  .try-section h2 { font-size: 18px; margin-bottom: 16px; }
+  .try-form { display: flex; gap: 8px; flex-wrap: wrap; }
+  .try-form input { padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font-size: 15px; width: 160px; }
+  .try-form button { padding: 10px 20px; border: none; border-radius: 8px; background: var(--accent); color: #fff; font-weight: 600; cursor: pointer; font-size: 15px; }
+  .try-form button:hover { background: #2563eb; }
+  #result { margin-top: 16px; padding: 16px; border-radius: 8px; background: var(--bg); display: none; }
+  .result-score { font-size: 48px; font-weight: 700; }
+  .result-label { font-size: 16px; color: var(--muted); margin-bottom: 12px; }
+  .result-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; margin-top: 12px; }
+  .cat-row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
+  .cat-name { color: var(--muted); text-transform: capitalize; }
+  .cat-dist { color: var(--text); }
+  .cat-none { color: var(--dim); }
+  h2 { font-size: 22px; margin-bottom: 16px; margin-top: 40px; }
+  h3 { font-size: 17px; color: var(--accent); margin-bottom: 8px; margin-top: 24px; }
+  p, li { color: var(--muted); }
+  ul, ol { padding-left: 20px; margin-bottom: 12px; }
+  li { margin-bottom: 6px; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  th { color: var(--dim); font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; }
+  td { color: var(--text); font-size: 14px; }
+  .scale { display: flex; margin: 16px 0; border-radius: 8px; overflow: hidden; }
+  .scale-item { flex: 1; padding: 12px 4px; text-align: center; font-size: 12px; }
+  .scale-item .num { font-size: 16px; font-weight: 700; display: block; }
+  code { background: var(--surface); padding: 2px 6px; border-radius: 4px; font-size: 13px; color: var(--accent); }
+  .footer { margin-top: 60px; text-align: center; color: var(--dim); font-size: 13px; }
+  .footer a { color: var(--accent); text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <div class="hero">
+    <div class="hero-badge">Property Scores by DA Leads</div>
+    <h1><span>Walkability</span> Score</h1>
+    <p>Measure how walkable any address is using Overture Maps POI data and a Walk Score-style distance decay algorithm across 13 amenity categories.</p>
+  </div>
+
+  <div class="try-section">
+    <h2>Try It</h2>
+    <div class="try-form">
+      <input id="lat" type="number" step="any" placeholder="Latitude" value="-37.8136">
+      <input id="lng" type="number" step="any" placeholder="Longitude" value="144.9631">
+      <button onclick="compute()">Calculate</button>
+    </div>
+    <div id="result"></div>
+  </div>
+
+  <h2>What It Measures</h2>
+  <p>The Walkability Score rates how convenient daily errands are on foot, on a scale of 0 to 100. It checks proximity to 13 essential amenity categories and applies a distance decay: facilities within a 5-minute walk score highest, while anything beyond 20 minutes scores zero.</p>
+
+  <div class="scale">
+    <div class="scale-item" style="background:#14532d"><span class="num">90-100</span>Walker's Paradise</div>
+    <div class="scale-item" style="background:#365314"><span class="num">70-89</span>Very Walkable</div>
+    <div class="scale-item" style="background:#78350f"><span class="num">50-69</span>Somewhat Walkable</div>
+    <div class="scale-item" style="background:#92400e"><span class="num">25-49</span>Car-Dependent</div>
+    <div class="scale-item" style="background:#7f1d1d"><span class="num">0-24</span>Almost All Errands Require a Car</div>
+  </div>
+
+  <h2>Methodology</h2>
+
+  <h3>Data Sources</h3>
+  <table>
+    <tr><th>Dataset</th><th>Provider</th><th>Coverage</th><th>License</th></tr>
+    <tr><td>Points of Interest (59M+)</td><td>Overture Maps Foundation</td><td>Global</td><td>CDLA Permissive + ODbL</td></tr>
+    <tr><td>Amenities (supplementary)</td><td>OpenStreetMap</td><td>Global</td><td>ODbL</td></tr>
+  </table>
+
+  <h3>13 Amenity Categories</h3>
+  <table>
+    <tr><th>Category</th><th>Weight</th><th>Examples</th></tr>
+    <tr><td>Grocery</td><td>3.0</td><td>Supermarket, convenience store</td></tr>
+    <tr><td>Transit</td><td>3.0</td><td>Bus stop, train station, tram</td></tr>
+    <tr><td>Restaurant</td><td>2.0</td><td>Restaurant, fast food</td></tr>
+    <tr><td>Park</td><td>2.0</td><td>Park, playground, garden</td></tr>
+    <tr><td>School</td><td>2.0</td><td>School, university</td></tr>
+    <tr><td>Healthcare</td><td>2.0</td><td>Hospital, clinic, doctor</td></tr>
+    <tr><td>Shopping</td><td>1.5</td><td>Clothing, department store</td></tr>
+    <tr><td>Cafe</td><td>1.5</td><td>Cafe, coffee shop</td></tr>
+    <tr><td>Pharmacy</td><td>1.5</td><td>Pharmacy, drugstore</td></tr>
+    <tr><td>Bank</td><td>1.0</td><td>Bank, ATM</td></tr>
+    <tr><td>Entertainment</td><td>1.0</td><td>Cinema, museum, theatre</td></tr>
+    <tr><td>Fitness</td><td>1.0</td><td>Gym, pool, sports centre</td></tr>
+    <tr><td>Bookstore</td><td>0.5</td><td>Bookstore, library</td></tr>
+  </table>
+
+  <h3>Calculation Steps</h3>
+  <ol>
+    <li><strong>Search POIs</strong> within 1.5 km of the target coordinate using Overture places data.</li>
+    <li><strong>Classify</strong> each POI into one of 13 categories by keyword matching on Overture category labels.</li>
+    <li><strong>Distance decay</strong> per category: <code>decay = max(0, 1 - distance_m / 1500)</code>. Only the nearest facility in each category counts.</li>
+    <li><strong>Weighted sum</strong>: <code>score = sum(weight_i x decay_i) / sum(weights) x 100</code></li>
+  </ol>
+
+  <h2>Accuracy</h2>
+  <table>
+    <tr><th>Factor</th><th>Impact</th><th>Notes</th></tr>
+    <tr><td>POI coverage (developed countries)</td><td>High</td><td>Overture + OSM well-covered in AU/US/EU</td></tr>
+    <tr><td>POI coverage (developing countries)</td><td>Lower</td><td>Systematic undercount of informal businesses</td></tr>
+    <tr><td>Distance measurement</td><td>Approximate</td><td>Straight-line, not walking route (Phase 2: Valhalla routing)</td></tr>
+    <tr><td>Category classification</td><td>Good</td><td>Keyword matching on Overture primary category</td></tr>
+    <tr><td>Pedestrian infrastructure</td><td>Not modeled</td><td>Phase 2: sidewalk/crosswalk data from OSM</td></tr>
+  </table>
+
+  <h3>Comparison with Walk Score</h3>
+  <table>
+    <tr><th></th><th>Walk Score (Redfin)</th><th>Property Scores</th></tr>
+    <tr><td>Algorithm</td><td>13-category distance decay + pedestrian friendliness</td><td>13-category distance decay (same structure)</td></tr>
+    <tr><td>Distance</td><td>Road-network (proprietary routing)</td><td>Straight-line (Phase 2: Valhalla)</td></tr>
+    <tr><td>Coverage</td><td>US-focused, limited international</td><td>Global (Overture coverage)</td></tr>
+    <tr><td>Data</td><td>Proprietary POI aggregation</td><td>100% open data</td></tr>
+    <tr><td>Cost</td><td>API: $0.004-0.01/request</td><td>Free / open source</td></tr>
+    <tr><td>Updates</td><td>Slow outside US since Redfin acquisition</td><td>Monthly (Overture release cycle)</td></tr>
+  </table>
+
+  <h2>Reference Benchmarks (Melbourne)</h2>
+  <table>
+    <tr><th>Location</th><th>Score</th><th>Label</th><th>POIs</th></tr>
+    <tr><td>Melbourne CBD</td><td>96</td><td>Walker's Paradise</td><td>23,683</td></tr>
+    <tr><td>Glen Waverley Station</td><td>95</td><td>Walker's Paradise</td><td>1,430</td></tr>
+    <tr><td>Chadstone Shopping Centre</td><td>88</td><td>Very Walkable</td><td>2,354</td></tr>
+    <tr><td>Chapel St, South Yarra</td><td>77</td><td>Very Walkable</td><td>1,888</td></tr>
+    <tr><td>Warrandyte bushland</td><td>29</td><td>Car-Dependent</td><td>108</td></tr>
+  </table>
+
+  <h2>API</h2>
+  <p><code>GET /scores/walkability?lat=-37.8136&amp;lng=144.9631&amp;radius=1500</code></p>
+
+  <div class="footer">
+    <p>Built by <a href="https://daleads.com.au">DA Leads</a> | POI data: <a href="https://overturemaps.org">Overture Maps Foundation</a></p>
+  </div>
+</div>
+
+<script>
+async function compute() {
+  const lat = document.getElementById('lat').value;
+  const lng = document.getElementById('lng').value;
+  const el = document.getElementById('result');
+  el.style.display = 'block';
+  el.innerHTML = '<div style="color:#3b82f6">Computing...</div>';
+  try {
+    const resp = await fetch(`/scores/walkability?lat=${lat}&lng=${lng}`);
+    const d = await resp.json();
+    if (d.error) { el.innerHTML = `<div style="color:#ef4444">${d.error}</div>`; return; }
+    const color = d.score >= 70 ? '#22c55e' : d.score >= 50 ? '#f59e0b' : '#ef4444';
+    let cats = '';
+    if (d.category_scores) {
+      cats = '<div class="result-grid">' + Object.entries(d.category_scores).map(([k, v]) =>
+        `<div class="cat-row"><span class="cat-name">${k}</span><span class="${v.distance_m ? 'cat-dist' : 'cat-none'}">${v.distance_m ? v.distance_m + 'm' : 'not found'}</span></div>`
+      ).join('') + '</div>';
+    }
+    el.innerHTML = `
+      <div class="result-score" style="color:${color}">${d.score}<span style="font-size:20px;color:var(--dim)">/100</span></div>
+      <div class="result-label">${d.label} &mdash; ${d.poi_count} POIs in range</div>
+      ${cats}`;
+  } catch (e) { el.innerHTML = `<div style="color:#ef4444">Error: ${e.message}</div>`; }
+}
+</script>
+</body>
+</html>

@@ -1,16 +1,42 @@
 """FastAPI entry point for property scores."""
 
+from pathlib import Path
+
 from fastapi import FastAPI, Query
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from property_scores.noise import noise_score
 from property_scores.walkability import walkability_score
 from property_scores.solar import solar_score
+
+STATIC_DIR = Path(__file__).parent / "static"
 
 app = FastAPI(
     title="Property Scores API",
     description="Open-data property intelligence scoring engine",
     version="0.1.0",
 )
+
+
+@app.get("/")
+def index():
+    return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/solar")
+def solar_page():
+    return FileResponse(STATIC_DIR / "solar.html")
+
+
+@app.get("/noise")
+def noise_page():
+    return FileResponse(STATIC_DIR / "noise.html")
+
+
+@app.get("/walkability")
+def walkability_page():
+    return FileResponse(STATIC_DIR / "walkability.html")
 
 
 @app.get("/scores")

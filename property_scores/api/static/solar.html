@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Solar Potential Score — Property Scores by DA Leads</title>
+<style>
+  :root { --bg: #0f172a; --surface: #1e293b; --border: #334155; --text: #e2e8f0; --muted: #94a3b8; --dim: #64748b; --accent: #f59e0b; --green: #22c55e; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
+  .container { max-width: 900px; margin: 0 auto; padding: 40px 24px; }
+
+  /* Hero */
+  .hero { text-align: center; margin-bottom: 48px; }
+  .hero-badge { display: inline-block; padding: 4px 12px; border-radius: 99px; background: rgba(245,158,11,0.15); color: var(--accent); font-size: 13px; font-weight: 600; margin-bottom: 16px; }
+  h1 { font-size: 36px; font-weight: 700; margin-bottom: 12px; }
+  h1 span { color: var(--accent); }
+  .hero p { font-size: 18px; color: var(--muted); max-width: 600px; margin: 0 auto; }
+
+  /* Try it */
+  .try-section { background: var(--surface); border-radius: 12px; padding: 24px; margin-bottom: 40px; }
+  .try-section h2 { font-size: 18px; margin-bottom: 16px; }
+  .try-form { display: flex; gap: 8px; flex-wrap: wrap; }
+  .try-form input { padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font-size: 15px; width: 160px; }
+  .try-form button { padding: 10px 20px; border: none; border-radius: 8px; background: var(--accent); color: #000; font-weight: 600; cursor: pointer; font-size: 15px; }
+  .try-form button:hover { background: #d97706; }
+  #result { margin-top: 16px; padding: 16px; border-radius: 8px; background: var(--bg); display: none; }
+  .result-score { font-size: 48px; font-weight: 700; }
+  .result-label { font-size: 16px; color: var(--muted); margin-bottom: 12px; }
+  .result-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .result-item { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .result-key { color: var(--dim); }
+
+  /* Sections */
+  h2 { font-size: 22px; margin-bottom: 16px; margin-top: 40px; }
+  h3 { font-size: 17px; color: var(--accent); margin-bottom: 8px; margin-top: 24px; }
+  p, li { color: var(--muted); }
+  ul { padding-left: 20px; margin-bottom: 12px; }
+  li { margin-bottom: 6px; }
+
+  /* Method table */
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  th { color: var(--dim); font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; }
+  td { color: var(--text); font-size: 14px; }
+
+  /* Score scale */
+  .scale { display: flex; margin: 16px 0; border-radius: 8px; overflow: hidden; }
+  .scale-item { flex: 1; padding: 12px 8px; text-align: center; font-size: 13px; }
+  .scale-item .num { font-size: 18px; font-weight: 700; display: block; }
+
+  code { background: var(--surface); padding: 2px 6px; border-radius: 4px; font-size: 13px; color: var(--accent); }
+
+  .footer { margin-top: 60px; text-align: center; color: var(--dim); font-size: 13px; }
+  .footer a { color: var(--accent); text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <div class="hero">
+    <div class="hero-badge">Property Scores by DA Leads</div>
+    <h1><span>Solar Potential</span> Score</h1>
+    <p>Estimate any property's solar energy potential using Global Solar Atlas satellite data — 250m resolution, global coverage, completely free.</p>
+  </div>
+
+  <!-- Try it -->
+  <div class="try-section">
+    <h2>Try It</h2>
+    <div class="try-form">
+      <input id="lat" type="number" step="any" placeholder="Latitude" value="-37.8136">
+      <input id="lng" type="number" step="any" placeholder="Longitude" value="144.9631">
+      <input id="roof" type="number" step="any" placeholder="Roof m² (optional)" value="50">
+      <button onclick="compute()">Calculate</button>
+    </div>
+    <div id="result"></div>
+  </div>
+
+  <!-- What it measures -->
+  <h2>What It Measures</h2>
+  <p>The Solar Potential Score rates a location's suitability for rooftop solar panels on a scale of 0 to 100. It combines satellite-derived solar irradiance data with building geometry to estimate how much energy solar panels could generate at a specific address.</p>
+
+  <div class="scale">
+    <div class="scale-item" style="background:#7f1d1d"><span class="num">0-20</span>Poor</div>
+    <div class="scale-item" style="background:#92400e"><span class="num">21-40</span>Low</div>
+    <div class="scale-item" style="background:#78350f"><span class="num">41-60</span>Moderate</div>
+    <div class="scale-item" style="background:#365314"><span class="num">61-80</span>Good</div>
+    <div class="scale-item" style="background:#14532d"><span class="num">81-100</span>Excellent</div>
+  </div>
+
+  <!-- Methodology -->
+  <h2>Methodology</h2>
+
+  <h3>Data Source</h3>
+  <table>
+    <tr><th>Dataset</th><th>Provider</th><th>Resolution</th><th>License</th></tr>
+    <tr><td>GHI / DNI / PVOUT</td><td>Global Solar Atlas (World Bank / Solargis)</td><td>250m</td><td>CC BY 4.0</td></tr>
+    <tr><td>Building footprints</td><td>Overture Maps Foundation</td><td>~1m</td><td>CDLA Permissive</td></tr>
+    <tr><td>Elevation / slope</td><td>Copernicus DEM GLO-30</td><td>30m</td><td>Free</td></tr>
+  </table>
+
+  <h3>Calculation Steps</h3>
+  <ol>
+    <li><strong>Solar irradiance lookup</strong> — Fetch annual GHI (Global Horizontal Irradiance) and PVOUT (Photovoltaic Output potential, kWh/kWp/year) from Global Solar Atlas for the target coordinate.</li>
+    <li><strong>Score normalization</strong> — Map PVOUT to 0-100 against the global range (600 kWh/kWp in Nordic regions to 2400 kWh/kWp in the Sahara).</li>
+    <li><strong>Orientation adjustment</strong> — Apply a factor based on roof orientation: optimal-facing = 1.0, east/west = 0.85, suboptimal = 0.65.</li>
+    <li><strong>Annual generation estimate</strong> — If roof area is provided: <code>kWh = roof_m2 x 0.20 x PVOUT x orientation x 0.80</code></li>
+  </ol>
+
+  <h3>Formula</h3>
+  <p>
+    <code>score = (PVOUT - 600) / (2400 - 600) x 100 x orientation_factor</code>
+  </p>
+  <p>Clamped to 0-100. A score of 50 means the location receives roughly the global median solar irradiance.</p>
+
+  <!-- Accuracy -->
+  <h2>Accuracy</h2>
+  <table>
+    <tr><th>Factor</th><th>Impact</th><th>Notes</th></tr>
+    <tr><td>GHI measurement</td><td>+/- 5-10%</td><td>Solargis validated against 250+ ground stations globally</td></tr>
+    <tr><td>Flat terrain</td><td>High accuracy</td><td>250m resolution matches well</td></tr>
+    <tr><td>Mountainous terrain</td><td>Lower accuracy</td><td>Local shading from hills not captured at 250m</td></tr>
+    <tr><td>Roof orientation</td><td>Estimated</td><td>Derived from building footprint long axis; actual roof pitch unknown</td></tr>
+    <tr><td>Neighboring building shade</td><td>Not yet modeled</td><td>Planned for Phase 2 using Overture building heights</td></tr>
+  </table>
+
+  <h3>What This Score Does NOT Include</h3>
+  <ul>
+    <li>Actual roof pitch angle (assumes near-optimal tilt)</li>
+    <li>Roof obstructions (chimneys, vents, HVAC units)</li>
+    <li>Tree shading (would require LiDAR or high-res imagery)</li>
+    <li>Local grid feed-in tariff or electricity pricing</li>
+    <li>Panel degradation over time</li>
+  </ul>
+
+  <!-- Benchmarks -->
+  <h2>Reference Benchmarks</h2>
+  <table>
+    <tr><th>Location</th><th>Score</th><th>PVOUT</th><th>GHI</th></tr>
+    <tr><td>Alice Springs, AU</td><td>74</td><td>1,937 kWh/kWp</td><td>2,270 kWh/m2</td></tr>
+    <tr><td>Perth, AU</td><td>64</td><td>1,751 kWh/kWp</td><td>2,035 kWh/m2</td></tr>
+    <tr><td>Los Angeles, US</td><td>66</td><td>1,793 kWh/kWp</td><td>2,050 kWh/m2</td></tr>
+    <tr><td>Darwin, AU</td><td>62</td><td>1,708 kWh/kWp</td><td>2,094 kWh/m2</td></tr>
+    <tr><td>Brisbane, AU</td><td>55</td><td>1,598 kWh/kWp</td><td>1,813 kWh/m2</td></tr>
+    <tr><td>Sydney, AU</td><td>52</td><td>1,528 kWh/kWp</td><td>1,643 kWh/m2</td></tr>
+    <tr><td>Melbourne, AU</td><td>45</td><td>1,410 kWh/kWp</td><td>1,520 kWh/m2</td></tr>
+    <tr><td>Hobart, AU</td><td>42</td><td>1,350 kWh/kWp</td><td>1,376 kWh/m2</td></tr>
+    <tr><td>London, UK</td><td>24</td><td>1,024 kWh/kWp</td><td>1,029 kWh/m2</td></tr>
+  </table>
+
+  <!-- API -->
+  <h2>API</h2>
+  <p>Available via the Property Scores API:</p>
+  <p><code>GET /scores/solar?lat=-37.8136&amp;lng=144.9631&amp;roof_area=50</code></p>
+
+  <div class="footer">
+    <p>Built by <a href="https://daleads.com.au">DA Leads</a> | Data: <a href="https://globalsolaratlas.info">Global Solar Atlas</a> (CC BY 4.0)</p>
+  </div>
+</div>
+
+<script>
+async function compute() {
+  const lat = document.getElementById('lat').value;
+  const lng = document.getElementById('lng').value;
+  const roof = document.getElementById('roof').value;
+  const el = document.getElementById('result');
+  el.style.display = 'block';
+  el.innerHTML = '<div style="color:#f59e0b">Computing...</div>';
+
+  try {
+    let url = `/scores/solar?lat=${lat}&lng=${lng}`;
+    if (roof) url += `&roof_area=${roof}`;
+    const resp = await fetch(url);
+    const d = await resp.json();
+
+    const color = d.score >= 70 ? '#22c55e' : d.score >= 40 ? '#f59e0b' : '#ef4444';
+    el.innerHTML = `
+      <div class="result-score" style="color:${color}">${d.score}<span style="font-size:20px;color:var(--dim)">/100</span></div>
+      <div class="result-label">${d.label}</div>
+      <div class="result-grid">
+        <div class="result-item"><span class="result-key">GHI</span><span>${d.ghi_kwh_m2_year} kWh/m2/yr</span></div>
+        <div class="result-item"><span class="result-key">DNI</span><span>${d.dni_kwh_m2_year} kWh/m2/yr</span></div>
+        <div class="result-item"><span class="result-key">PV Output</span><span>${d.pvout_kwh_kwp_year} kWh/kWp/yr</span></div>
+        <div class="result-item"><span class="result-key">Optimal Tilt</span><span>${d.optimal_tilt_deg}deg</span></div>
+        <div class="result-item"><span class="result-key">Avg Temp</span><span>${d.temp_avg_c}C</span></div>
+        <div class="result-item"><span class="result-key">Elevation</span><span>${d.elevation_m}m</span></div>
+        ${d.estimated_annual_kwh ? `<div class="result-item"><span class="result-key">Est. Annual</span><span>${d.estimated_annual_kwh.toLocaleString()} kWh</span></div>` : ''}
+      </div>
+    `;
+  } catch (e) {
+    el.innerHTML = `<div style="color:#ef4444">Error: ${e.message}</div>`;
+  }
+}
+</script>
+</body>
+</html>

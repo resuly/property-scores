@@ -2,34 +2,49 @@
 
 import duckdb
 
-_OVERTURE_S3 = "s3://overturemaps-us-west-2/release/2025.03.0/theme={theme}/type={type}/*"
+from property_scores.common.config import data_path
+
+_DB = None
+
+ROADS_FILE = "overture_roads.parquet"
+POIS_FILE = "overture_pois.parquet"
 
 
 def get_db() -> duckdb.DuckDBPyConnection:
+    global _DB
+    if _DB is not None:
+        return _DB
     db = duckdb.connect()
     db.install_extension("spatial")
     db.load_extension("spatial")
-    db.install_extension("httpfs")
-    db.load_extension("httpfs")
-    db.execute("SET s3_region='us-west-2'; SET s3_no_sign_request=true;")
+    _DB = db
     return db
+
+
+def _local_or_fail(filename: str) -> str:
+    p = data_path(filename)
+    if not p.exists():
+        raise FileNotFoundError(
+            f"Data file not found: {p}\n"
+            f"Run: python -m property_scores.common.download --type roads"
+        )
+    return str(p)
 
 
 def roads_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
                radius_m: int = 1000, *, source: str | None = None) -> list[tuple]:
-    if source:
-        table = f"read_parquet('{source}')"
-    else:
-        table = f"read_parquet('{_OVERTURE_S3.format(theme='transportation', type='segment')}')"
-
+    table = f"read_parquet('{source or _local_or_fail(ROADS_FILE)}')"
     delta = radius_m / 111_000 * 1.5
+    import math
+    m_per_deg = 111_320 * math.cos(math.radians(lat))
+    deg_thresh = radius_m / m_per_deg
     sql = f"""
         SELECT class,
-               ST_Distance_Spheroid(geometry, ST_Point({lng}, {lat})) AS dist_m
+               ST_Distance(geometry, ST_Point({lng}, {lat})) * {m_per_deg} AS dist_m
         FROM {table}
         WHERE bbox.xmin BETWEEN {lng - delta} AND {lng + delta}
           AND bbox.ymin BETWEEN {lat - delta} AND {lat + delta}
-          AND ST_Distance_Spheroid(geometry, ST_Point({lng}, {lat})) < {radius_m}
+          AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
           AND subtype = 'road'
     """
     return db.sql(sql).fetchall()
@@ -37,18 +52,17 @@ def roads_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
 
 def pois_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
               radius_m: int = 1500, *, source: str | None = None) -> list[tuple]:
-    if source:
-        table = f"read_parquet('{source}')"
-    else:
-        table = f"read_parquet('{_OVERTURE_S3.format(theme='places', type='place')}')"
-
+    table = f"read_parquet('{source or _local_or_fail(POIS_FILE)}')"
     delta = radius_m / 111_000 * 1.5
+    import math
+    m_per_deg = 111_320 * math.cos(math.radians(lat))
+    deg_thresh = radius_m / m_per_deg
     sql = f"""
         SELECT categories.primary AS category,
-               ST_Distance_Spheroid(geometry, ST_Point({lng}, {lat})) AS dist_m
+               ST_Distance(geometry, ST_Point({lng}, {lat})) * {m_per_deg} AS dist_m
         FROM {table}
         WHERE bbox.xmin BETWEEN {lng - delta} AND {lng + delta}
           AND bbox.ymin BETWEEN {lat - delta} AND {lat + delta}
-          AND ST_Distance_Spheroid(geometry, ST_Point({lng}, {lat})) < {radius_m}
+          AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
     """
     return db.sql(sql).fetchall()

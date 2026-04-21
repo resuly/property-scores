@@ -26,11 +26,13 @@ def _fetch_solar_data(lat: float, lng: float) -> dict | None:
         data = resp.json()
         annual = data.get("annual", {}).get("data", {})
         return {
-            "ghi_kwh_m2": annual.get("GHI_opta"),
-            "dni_kwh_m2": annual.get("DNI_opta"),
+            "ghi_kwh_m2": annual.get("GHI"),
+            "dni_kwh_m2": annual.get("DNI"),
             "pvout_kwh_kwp": annual.get("PVOUT_csi"),
+            "gti_kwh_m2": annual.get("GTI_opta"),
             "optimal_tilt_deg": annual.get("OPTA"),
             "temp_avg_c": annual.get("TEMP"),
+            "elevation_m": annual.get("ELE"),
         }
     except (requests.RequestException, KeyError, ValueError):
         return None
@@ -89,11 +91,14 @@ def solar_score(lat: float, lng: float, *,
     return {
         "score": score,
         "label": label,
-        "ghi_kwh_m2_year": ghi,
-        "pvout_kwh_kwp_year": pvout,
+        "ghi_kwh_m2_year": round(ghi, 1) if ghi else None,
+        "dni_kwh_m2_year": round(solar["dni_kwh_m2"], 1) if solar.get("dni_kwh_m2") else None,
+        "pvout_kwh_kwp_year": round(pvout, 1),
         "orientation_factor": orient_factor,
         "estimated_annual_kwh": estimated_kwh,
         "optimal_tilt_deg": solar["optimal_tilt_deg"],
+        "temp_avg_c": solar.get("temp_avg_c"),
+        "elevation_m": solar.get("elevation_m"),
     }
 
 

@@ -218,7 +218,7 @@ function renderResult(data, lat, lng) {
       const g = Math.round(t < 0.5 ? 255 : (1 - t) * 2 * 255);
       const color = `rgb(${r},${g},50)`;
 
-      const radius = 60; // meters
+      const radius = 120; // meters
       const points = [[lat, lng]];
       for (let a = startAngle; a <= endAngle; a += 5) {
         const rad = a * Math.PI / 180;

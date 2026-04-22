@@ -274,23 +274,33 @@ Match VicRoads AADT segments to Overture roads spatially. Build `speed_limit + c
 Dataset: 14,662 VicRoads segments (downloaded)
 Target: calibrated AADT predictions within 30% of actual
 
-### Level 2: EU END Noise Map Comparison
+### Level 2: EU END Noise Map Comparison (DATA DOWNLOADED 2026-04-22)
 
-Download Lden contours for a European city (e.g., Paris or Berlin).
-Run our model on the same city using OSM data.
-Compare predicted vs official noise levels at grid points.
+Downloaded data:
+- **Germany raster**: 100MB GeoTIFF, 10m resolution, all road categories, 5 dB bands (55-75+)
+- **Netherlands vector**: Amsterdam road Lden contours via RIVM WFS (national highways only)
 
-Dataset: EEA Datahub (GeoPackage format)
-Target: RMSE < 5 dB
+Validation approach: sample German raster at known points, compare band vs predicted dB.
+For Amsterdam: spatial-join NoiseCapture hexagons with contour bands.
 
-### Level 3: NoiseCapture Global Measurements
+Target: RMSE < 5 dB against official maps
 
-Download crowdsourced noise measurements from noise-planet.org.
-For each measurement point with GPS, run our model.
-Compare predicted vs measured LAeq.
+### Level 3: NoiseCapture Crowdsourced Measurements (DATA DOWNLOADED 2026-04-22)
 
-Dataset: data.noise-planet.org (GeoJSON, ODbL license)
-Target: correlation > 0.7, RMSE < 8 dB
+Downloaded from data.noise-planet.org:
+- **Melbourne Inner**: 531 hexagons, 29,670 point measurements, LAeq 34-87 dB
+- **Amsterdam**: 423 hexagons, 28,165 point measurements, LAeq 28-107 dB
+- **Full Australia**: 493 locations across all 8 states
+- **Format**: GeoJSON areas (15m hex), points (1-sec GPS), tracks (sessions)
+
+Key caveats:
+- Volunteer-driven bias (not systematic spatial coverage)
+- GPS accuracy median 19m (15m hex aggregation helps)
+- ~28% of Amsterdam tracks tagged `indoor` — need filtering
+- Melbourne dominated by CBD/inner suburbs
+
+Validation script: `scripts/validate_noise.py --city melbourne`
+Target: RMSE < 8 dB, within-5-dB accuracy > 50%
 
 ## 6. Map Visualization
 

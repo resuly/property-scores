@@ -302,6 +302,24 @@ Key caveats:
 Validation script: `scripts/validate_noise.py --city melbourne`
 Target: RMSE < 8 dB, within-5-dB accuracy > 50%
 
+### Preliminary Melbourne Results (2026-04-22)
+
+Quick test on first 5 CBD hexagons (487 hexagons loaded, 3+ measurements each):
+
+| Metric | Value | Notes |
+|--------|-------|-------|
+| MAE | 9.4 dB | Overestimating |
+| Bias | +9.4 dB | Consistently high |
+| Error range | +7.4 to +12.8 dB | Positive bias |
+
+**Analysis**: Model overestimates CBD noise. Likely causes:
+1. CBD has very dense VicRoads + Overture road overlap (even after dedup)
+2. Building canyon effects (reflections) are not modeled but real buildings block more sound than our simple screening
+3. NoiseCapture measurements include off-peak and may be at elevated positions (balconies, rooftops)
+4. Need to test suburban/residential hexagons where bias should be smaller
+
+**Next steps**: Run full 487 hexagons, separate by inner vs suburban, filter indoor-tagged measurements.
+
 ## 6. Map Visualization
 
 ### Noise Source Markers

@@ -50,7 +50,7 @@
   <div class="hero">
     <div class="hero-badge">Property Scores by DA Leads</div>
     <h1><span>Noise</span> Score</h1>
-    <p>Estimate environmental noise at any address using Overture Maps road data and acoustic physics formulas. No commercial data purchase required.</p>
+    <p>Multi-source noise estimation combining real traffic counts, train/tram timetables, aircraft flight paths, and building screening. Higher score means quieter.</p>
   </div>
 
   <div class="try-section">
@@ -64,7 +64,7 @@
   </div>
 
   <h2>What It Measures</h2>
-  <p>The Noise Score rates how quiet a location is on a scale of 0 to 100, where 100 is the quietest. It estimates the cumulative traffic noise from all roads within 1 km using the CRTN (Calculation of Road Traffic Noise) simplified formula and Overture Maps road classification data.</p>
+  <p>The Noise Score rates how quiet a location is on a scale of 0 to 100, where 100 is the quietest. It combines three noise sources (road traffic, rail/tram, aircraft) using physics-based acoustic models and real government data.</p>
 
   <div class="scale">
     <div class="scale-item" style="background:#14532d"><span class="num">80-100</span>Very Quiet</div>
@@ -74,75 +74,66 @@
     <div class="scale-item" style="background:#7f1d1d"><span class="num">0-19</span>Very Loud</div>
   </div>
 
+  <h2>Noise Sources</h2>
+
+  <h3>1. Road Traffic</h3>
+  <p>Uses VicRoads AADT (Annual Average Daily Traffic) ground truth for 14,600+ monitored road segments in Victoria. For unmonitored streets, falls back to conservative estimates based on Overture Maps road classification.</p>
+
+  <h3>2. Train &amp; Tram</h3>
+  <p>Uses PTV GTFS timetable data with actual service frequencies per route. SEL-based noise model accounts for peak vs off-peak service rates, pass-by duration, and distance attenuation.</p>
+
+  <h3>3. Aircraft</h3>
+  <p>Queries VicPlan planning overlays for MAEO (Melbourne Airport) and AEO (regional airports) zones. Maps ANEF contours to noise penalties based on AS2021-2015.</p>
+
   <h2>Methodology</h2>
 
   <h3>Data Sources</h3>
   <table>
-    <tr><th>Dataset</th><th>Provider</th><th>Resolution</th><th>License</th></tr>
-    <tr><td>Road network + classification</td><td>Overture Maps Foundation</td><td>Segment-level</td><td>CDLA Permissive + ODbL</td></tr>
-    <tr><td>Building footprints</td><td>Overture Maps Foundation</td><td>~1m</td><td>CDLA Permissive</td></tr>
+    <tr><th>Dataset</th><th>Provider</th><th>Resolution</th><th>Records</th></tr>
+    <tr><td>Road traffic volumes (AADT)</td><td>VicRoads 2019</td><td>Segment-level</td><td>14,662</td></tr>
+    <tr><td>Road network + classification</td><td>Overture Maps</td><td>Segment-level</td><td>592,748</td></tr>
+    <tr><td>Train/tram timetables</td><td>PTV GTFS</td><td>Route-level</td><td>52 routes</td></tr>
+    <tr><td>Building footprints + heights</td><td>Overture Maps</td><td>~1m</td><td>1,720,000</td></tr>
+    <tr><td>Airport noise overlays</td><td>VicPlan (DELWP)</td><td>Polygon</td><td>Real-time API</td></tr>
   </table>
 
-  <h3>Road Class to Traffic Volume Mapping</h3>
-  <p>Overture Maps classifies every road segment (motorway, trunk, primary, secondary, tertiary, residential). Each class maps to a reference noise level based on typical AADT (Annual Average Daily Traffic):</p>
-  <table>
-    <tr><th>Road Class</th><th>Typical AADT</th><th>Reference Noise (dB)</th></tr>
-    <tr><td>Motorway</td><td>60,000 - 120,000</td><td>78</td></tr>
-    <tr><td>Trunk</td><td>20,000 - 50,000</td><td>73</td></tr>
-    <tr><td>Primary</td><td>10,000 - 25,000</td><td>70</td></tr>
-    <tr><td>Secondary</td><td>5,000 - 15,000</td><td>67</td></tr>
-    <tr><td>Tertiary</td><td>1,000 - 5,000</td><td>62</td></tr>
-    <tr><td>Residential</td><td>200 - 1,000</td><td>55</td></tr>
-    <tr><td>Unclassified</td><td>&lt;200</td><td>52</td></tr>
-  </table>
-
-  <h3>Calculation Steps</h3>
+  <h3>Propagation Model</h3>
   <ol>
-    <li><strong>Find all roads</strong> within 1 km of the target coordinate using DuckDB spatial queries on Overture parquet data.</li>
-    <li><strong>Per-road noise contribution</strong>: <code>L = L_ref - 10 log10(d / 13.5) - 3.0</code> where d = distance in meters and 3.0 dB is ground absorption.</li>
-    <li><strong>Energy summation</strong> across all roads: <code>L_total = 10 log10(sum of 10^(Li/10))</code></li>
-    <li><strong>Convert to score</strong>: <code>score = clamp(100 - (L_total - 35) x 1.5, 0, 100)</code></li>
+    <li><strong>Road emission</strong> &mdash; CRTN L10: <code>42.2 + 10 log10(AADT)</code> with duty-cycle correction for low-traffic roads</li>
+    <li><strong>Rail emission</strong> &mdash; SEL-based: <code>L_peak + 10 log10(duration) + 10 log10(N/3600)</code> using actual PTV service counts</li>
+    <li><strong>Distance attenuation</strong> &mdash; <code>10 log10(d / d_ref)</code> + 3 dB ground absorption + 0.06 dB/m excess above 50m</li>
+    <li><strong>Building screening</strong> &mdash; Maekawa barrier formula using Overture building heights, up to 20 dB reduction</li>
+    <li><strong>Energy summation</strong> &mdash; Top-3 road + top-2 rail sources combined: <code>L_total = 10 log10(sum 10^(Li/10))</code></li>
+    <li><strong>Aircraft penalty</strong> &mdash; ANEF zone adds ambient noise from flight path exposure</li>
   </ol>
 
-  <h2>Accuracy</h2>
-  <table>
-    <tr><th>Factor</th><th>Impact</th><th>Notes</th></tr>
-    <tr><td>Road class as AADT proxy</td><td>~70% variance explained</td><td>Core assumption; validated against VicRoads AADT data</td></tr>
-    <tr><td>Distance attenuation</td><td>Physically accurate</td><td>CRTN standard line-source model</td></tr>
-    <tr><td>Building shielding</td><td>Not yet modeled</td><td>Phase 2: use Overture building heights</td></tr>
-    <tr><td>Aircraft noise</td><td>Not yet included</td><td>Phase 2: ANEF contours from data.gov.au</td></tr>
-    <tr><td>Railway noise</td><td>Not yet included</td><td>Phase 2: Overture rail segments + GTFS</td></tr>
-    <tr><td>Speed/gradient correction</td><td>Not applied</td><td>Phase 2: speed limit data from Overture</td></tr>
-  </table>
-
-  <h3>Phase 2 Roadmap (ML Calibration)</h3>
-  <p>Train an XGBoost model on NoiseModelling (open-source, CNOSSOS-EU compliant) ground truth to boost accuracy from ~70% to ~90%, adding building density, height, rail distance, and ANEF zones as features.</p>
-
-  <h2>Comparison with Commercial Data</h2>
-  <table class="vs-table">
-    <tr><th></th><th>Ambient Maps (AU)</th><th>HowLoud (US)</th><th>Property Scores</th></tr>
-    <tr><td>Method</td><td>SoundPLAN 3D ray tracing</td><td>Proprietary model</td><td>CRTN formula + Overture</td></tr>
-    <tr><td>Precision</td><td>Per-wall, per-floor</td><td>Address-level 50-100</td><td>Address-level 0-100</td></tr>
-    <tr><td>Coverage</td><td>Australia only</td><td>170M US properties</td><td>Global (Overture coverage)</td></tr>
-    <tr><td>Cost</td><td>$100-120K/year</td><td>Free (B2C) + API</td><td>Free / open source</td></tr>
-    <tr><td>Data inputs</td><td>Commercial GPS, Geoscape</td><td>Proprietary</td><td>100% open data</td></tr>
-  </table>
+  <h3>Deduplication</h3>
+  <p>Roads appearing in both VicRoads AADT and Overture Maps are deduplicated by distance proximity (80m threshold) to prevent double-counting the same physical road.</p>
 
   <h2>Reference Benchmarks (Melbourne)</h2>
   <table>
-    <tr><th>Location</th><th>Score</th><th>dB</th><th>Roads</th><th>Label</th></tr>
-    <tr><td>Warrandyte bushland</td><td>55</td><td>64.8</td><td>122</td><td>Moderate</td></tr>
-    <tr><td>Tullamarine (airport area)</td><td>42</td><td>74.0</td><td>960</td><td>Moderate</td></tr>
-    <tr><td>Toorak Rd / Chapel St</td><td>40</td><td>75.2</td><td>1,301</td><td>Moderate</td></tr>
-    <tr><td>Melbourne CBD</td><td>35</td><td>78.2</td><td>3,860</td><td>Loud</td></tr>
-    <tr><td>Monash Freeway roadside</td><td>31</td><td>80.9</td><td>1,632</td><td>Loud</td></tr>
+    <tr><th>Location</th><th>Score</th><th>dB</th><th>Dominant Source</th><th>Label</th></tr>
+    <tr><td>CBD Flinders St</td><td>0</td><td>80</td><td>Flinders St (AADT 20,520) + Traralgon line</td><td>Very Loud</td></tr>
+    <tr><td>South Yarra Station</td><td>0</td><td>78</td><td>Frankston line (22 svc/hr peak)</td><td>Very Loud</td></tr>
+    <tr><td>Toorak Rd</td><td>29</td><td>65</td><td>Frankston line @494m</td><td>Loud</td></tr>
+    <tr><td>Bentleigh residential</td><td>23</td><td>67</td><td>Frankston line @195m</td><td>Loud</td></tr>
+    <tr><td>Keilor (MAEO1)</td><td>79</td><td>47</td><td>Aircraft ANEF 25+ zone</td><td>Quiet</td></tr>
   </table>
 
+  <h2>Limitations</h2>
+  <ul>
+    <li>VicRoads AADT only covers VIC state-monitored roads (arterials/highways)</li>
+    <li>PTV GTFS covers Melbourne metro only; no interstate rail</li>
+    <li>Aircraft overlays currently VIC only (MAEO + AEO); no NSW/QLD ANEF</li>
+    <li>Building screening only effective for secondary noise sources (nearest road usually has line-of-sight)</li>
+    <li>No industrial or construction noise sources</li>
+  </ul>
+
   <h2>API</h2>
-  <p><code>GET /scores/noise?lat=-37.8136&amp;lng=144.9631&amp;radius=1000</code></p>
+  <p><code>GET /scores/noise?lat=-37.8136&amp;lng=144.9631</code></p>
 
   <div class="footer">
-    <p>Built by <a href="https://daleads.com.au">DA Leads</a> | Road data: <a href="https://overturemaps.org">Overture Maps Foundation</a></p>
+    <p>Built by <a href="https://daleads.com.au">DA Leads</a> | Data: <a href="https://overturemaps.org">Overture Maps</a> + <a href="https://vicroadsdata.vicroadsopendatatest.opendata.arcgis.com/">VicRoads</a> + <a href="https://www.ptv.vic.gov.au/footer/data-and-reporting/datasets/">PTV GTFS</a> + <a href="https://mapshare.vic.gov.au/vicplan/">VicPlan</a></p>
   </div>
 </div>
 
@@ -152,19 +143,27 @@ async function compute() {
   const lng = document.getElementById('lng').value;
   const el = document.getElementById('result');
   el.style.display = 'block';
-  el.innerHTML = '<div style="color:#8b5cf6">Computing...</div>';
+  el.innerHTML = '<div style="color:#8b5cf6">Computing multi-source noise...</div>';
   try {
     const resp = await fetch(`/scores/noise?lat=${lat}&lng=${lng}`);
     const d = await resp.json();
     if (d.error) { el.innerHTML = `<div style="color:#ef4444">${d.error}</div>`; return; }
     const color = d.score >= 60 ? '#22c55e' : d.score >= 40 ? '#f59e0b' : '#ef4444';
+    let grid = `
+      <div class="result-item"><span class="result-key">Total Noise</span><span>${d.estimated_db} dB</span></div>
+      <div class="result-item"><span class="result-key">Road Noise</span><span>${d.road_db} dB</span></div>`;
+    if (d.rail_db) grid += `<div class="result-item"><span class="result-key">Rail Noise</span><span>${d.rail_db} dB</span></div>`;
+    if (d.aircraft_db) grid += `<div class="result-item"><span class="result-key">Aircraft Noise</span><span>${d.aircraft_db} dB</span></div>`;
+    if (d.dominant_source) grid += `<div class="result-item"><span class="result-key">Dominant Source</span><span>${d.dominant_source}</span></div>`;
+    if (d.aadt_segments) grid += `<div class="result-item"><span class="result-key">AADT Segments</span><span>${d.aadt_segments}</span></div>`;
+    if (d.nearest_tram_m != null) grid += `<div class="result-item"><span class="result-key">Nearest Tram</span><span>${d.nearest_tram_m}m</span></div>`;
+    if (d.nearest_train_m != null) grid += `<div class="result-item"><span class="result-key">Nearest Train</span><span>${d.nearest_train_m}m</span></div>`;
+    if (d.max_building_screening_db) grid += `<div class="result-item"><span class="result-key">Building Screening</span><span>-${d.max_building_screening_db} dB</span></div>`;
+    if (d.aircraft) grid += `<div class="result-item"><span class="result-key">Aircraft Zone</span><span>${d.aircraft.zone_code} (ANEF ${d.aircraft.anef_min}+)</span></div>`;
     el.innerHTML = `
       <div class="result-score" style="color:${color}">${d.score}<span style="font-size:20px;color:var(--dim)">/100</span></div>
       <div class="result-label">${d.label}</div>
-      <div class="result-grid">
-        <div class="result-item"><span class="result-key">Estimated Noise</span><span>${d.estimated_db} dB</span></div>
-        <div class="result-item"><span class="result-key">Roads in Range</span><span>${d.road_count}</span></div>
-      </div>`;
+      <div class="result-grid">${grid}</div>`;
   } catch (e) { el.innerHTML = `<div style="color:#ef4444">Error: ${e.message}</div>`; }
 }
 </script>

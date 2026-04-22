@@ -6,7 +6,7 @@ Data hierarchy:
 2. Overture speed_limit → calibrated AADT estimate
 3. Overture road class → fallback AADT estimate
 
-Sources: road traffic, rail/tram (from Overture rail subtype).
+Sources: road traffic, rail/tram (from Overture rail subtype), aircraft (VicPlan overlays).
 Propagation: CRTN L10 + duty-cycle correction + urban excess attenuation.
 
 Score 0-100 where 100 = quietest.
@@ -14,8 +14,9 @@ Score 0-100 where 100 = quietest.
 
 import math
 
-from property_scores.common.overture import get_db, roads_near, rail_near, aadt_near
+from property_scores.common.overture import get_db, roads_near, rail_near, aadt_near, ptv_rail_near
 from property_scores.noise.buildings import barrier_attenuation
+from property_scores.noise.aircraft import aircraft_noise_penalty
 
 # --- Calibrated AADT mappings (from VicRoads 2019 ground truth) ---
 # VicRoads monitors arterials/highways, so these are MEDIAN values for
@@ -49,8 +50,15 @@ CLASS_TO_AADT: dict[str, int] = {
     "service":      150,
 }
 
-# Rail noise — time-averaged Leq (not peak pass-by)
-RAIL_NOISE: dict[str, tuple[float, float]] = {
+# Rail noise — SEL-based with actual frequency (PTV GTFS)
+# (L_peak at ref_dist, ref_dist_m, pass_by_duration_s)
+RAIL_EMISSION: dict[str, tuple[float, float, float]] = {
+    "train":  (90.0, 25.0, 15.0),
+    "vline":  (92.0, 25.0, 30.0),
+    "tram":   (80.0, 7.5, 10.0),
+}
+# Fallback for Overture rail (no PTV match)
+RAIL_NOISE_FALLBACK: dict[str, tuple[float, float]] = {
     "standard_gauge": (72.0, 25.0),
     "narrow_gauge":   (68.0, 25.0),
     "tram":           (65.0, 7.5),
@@ -86,10 +94,25 @@ def _crtn_noise(aadt: int, distance_m: float) -> float:
     return max(l10_ref - geometric - GROUND_ABSORPTION_DB - excess + duty_correction, 0.0)
 
 
-def _rail_noise(rail_class: str, distance_m: float) -> float:
-    if rail_class not in RAIL_NOISE:
+def _rail_noise_freq(rail_type: str, distance_m: float,
+                     services_per_hour: float) -> float:
+    """SEL-based rail noise using actual service frequency."""
+    if rail_type not in RAIL_EMISSION or services_per_hour <= 0:
         return 0.0
-    l_ref, ref_dist = RAIL_NOISE[rail_class]
+    l_peak, ref_dist, duration = RAIL_EMISSION[rail_type]
+    if distance_m < MIN_DISTANCE_M:
+        distance_m = MIN_DISTANCE_M
+    sel = l_peak + 10 * math.log10(duration)
+    leq = sel + 10 * math.log10(services_per_hour / 3600)
+    dist_atten = 10 * math.log10(distance_m / ref_dist)
+    return max(leq - dist_atten - GROUND_ABSORPTION_DB, 0.0)
+
+
+def _rail_noise_fallback(rail_class: str, distance_m: float) -> float:
+    """Fallback for Overture rail segments without PTV frequency data."""
+    if rail_class not in RAIL_NOISE_FALLBACK:
+        return 0.0
+    l_ref, ref_dist = RAIL_NOISE_FALLBACK[rail_class]
     if distance_m < MIN_DISTANCE_M:
         distance_m = MIN_DISTANCE_M
     return max(l_ref - 10 * math.log10(distance_m / ref_dist) - GROUND_ABSORPTION_DB, 0.0)
@@ -121,8 +144,9 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
             }))
 
     # --- Overture roads (fill gaps: residential streets not in VicRoads) ---
-    # Use CLASS_TO_AADT only (conservative). If a road were busy enough to
-    # matter, VicRoads would monitor it and it would appear in aadt_segments.
+    # Dedup: skip Overture major roads within 80m of any VicRoads segment
+    # distance to avoid double-counting the same physical road.
+    vicroads_distances = [d for _, _, _, d, _, _ in aadt_segments]
     roads = roads_near(db, lat, lng, radius_m, source=source)
     overture_levels: list[tuple[float, dict]] = []
     roads_with_speed = 0
@@ -132,6 +156,9 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
             continue
         if speed_kmh:
             roads_with_speed += 1
+        if road_class in ("motorway", "trunk", "primary", "secondary"):
+            if any(abs(dist_m - vd) < 80 for vd in vicroads_distances):
+                continue
         aadt_est = CLASS_TO_AADT.get(road_class, 400)
         l_db = _crtn_noise(aadt_est, dist_m)
         if l_db > 0:
@@ -150,27 +177,66 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     road_energy = sum(10 ** (l / 10) for l, _ in top_roads)
     road_db = 10 * math.log10(road_energy) if road_energy > 0 else 0.0
 
-    # --- Rail/tram ---
-    rails = rail_near(db, lat, lng, radius_m, source=source)
+    # --- Rail/tram (PTV GTFS with real frequencies) ---
+    ptv_routes = ptv_rail_near(db, lat, lng, radius_m)
     rail_levels: list[tuple[float, dict]] = []
     nearest_tram_m = None
     nearest_train_m = None
+    ptv_found = len(ptv_routes) > 0
 
-    for rail_class, dist_m in rails:
-        l_db = _rail_noise(rail_class, dist_m)
+    for route_type, route_name, dist_m, peak_svc, offpeak_svc in ptv_routes:
+        if route_type == 0:
+            rail_type = "tram"
+            if nearest_tram_m is None or dist_m < nearest_tram_m:
+                nearest_tram_m = dist_m
+        else:
+            rail_type = "vline" if peak_svc < 4 else "train"
+            if nearest_train_m is None or dist_m < nearest_train_m:
+                nearest_train_m = dist_m
+        svc_per_hr = peak_svc * 0.4 + offpeak_svc * 0.6
+        l_db = _rail_noise_freq(rail_type, dist_m, svc_per_hr)
         if l_db > 0:
-            rail_levels.append((l_db, {"class": rail_class, "distance_m": round(dist_m, 0), "db": round(l_db, 1)}))
-        if rail_class == "tram" and (nearest_tram_m is None or dist_m < nearest_tram_m):
-            nearest_tram_m = dist_m
-        if rail_class in ("standard_gauge", "narrow_gauge") and (nearest_train_m is None or dist_m < nearest_train_m):
-            nearest_train_m = dist_m
+            rail_levels.append((l_db, {
+                "source": "ptv_gtfs",
+                "type": rail_type,
+                "route": route_name,
+                "distance_m": round(dist_m, 0),
+                "peak_svc_hr": round(peak_svc, 1),
+                "offpeak_svc_hr": round(offpeak_svc, 1),
+                "db": round(l_db, 1),
+            }))
+
+    if not ptv_found:
+        rails = rail_near(db, lat, lng, radius_m, source=source)
+        for rail_class, dist_m in rails:
+            l_db = _rail_noise_fallback(rail_class, dist_m)
+            if l_db > 0:
+                rail_levels.append((l_db, {
+                    "source": "overture",
+                    "class": rail_class,
+                    "distance_m": round(dist_m, 0),
+                    "db": round(l_db, 1),
+                }))
+            if rail_class == "tram" and (nearest_tram_m is None or dist_m < nearest_tram_m):
+                nearest_tram_m = dist_m
+            if rail_class in ("standard_gauge", "narrow_gauge") and (nearest_train_m is None or dist_m < nearest_train_m):
+                nearest_train_m = dist_m
 
     top_rails = sorted(rail_levels, key=lambda x: x[0], reverse=True)[:TOP_N_RAIL_SOURCES]
     rail_energy = sum(10 ** (l / 10) for l, _ in top_rails)
     rail_db = 10 * math.log10(rail_energy) if rail_energy > 0 else 0.0
 
+    # --- Aircraft noise (VicPlan MAEO/AEO overlays) ---
+    aircraft = aircraft_noise_penalty(lat, lng)
+    aircraft_db = 0.0
+    if aircraft["penalty_db"] > 0:
+        # Aircraft penalty is an ambient dB addition from ANEF contours.
+        # Convert to energy for summation with road/rail sources.
+        aircraft_db = AMBIENT_DB + aircraft["penalty_db"]
+
     # --- Energy summation ---
-    total_energy = road_energy + rail_energy
+    aircraft_energy = 10 ** (aircraft_db / 10) if aircraft_db > 0 else 0
+    total_energy = road_energy + rail_energy + aircraft_energy
     l_total = 10 * math.log10(total_energy) if total_energy > 0 else AMBIENT_DB
     l_total = max(l_total, AMBIENT_DB)
 
@@ -207,6 +273,8 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     if nearest_train_m is not None:
         result["nearest_train_m"] = round(nearest_train_m, 0)
 
+    if ptv_found:
+        result["rail_source"] = "ptv_gtfs"
     if top_roads:
         result["dominant_road"] = top_roads[0][1]
     if top_rails:
@@ -214,6 +282,19 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     result["dominant_source"] = top_roads[0][1].get("road_name") or top_roads[0][1].get("class") if top_roads else None
     if building_screening_total > 0:
         result["max_building_screening_db"] = round(building_screening_total, 1)
+
+    # Aircraft noise overlay
+    if aircraft["zone_code"]:
+        result["aircraft"] = {
+            "zone_code": aircraft["zone_code"],
+            "anef_min": aircraft["anef_min"],
+            "anef_max": aircraft["anef_max"],
+            "penalty_db": aircraft["penalty_db"],
+            "impact": aircraft["impact"],
+            "airport_type": aircraft["airport_type"],
+            "lga": aircraft["lga"],
+        }
+        result["aircraft_db"] = round(aircraft_db, 1)
 
     return result
 
@@ -233,8 +314,15 @@ if __name__ == "__main__":
     print(f"Total: {result['estimated_db']} dB | Road: {result['road_db']} dB", end="")
     if result.get("rail_db"):
         print(f" | Rail: {result['rail_db']} dB", end="")
+    if result.get("aircraft_db"):
+        print(f" | Aircraft: {result['aircraft_db']} dB", end="")
     print(f"\nAADT segments: {result['aadt_segments']} | Overture roads: {result['road_count']}")
     if result.get("dominant_road"):
         d = result["dominant_road"]
         src = d.get("road_name", d.get("class", "?"))
         print(f"Dominant: {src} @ {d['distance_m']}m, AADT={d.get('aadt', d.get('aadt_est', '?'))}, {d['db']} dB")
+    if result.get("aircraft"):
+        a = result["aircraft"]
+        print(f"Aircraft: {a['zone_code']} (ANEF {a['anef_min']}"
+              + (f"-{a['anef_max']}" if a['anef_max'] else "+")
+              + f") +{a['penalty_db']} dB — {a['impact']}")

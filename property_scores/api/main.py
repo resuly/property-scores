@@ -7,7 +7,7 @@ from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from property_scores.noise import noise_score
+from property_scores.noise import noise_score, aircraft_noise_penalty
 from property_scores.walkability import walkability_score
 from property_scores.solar import solar_score
 from property_scores.flood import flood_score
@@ -140,4 +140,14 @@ def get_heat_island(lat: float = Query(...), lng: float = Query(...)):
         return heat_island_score(lat, lng)
     except Exception as e:
         logger.exception("heat island score failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/scores/aircraft-noise")
+def get_aircraft_noise(lat: float = Query(...), lng: float = Query(...)):
+    """Query airport noise overlay (MAEO/AEO) for a coordinate."""
+    try:
+        return aircraft_noise_penalty(lat, lng)
+    except Exception as e:
+        logger.exception("aircraft noise query failed")
         return JSONResponse({"error": str(e)}, status_code=500)

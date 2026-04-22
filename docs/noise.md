@@ -1,6 +1,6 @@
 # Noise Score — Technical Specification
 
-## Status: Phase 1 — Rebuilding
+## Status: Phase 2 — Multi-source Integration
 
 | Item | Status |
 |------|--------|
@@ -10,8 +10,9 @@
 | VicRoads AADT as primary source | Done (v2 model uses real AADT) |
 | Overture Buildings download | Done (1.72M buildings, 67.2% with height, 175.8 MB) |
 | Building screening model | Done (Maekawa formula, 13-20 dB detected, ~1-5 dB score impact) |
-| PTV GTFS rail timetable | TODO |
-| ANEF aircraft contours | TODO |
+| PTV GTFS rail timetable | Done (52 routes: 17 metro + 13 V/Line + 24 tram, SEL-based Leq) |
+| ANEF aircraft contours | Done (VicPlan MAEO + AEO overlays, real-time API) |
+| VicRoads/Overture deduplication | Done (80m distance threshold for major roads) |
 | EU END validation set | TODO |
 | NoiseCapture validation set | TODO |
 
@@ -203,41 +204,66 @@ where:
 Example: commuter train, 10 pass-bys per hour (peak), SEL = 90 + 10*log10(15) = 101.8 dB
 Leq = 101.8 + 10*log10(10/3600) = 101.8 - 25.6 = 76.2 dB at 25m
 
-### Data Source: PTV GTFS
+### Data Source: PTV GTFS (COMPLETED 2026-04-22)
 
-PTV publishes GTFS feed with stop_times for all train/tram/bus routes. From this we can extract:
-- Number of services per hour per route
-- Peak vs off-peak frequencies
-- Route geometry (from shapes.txt)
+Downloaded from https://data.ptv.vic.gov.au/downloads/gtfs.zip (180MB, 2026-04-17).
+Processed: typical Wednesday frequencies per route, exported to parquet.
 
-URL: https://www.ptv.vic.gov.au/footer/data-and-reporting/datasets/
+**Actual frequencies vs initial estimates:**
 
-## 4. Aircraft Noise
+| Mode | Routes | Peak avg/hr | Peak median/hr | Off-peak avg/hr |
+|------|--------|-------------|----------------|-----------------|
+| Metro Train | 17 | 13.9 | 13.5 | 7.4 |
+| V/Line Train | 13 | 2.2 | 1.0 | 1.0 |
+| Tram | 24 | 14.9 | 14.5 | 12.1 |
+
+Busiest: Sunbury line 29.5/hr peak, Route 19 tram 22.5/hr peak.
+Quietest: Stony Point 1.5/hr, Route 82 tram 8.5/hr.
+
+Numbers are both directions combined (correct for noise — you hear all pass-bys).
+
+**Output files:**
+- `D:/property-scores-data/ptv_rail_frequency.parquet` — 52 routes with peak/offpeak rates
+- `D:/property-scores-data/ptv_rail_shapes.parquet` — 35,036 shape points (63 shapes)
+
+## 4. Aircraft Noise (COMPLETED 2026-04-22)
 
 ### Method
 
-Use pre-computed ANEF (Australian Noise Exposure Forecast) contours. These are created by Airservices Australia using the AEDT model and account for:
-- Flight path geometry
-- Aircraft type mix
-- Runway usage patterns
-- Projected movements
+Queries VicPlan Planning Scheme Overlays (ArcGIS REST) for airport noise zones.
+Real-time API, no auth, CC BY 4.0, updated weekly by DELWP.
 
 ### Data Sources
 
-| Airport | Data | Format |
-|---------|------|--------|
-| Melbourne (MEL) | MAEO overlay in VicPlan | ArcGIS REST |
-| Sydney (SYD) | ANEF 2039 in master plan | PDF/shapefile |
-| Defence airfields | ANEF layers | data.gov.au GeoJSON |
-| EU airports | END noise contours | EEA Datahub |
+| Layer | Overlay | Zones | Coverage |
+|-------|---------|-------|----------|
+| Layer 27 (MAEO) | Melbourne Airport Environs | MAEO1 (≥25 ANEF), MAEO2 (20-25 ANEF) | 21 polygons, 6 LGAs |
+| Layer 22 (AEO) | Airport Environs (regional) | AEO1, AEO2, AEO | 44 polygons statewide |
 
-For Melbourne: query VicPlan ArcGIS for Melbourne Airport Environs Overlay (MAEO) which defines noise-affected zones.
+### Zone → Noise Mapping
 
-### Score Impact
+| Zone | ANEF Range | Penalty dB | Impact |
+|------|-----------|------------|--------|
+| MAEO1 | ≥ 25 | +12.0 | Severe; residential not recommended |
+| MAEO2 | 20-25 | +7.0 | Moderate; acoustic treatment required |
+| AEO1 | ≥ 25 | +10.0 | Regional airport, severe |
+| AEO2 | 20-25 | +6.0 | Regional airport, moderate |
+| AEO | ~20-25 | +5.0 | Regional, unscheduled (conservative) |
 
-ANEF 20+ = significant aircraft noise → score penalty
-ANEF 25+ = severe → large penalty
-ANEF 30+ = extreme → near-zero noise score
+### Verified Test Points
+
+| Location | Zone | Penalty | LGA |
+|----------|------|---------|-----|
+| Keilor (-37.70, 144.83) | MAEO1 | +12 dB | HUME |
+| Brimbank (-37.71, 144.85) | MAEO2 | +7 dB | HUME |
+| Moorabbin (-37.98, 145.11) | AEO1 | +10 dB | KINGSTON |
+| Melbourne CBD | None | 0 dB | — |
+
+### Limitation
+
+VicPlan provides zone-level data, not individual ANEF contour lines with exact dB values.
+Fine-grained ANEF contour GIS data for Melbourne Airport is not publicly available.
+Other states (NSW, QLD) not yet covered — need separate data sources.
 
 ## 5. Validation Plan
 
@@ -288,50 +314,51 @@ Pre-compute or real-time compute noise level grid:
 
 ```
 property_scores/noise/
-  __init__.py          — exports noise_score()
+  __init__.py          — exports noise_score(), aircraft_noise_penalty()
   score.py             — main scoring function (multi-source)
-  propagation.py       — CNOSSOS-EU simplified propagation model (TODO)
-  road_emission.py     — road traffic emission model (TODO)
-  rail_emission.py     — rail/tram emission from GTFS (TODO)
-  aircraft.py          — ANEF overlay query (TODO)
+  aircraft.py          — VicPlan MAEO/AEO overlay queries (DONE)
   buildings.py         — building screening (Maekawa barrier attenuation)
-  calibration.py       — VicRoads AADT calibration (TODO)
+
+property_scores/common/
+  overture.py          — DuckDB spatial queries (roads, rail, AADT, PTV, POIs)
 
 data/ (external, not in git)
   overture_roads.parquet        — 592k Melbourne road segments
   overture_buildings.parquet    — 1.72M Melbourne buildings (67.2% with height)
   vicroads_aadt_2019.geojson    — 14,662 AADT segments (raw)
   vicroads_aadt_2019.parquet    — 14,637 AADT segments (spatial query ready)
-  ptv_gtfs/                     — PTV timetable data (TODO download)
+  ptv_rail_frequency.parquet    — 52 train/tram routes with peak/offpeak rates
+  ptv_rail_shapes.parquet       — 35,036 route shape points (63 shapes)
+  ptv_gtfs/                     — Raw PTV GTFS data (180MB)
   eu_end/                       — EU noise maps for validation (TODO download)
   noisecapture/                 — Crowdsourced measurements (TODO download)
 ```
 
-## v2 Test Results (2026-04-22)
+## v3 Test Results (2026-04-22, multi-source)
 
-| Location | Score | dB | AADT# | Dominant | Screening | Assessment |
-|----------|-------|-----|-------|----------|-----------|------------|
-| CBD Flinders St | 0 | 79.0 | 57 | Flinders St AADT=20520 @80m | 20dB (secondary) | Correct |
-| South Yarra Stn | 0 | 76.8 | 15 | primary @45m | 20dB | Correct |
-| St Kilda Rd | 0 | 79.1 | 10 | trunk @40m | 20dB | Correct |
-| Toorak Rd | 2 | 74.2 | 9 | primary @69m | 20dB | Correct |
-| Parkville quiet | 39 | 61.5 | 2 | trunk @255m | 13.9dB | Reasonable |
-| Surrey Hills back | 14 | 70.2 | 2 | Canterbury Rd @103m | 20dB | Correct |
-| Bentleigh res | 45 | 59.1 | 0 | secondary @175m | 0dB | Reasonable |
-| Malvern deep res | 21 | 67.7 | 16 | Dandenong Rd @174m | 20dB | Reasonable |
-| Vermont deep res | 32 | 63.6 | 0 | secondary @122m | 0dB | Reasonable |
-| Doncaster back | 42 | 60.4 | 4 | Doncaster Rd @221m | 20dB | Reasonable |
-| Eltham semi-rural | 37 | 62.1 | 2 | tertiary @77m | 16.8dB | Reasonable |
+| Location | Score | dB | Road dB | Rail dB | Dominant | Aircraft | Assessment |
+|----------|-------|-----|---------|---------|----------|----------|------------|
+| CBD Flinders St | 0 | 79.8 | 76.3 | 77.2 | Flinders St AADT=20520 + Traralgon line | — | Correct |
+| South Yarra Stn | 0 | 78.2 | 64.2 | 78.1 | Frankston line 22/hr @26m | — | Correct |
+| St Kilda Rd tram | 26 | 65.7 | 54.3 | 65.4 | Pakenham line @285m | — | Reasonable |
+| Toorak Rd | 29 | 64.8 | 53.6 | 64.4 | Frankston line @494m | — | Reasonable |
+| Parkville quiet | 0 | 79.8 | 79.8 | 49.1 | Road-dominated (trunk) | — | Road too loud |
+| Surrey Hills back | 26 | 66.1 | 56.1 | 65.6 | Lilydale line @253m | — | Reasonable |
+| Bentleigh res | 23 | 67.1 | 59.1 | 66.3 | Frankston line @195m | — | Reasonable |
+| Keilor (airport) | 79 | 47.2 | — | — | Aircraft MAEO1 +12dB | MAEO1 | Correct |
+| Brimbank (airport) | 73 | 49.6 | �� | — | Aircraft MAEO2 +7dB | MAEO2 | Correct |
+| Moorabbin (regional) | 0 | 79.8 | — | — | Road + AEO1 +10dB | AEO1 | Correct |
 
-Score range: 0-100 (was 0-0 in v1). Building screening detected but has modest impact (~1-5 dB) because dominant source (nearest road) is rarely screened.
+Rail noise now significant factor: at 200-500m from busy lines (Frankston 22/hr, Lilydale 18/hr), rail dominates road noise. Building screening helps for road noise but not rail.
 
-## Known Issues (v2)
+## Known Issues (v3)
 
-1. **Screening only helps secondary sources** — nearest road is in line-of-sight, buildings behind you don't help
+1. **Screening only helps secondary sources** — nearest road/rail usually has line-of-sight
 2. **VicRoads coverage gaps** — some freeways/motorways missing from AADT data
-3. **Overture class still used as fallback** — trunk=19000 can override actual VicRoads data
+3. **PTV rail frequencies seem high** — train at 253m contributing 65+ dB. May need per-direction halving or pass-by attenuation adjustment
 4. **Query time 0.4-4.6s** — building intersection queries on 1.7M buildings are expensive
-5. **No rail timetable** — fixed Leq estimate instead of actual frequency
+5. **Aircraft VIC only** — MAEO/AEO covers Victoria; no NSW/QLD ANEF
+6. **No bus noise** — PTV GTFS has 534 bus routes but not yet modeled (lower impact than rail)
 
 ## Changelog
 
@@ -339,4 +366,8 @@ Score range: 0-100 (was 0-0 in v1). Building screening detected but has modest i
 - 2026-04-22: Downloaded VicRoads AADT 2019 (14,662 → parquet). Calibrated speed→AADT.
 - 2026-04-22: v2 model: VicRoads AADT primary, class fallback, duty-cycle, excess attenuation.
 - 2026-04-22: Downloaded Overture Buildings (1.72M, 67.2% height). Implemented Maekawa screening.
-- 2026-04-22: Score range improved from 0-0 to 0-100. Remaining: PTV GTFS, ANEF, validation.
+- 2026-04-22: Score range improved from 0-0 to 0-100.
+- 2026-04-22: PTV GTFS downloaded (52 routes). SEL-based rail noise with actual frequencies.
+- 2026-04-22: VicPlan MAEO/AEO aircraft overlay integration (real-time API).
+- 2026-04-22: VicRoads/Overture deduplication (80m distance threshold).
+- 2026-04-22: Noise product page (noise.html) rewritten for v3 multi-source model.

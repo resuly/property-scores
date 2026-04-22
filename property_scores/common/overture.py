@@ -9,6 +9,8 @@ import threading
 ROADS_FILE = "overture_roads.parquet"
 POIS_FILE = "overture_pois.parquet"
 AADT_FILE = "vicroads_aadt_2019.parquet"
+PTV_SHAPES_FILE = "ptv_rail_shapes.parquet"
+PTV_FREQ_FILE = "ptv_rail_frequency.parquet"
 
 _install_lock = threading.Lock()
 _installed = False
@@ -101,6 +103,44 @@ def aadt_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
           AND ymin BETWEEN {lat - delta} AND {lat + delta}
           AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
         ORDER BY dist_m
+    """
+    return db.sql(sql).fetchall()
+
+
+def ptv_rail_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
+                  radius_m: int = 1000) -> list[tuple]:
+    """Find PTV rail/tram routes near a point using GTFS shapes + frequencies.
+
+    Returns (route_type, route_name, dist_m, peak_svc_per_hr, offpeak_svc_per_hr).
+    route_type: 0=tram, 2=train.
+    """
+    shapes_path = data_path(PTV_SHAPES_FILE)
+    freq_path = data_path(PTV_FREQ_FILE)
+    if not shapes_path.exists() or not freq_path.exists():
+        return []
+
+    import math
+    m_per_deg = 111_320 * math.cos(math.radians(lat))
+    delta = radius_m / 111_000 * 1.5
+    deg_thresh = radius_m / m_per_deg
+
+    sql = f"""
+        WITH nearby_shapes AS (
+            SELECT shape_id, route_type,
+                   MIN(SQRT(POW((lng - {lng}) * {m_per_deg}, 2) +
+                            POW((lat - {lat}) * 111320, 2))) AS dist_m
+            FROM read_parquet('{shapes_path}')
+            WHERE lng BETWEEN {lng - delta} AND {lng + delta}
+              AND lat BETWEEN {lat - delta} AND {lat + delta}
+            GROUP BY shape_id, route_type
+            HAVING dist_m < {radius_m}
+        )
+        SELECT ns.route_type, f.route_name, ns.dist_m,
+               f.peak_services_per_hour, f.offpeak_services_per_hour
+        FROM nearby_shapes ns
+        JOIN read_parquet('{freq_path}') f
+          ON ns.shape_id = f.shape_id
+        ORDER BY ns.dist_m
     """
     return db.sql(sql).fetchall()
 

@@ -128,7 +128,16 @@ function renderResult(data, lat, lng) {
       ${s.max_building_screening_db ? `<span class="k">Screening</span><span class="v">-${s.max_building_screening_db} dB</span>` : ''}
       ${s.nearest_train_m != null ? `<span class="k">Nearest train</span><span class="v">${s.nearest_train_m}m</span>` : ''}
       ${s.nearest_tram_m != null ? `<span class="k">Nearest tram</span><span class="v">${s.nearest_tram_m}m</span>` : ''}
-    </div>`;
+    </div>
+    ${s.lden_max_facade ? `
+    <div style="margin-top:10px;padding-top:10px;border-top:1px solid #334155">
+      <div style="font-size:13px;color:#8b5cf6;font-weight:600;margin-bottom:6px">Facade Analysis</div>
+      <div class="score-detail">
+        <span class="k">Max facade</span><span class="v">${s.lden_max_facade} dB (${s.max_facade_dir})</span>
+        <span class="k">Min facade</span><span class="v">${s.lden_min_facade} dB (${s.min_facade_dir})</span>
+        <span class="k">Range</span><span class="v">${s.facade_range_db} dB</span>
+      </div>
+    </div>` : ''}`;
 
   const src = data.sources;
   let html = '';
@@ -191,6 +200,39 @@ function renderResult(data, lat, lng) {
 
   // Draw radius circle
   L.circle([lat, lng], {radius: 500, color: '#8b5cf6', fillColor: '#8b5cf6', fillOpacity: 0.03, weight: 1, dashArray: '6'}).addTo(layers);
+
+  // Draw facade sectors
+  if (s.facade_sectors) {
+    const dirs = ['N','NE','E','SE','S','SW','W','NW'];
+    const vals = dirs.map(d => s.facade_sectors[d] || 35);
+    const maxDb = Math.max(...vals);
+    const minDb = Math.min(...vals);
+
+    dirs.forEach((dir, i) => {
+      const startAngle = i * 45 - 22.5;
+      const endAngle = startAngle + 45;
+      const db = vals[i];
+      const t = maxDb > minDb ? (db - minDb) / (maxDb - minDb) : 0.5;
+      // green (quiet) → yellow → red (loud)
+      const r = Math.round(t > 0.5 ? 255 : t * 2 * 255);
+      const g = Math.round(t < 0.5 ? 255 : (1 - t) * 2 * 255);
+      const color = `rgb(${r},${g},50)`;
+
+      const radius = 60; // meters
+      const points = [[lat, lng]];
+      for (let a = startAngle; a <= endAngle; a += 5) {
+        const rad = a * Math.PI / 180;
+        const dlat = radius * Math.cos(rad) / 111320;
+        const dlng = radius * Math.sin(rad) / (111320 * Math.cos(lat * Math.PI / 180));
+        points.push([lat + dlat, lng + dlng]);
+      }
+      points.push([lat, lng]);
+
+      L.polygon(points, {
+        color: color, fillColor: color, fillOpacity: 0.35, weight: 1, opacity: 0.6
+      }).bindTooltip(`${dir}: ${db} dB`, {className: 'dark-tooltip'}).addTo(layers);
+    });
+  }
 
   document.getElementById('sources').innerHTML = html;
 

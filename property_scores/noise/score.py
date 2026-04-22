@@ -176,12 +176,34 @@ def _facade_lden(sources: list[tuple[float, float]], aircraft_db: float) -> dict
         else:
             sector_road[idx].append(db_val)
 
-    sector_ldens = []
+    # Raw energy per sector (road + rail separately for temporal weighting)
+    sector_road_e = []
+    sector_rail_e = []
     for i in range(NUM_FACADE_SECTORS):
-        road_e = sum(10 ** (l / 10) for l in sector_road[i])
-        road_db = 10 * math.log10(road_e) if road_e > 0 else 0.0
-        rail_e = sum(10 ** (l / 10) for l in sector_rail[i])
-        rail_db = 10 * math.log10(rail_e) if rail_e > 0 else 0.0
+        sector_road_e.append(sum(10 ** (l / 10) for l in sector_road[i]))
+        sector_rail_e.append(sum(10 ** (l / 10) for l in sector_rail[i]))
+
+    # Diffraction spillover: each sector bleeds 10% energy to each neighbor
+    SPILL = 0.10
+    KEEP = 1.0 - 2 * SPILL  # 0.80
+    n_sec = NUM_FACADE_SECTORS
+    road_e_smooth = [
+        KEEP * sector_road_e[i]
+        + SPILL * sector_road_e[(i - 1) % n_sec]
+        + SPILL * sector_road_e[(i + 1) % n_sec]
+        for i in range(n_sec)
+    ]
+    rail_e_smooth = [
+        KEEP * sector_rail_e[i]
+        + SPILL * sector_rail_e[(i - 1) % n_sec]
+        + SPILL * sector_rail_e[(i + 1) % n_sec]
+        for i in range(n_sec)
+    ]
+
+    sector_ldens = []
+    for i in range(n_sec):
+        road_db = 10 * math.log10(road_e_smooth[i]) if road_e_smooth[i] > 0 else 0.0
+        rail_db = 10 * math.log10(rail_e_smooth[i]) if rail_e_smooth[i] > 0 else 0.0
 
         road_leq = (road_db - L10_TO_LEQ_DB) if road_db > 0 else 0.0
         rail_leq = rail_db
@@ -213,6 +235,7 @@ def _facade_lden(sources: list[tuple[float, float]], aircraft_db: float) -> dict
         "max_facade_dir": labels[max_idx],
         "min_facade_dir": labels[min_idx],
         "facade_range_db": round(max(sector_ldens) - min(sector_ldens), 1),
+        "facade_sectors": dict(zip(labels, sector_ldens)),
     }
 
 

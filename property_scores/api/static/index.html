@@ -174,6 +174,17 @@ function renderResults(lat, lng, scores) {
   // Noise
   if (scores.noise && !scores.noise.error && scores.noise.score != null) {
     const s = scores.noise;
+    let noiseDetails = `
+          <dt>Total Noise</dt><dd>${s.estimated_db} dB</dd>
+          <dt>Road Noise</dt><dd>${s.road_db} dB</dd>`;
+    if (s.rail_db) noiseDetails += `<dt>Rail Noise</dt><dd>${s.rail_db} dB</dd>`;
+    if (s.aircraft_db) noiseDetails += `<dt>Aircraft Noise</dt><dd>${s.aircraft_db} dB</dd>`;
+    if (s.dominant_source) noiseDetails += `<dt>Dominant</dt><dd>${s.dominant_source}</dd>`;
+    if (s.nearest_tram_m != null) noiseDetails += `<dt>Nearest Tram</dt><dd>${s.nearest_tram_m}m</dd>`;
+    if (s.nearest_train_m != null) noiseDetails += `<dt>Nearest Train</dt><dd>${s.nearest_train_m}m</dd>`;
+    if (s.max_building_screening_db) noiseDetails += `<dt>Building Screening</dt><dd>-${s.max_building_screening_db} dB</dd>`;
+    if (s.aircraft) noiseDetails += `<dt>Aircraft Zone</dt><dd>${s.aircraft.zone_code}</dd>`;
+    noiseDetails += `<dt>AADT Segments</dt><dd>${s.aadt_segments}</dd>`;
     html += `
       <div class="score-card score-noise">
         <div class="score-header">
@@ -182,10 +193,7 @@ function renderResults(lat, lng, scores) {
         </div>
         <div class="score-label">${s.label} &mdash; ~${s.estimated_db} dB</div>
         <div class="score-bar"><div class="score-bar-fill" style="width:${s.score}%"></div></div>
-        <dl class="score-details">
-          <dt>Estimated Level</dt><dd>${s.estimated_db} dB</dd>
-          <dt>Roads in Range</dt><dd>${s.road_count}</dd>
-        </dl>
+        <dl class="score-details">${noiseDetails}</dl>
       </div>`;
   } else {
     html += renderError('Noise Level', scores.noise);

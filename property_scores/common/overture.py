@@ -9,8 +9,11 @@ import threading
 ROADS_FILE = "overture_roads.parquet"
 POIS_FILE = "overture_pois.parquet"
 AADT_FILE = "vicroads_aadt_2019.parquet"
+NFDH_FILE = "nfdh_aadt_national.parquet"
 PTV_SHAPES_FILE = "ptv_rail_shapes.parquet"
 PTV_FREQ_FILE = "ptv_rail_frequency.parquet"
+AU_RAIL_SHAPES_FILE = "au_rail_shapes.parquet"
+AU_RAIL_FREQ_FILE = "au_rail_frequency.parquet"
 
 _install_lock = threading.Lock()
 _installed = False
@@ -107,22 +110,71 @@ def aadt_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
     return db.sql(sql).fetchall()
 
 
-def ptv_rail_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
-                  radius_m: int = 1000) -> list[tuple]:
-    """Find PTV rail/tram routes near a point using GTFS shapes + frequencies.
+def nfdh_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
+              radius_m: int = 1000) -> list[tuple]:
+    """Find NFDH national traffic counter stations within radius.
 
-    Returns (route_type, route_name, dist_m, peak_svc_per_hr, offpeak_svc_per_hr).
-    route_type: 0=tram, 2=train.
+    Aggregates directional/lane counts into total AADT per station.
+    Returns (aadt, hv_pct, road_name, dist_m, station_lng, station_lat).
     """
-    shapes_path = data_path(PTV_SHAPES_FILE)
-    freq_path = data_path(PTV_FREQ_FILE)
-    if not shapes_path.exists() or not freq_path.exists():
+    nfdh_path = data_path(NFDH_FILE)
+    if not nfdh_path.exists():
         return []
+    import math
+    m_per_deg = 111_320 * math.cos(math.radians(lat))
+    delta = radius_m / 111_000 * 1.5
+    sql = f"""
+        WITH raw AS (
+            SELECT station_id, road_name, lon, lat as slat,
+                   aadt, heavy_vehicle_pct, direction
+            FROM read_parquet('{nfdh_path}')
+            WHERE lon BETWEEN {lng - delta} AND {lng + delta}
+              AND lat BETWEEN {lat - delta} AND {lat + delta}
+        ),
+        agg AS (
+            SELECT station_id, road_name, lon, slat,
+                   COALESCE(
+                       MAX(CASE WHEN direction IS NULL THEN aadt END),
+                       SUM(CASE WHEN direction IS NOT NULL THEN aadt END)
+                   ) AS total_aadt,
+                   MAX(heavy_vehicle_pct) AS hv_pct
+            FROM raw
+            GROUP BY station_id, road_name, lon, slat
+        )
+        SELECT total_aadt, hv_pct, road_name,
+               SQRT(POW((lon - {lng}) * {m_per_deg}, 2) +
+                    POW((slat - {lat}) * 111320, 2)) AS dist_m,
+               lon, slat
+        FROM agg
+        WHERE total_aadt IS NOT NULL
+          AND SQRT(POW((lon - {lng}) * {m_per_deg}, 2) +
+                   POW((slat - {lat}) * 111320, 2)) < {radius_m}
+        ORDER BY dist_m
+    """
+    return db.sql(sql).fetchall()
+
+
+def gtfs_rail_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
+                   radius_m: int = 1000) -> list[tuple]:
+    """Find rail/tram routes near a point using GTFS shapes + frequencies.
+
+    Checks national AU file first, falls back to PTV-only file.
+    Returns (route_type, route_name, dist_m, peak_svc_per_hr, offpeak_svc_per_hr).
+    route_type: 0=tram, 1=metro, 2=train.
+    """
+    au_shapes = data_path(AU_RAIL_SHAPES_FILE)
+    au_freq = data_path(AU_RAIL_FREQ_FILE)
+    if au_shapes.exists() and au_freq.exists():
+        shapes_path, freq_path = au_shapes, au_freq
+    else:
+        shapes_path = data_path(PTV_SHAPES_FILE)
+        freq_path = data_path(PTV_FREQ_FILE)
+        if not shapes_path.exists() or not freq_path.exists():
+            return []
 
     import math
     m_per_deg = 111_320 * math.cos(math.radians(lat))
     delta = radius_m / 111_000 * 1.5
-    deg_thresh = radius_m / m_per_deg
 
     sql = f"""
         WITH nearby_shapes AS (
@@ -143,6 +195,10 @@ def ptv_rail_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
         ORDER BY ns.dist_m
     """
     return db.sql(sql).fetchall()
+
+
+# Backward-compatible alias
+ptv_rail_near = gtfs_rail_near
 
 
 def pois_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,

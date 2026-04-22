@@ -1,20 +1,22 @@
 # Noise Score — Technical Specification
 
-## Status: Phase 2 — Multi-source Integration
+## Status: Phase 3 — Australia-Wide Coverage
 
 | Item | Status |
 |------|--------|
 | CRTN v1 (class-based) | Deprecated — MAE 19.9 dB vs VicRoads AADT |
-| VicRoads AADT download | Done (14,662 segments, 32MB GeoJSON → parquet) |
-| AADT spatial calibration | Done (1,742 matches, see Speed→AADT section) |
-| VicRoads AADT as primary source | Done (v2 model uses real AADT) |
-| Overture Buildings download | Done (1.72M buildings, 67.2% with height, 175.8 MB) |
-| Building screening model | Done (Maekawa formula, 13-20 dB detected, ~1-5 dB score impact) |
-| PTV GTFS rail timetable | Done (52 routes: 17 metro + 13 V/Line + 24 tram, SEL-based Leq) |
-| ANEF aircraft contours | Done (VicPlan MAEO + AEO overlays, real-time API) |
-| VicRoads/Overture deduplication | Done (80m distance threshold for major roads) |
-| EU END validation set | TODO |
-| NoiseCapture validation set | TODO |
+| VicRoads AADT download | Done (14,662 segments, VIC only) |
+| NFDH national AADT | Done (8,142 stations: NSW, QLD, SA, TAS, VIC) |
+| WA Main Roads AADT | Done (713 stations, 2024/25) |
+| Overture Roads AU-wide | Done (3,775,980 segments, 1.1 GB) |
+| Overture Buildings AU-wide | Done (13,575,172 buildings, 2.0 GB) |
+| Building screening model | Done (Maekawa formula, nationwide) |
+| State GTFS rail timetables | Done — VIC 52, NSW 24, QLD 36, WA 10, SA 13 routes |
+| ANEF aircraft contours | Done — VIC only (VicPlan MAEO + AEO) |
+| VicRoads/Overture/NFDH deduplication | Done (80m distance threshold) |
+| State detection | Done (au_state.py bounding box) |
+| Melbourne NoiseCapture validation | In progress (491 hexagons) |
+| EU END validation set | Downloaded (Germany raster + Netherlands contours) |
 
 ## Reference Standard
 
@@ -56,13 +58,15 @@ L10_ref = 42.2 + 10 * log10(AADT)
 
 ### AADT Data Sources
 
-| Source | Coverage | Resolution | Status |
-|--------|----------|------------|--------|
-| VicRoads AADT 2019 | VIC state roads | 14,662 segments with exact volumes | Downloaded |
-| Overture speed_limits | Global, 22.6% coverage | Posted limit only, no volume | Available |
-| Overture road class | Global, all roads | Classification unreliable (MAE 19.9 dB) | Available |
+| Source | Coverage | Stations/Segments | Status |
+|--------|----------|-------------------|--------|
+| VicRoads AADT 2019 | VIC state roads | 14,662 linestring segments | Integrated |
+| NFDH Harmonised | NSW, QLD, SA, TAS, VIC | 8,142 point stations | Integrated |
+| Main Roads WA | WA state roads | 713 point stations (2024/25) | Integrated |
+| Overture road class | Global, all roads | Fallback (CLASS_TO_AADT) | Active |
 
-**Priority**: Use VicRoads AADT directly for VIC. For roads without AADT, use calibrated speed_limit→AADT mapping (calibration in progress).
+**Priority chain**: VicRoads (VIC, highest density) → NFDH/MRWA (national, sparser) → Overture CLASS_TO_AADT fallback.
+**Coverage gaps**: NT, ACT have no measured AADT — Overture class-based estimates only.
 
 ### VicRoads AADT Statistics (Melbourne Metro)
 
@@ -204,27 +208,22 @@ where:
 Example: commuter train, 10 pass-bys per hour (peak), SEL = 90 + 10*log10(15) = 101.8 dB
 Leq = 101.8 + 10*log10(10/3600) = 101.8 - 25.6 = 76.2 dB at 25m
 
-### Data Source: PTV GTFS (COMPLETED 2026-04-22)
+### Data Source: State GTFS (5 states, 135 routes)
 
-Downloaded from https://data.ptv.vic.gov.au/downloads/gtfs.zip (180MB, 2026-04-17).
-Processed: typical Wednesday frequencies per route, exported to parquet.
+| State | Source | Routes | Types |
+|-------|--------|--------|-------|
+| VIC | PTV GTFS | 52 | Train (17) + V/Line (13) + Tram (24) |
+| NSW | TfNSW GTFS | 24 | Sydney Trains + Metro + Light Rail |
+| QLD | TransLink SEQ | 36 | Queensland Rail + Gold Coast Light Rail |
+| WA | Transperth | 10 | Transperth trains |
+| SA | Adelaide Metro | 13 | Trains + Glenelg/Botanic trams |
 
-**Actual frequencies vs initial estimates:**
-
-| Mode | Routes | Peak avg/hr | Peak median/hr | Off-peak avg/hr |
-|------|--------|-------------|----------------|-----------------|
-| Metro Train | 17 | 13.9 | 13.5 | 7.4 |
-| V/Line Train | 13 | 2.2 | 1.0 | 1.0 |
-| Tram | 24 | 14.9 | 14.5 | 12.1 |
-
-Busiest: Sunbury line 29.5/hr peak, Route 19 tram 22.5/hr peak.
-Quietest: Stony Point 1.5/hr, Route 82 tram 8.5/hr.
-
-Numbers are both directions combined (correct for noise — you hear all pass-bys).
+VIC PTV: Busiest Sunbury 29.5/hr peak, Route 19 tram 22.5/hr. Quietest Stony Point 1.5/hr.
+Coverage gap: ACT light rail not in official GTFS feed. TAS has no urban rail.
 
 **Output files:**
-- `D:/property-scores-data/ptv_rail_frequency.parquet` — 52 routes with peak/offpeak rates
-- `D:/property-scores-data/ptv_rail_shapes.parquet` — 35,036 shape points (63 shapes)
+- `D:/property-scores-data/au_rail_frequency.parquet` — 135 routes, 5 states
+- `D:/property-scores-data/au_rail_shapes.parquet` — 90,244 shape points, 146 shapes
 
 ## 4. Aircraft Noise (COMPLETED 2026-04-22)
 
@@ -348,21 +347,22 @@ property_scores/noise/
   buildings.py         — building screening (Maekawa barrier attenuation)
 
 property_scores/common/
-  overture.py          — DuckDB spatial queries (roads, rail, AADT, PTV, POIs)
+  overture.py          — DuckDB spatial queries (roads, rail, AADT, NFDH, GTFS, POIs)
+  au_state.py          — state detection + ArcGIS helpers
 
 data/ (external, not in git)
-  overture_roads.parquet        — 592k Melbourne road segments
-  overture_buildings.parquet    — 1.72M Melbourne buildings (67.2% with height)
-  vicroads_aadt_2019.geojson    — 14,662 AADT segments (raw)
-  vicroads_aadt_2019.parquet    — 14,637 AADT segments (spatial query ready)
-  ptv_rail_frequency.parquet    — 52 train/tram routes with peak/offpeak rates
-  ptv_rail_shapes.parquet       — 35,036 route shape points (63 shapes)
-  ptv_gtfs/                     — Raw PTV GTFS data (180MB)
-  eu_end/                       — EU noise maps for validation (TODO download)
-  noisecapture/                 — Crowdsourced measurements (TODO download)
+  overture_roads.parquet        — 3.78M AU road segments (1.1 GB)
+  overture_buildings.parquet    — 13.6M AU buildings (2.0 GB)
+  vicroads_aadt_2019.parquet    — 14,637 VIC AADT segments (linestring)
+  nfdh_aadt_national.parquet    — 8,855 national AADT stations (point, 6 states incl WA)
+  au_rail_frequency.parquet     — 135 routes, 5 states (VIC/NSW/QLD/WA/SA)
+  au_rail_shapes.parquet        — 90,244 shape points, 146 shapes
+  gtfs/{state}/                 — Raw GTFS data per state
+  eu_end/                       — EU noise maps for validation
+  noisecapture/                 — Crowdsourced measurements
 ```
 
-## v3 Test Results (2026-04-22, multi-source)
+## v4 Test Results (2026-04-22, AU-wide)
 
 | Location | Score | dB | Road dB | Rail dB | Dominant | Aircraft | Assessment |
 |----------|-------|-----|---------|---------|----------|----------|------------|
@@ -379,14 +379,14 @@ data/ (external, not in git)
 
 Rail noise now significant factor: at 200-500m from busy lines (Frankston 22/hr, Lilydale 18/hr), rail dominates road noise. Building screening helps for road noise but not rail.
 
-## Known Issues (v3)
+## Known Issues (v4)
 
-1. **Screening only helps secondary sources** — nearest road/rail usually has line-of-sight
-2. **VicRoads coverage gaps** — some freeways/motorways missing from AADT data
-3. **PTV rail frequencies seem high** — train at 253m contributing 65+ dB. May need per-direction halving or pass-by attenuation adjustment
-4. **Query time 0.4-4.6s** — building intersection queries on 1.7M buildings are expensive
-5. **Aircraft VIC only** — MAEO/AEO covers Victoria; no NSW/QLD ANEF
-6. **No bus noise** — PTV GTFS has 534 bus routes but not yet modeled (lower impact than rail)
+1. **NT/ACT no measured AADT** — rely entirely on Overture class estimates
+2. **Aircraft VIC only** — MAEO/AEO covers Victoria; national ANEF data available but not yet integrated
+3. **ACT light rail not in GTFS** — Transport Canberra feed only includes buses
+4. **Building query slow on AU dataset** — 13.6M buildings, ~10-17s/point for screening
+5. **No bus noise** — GTFS has bus routes but not yet modeled (lower impact than rail)
+6. **WA AADT sparse in Perth CBD** — nearest station 1.6km away, no help at 500m radius
 
 ## Changelog
 
@@ -399,3 +399,8 @@ Rail noise now significant factor: at 200-500m from busy lines (Frankston 22/hr,
 - 2026-04-22: VicPlan MAEO/AEO aircraft overlay integration (real-time API).
 - 2026-04-22: VicRoads/Overture deduplication (80m distance threshold).
 - 2026-04-22: Noise product page (noise.html) rewritten for v3 multi-source model.
+- 2026-04-22: v4 AU-wide: Overture roads (3.78M), buildings (13.6M), NFDH AADT (8.1k stations, 5 states).
+- 2026-04-22: WA Main Roads AADT integrated (713 stations). Total national AADT: 8,855 stations.
+- 2026-04-22: State GTFS rail: NSW (24), QLD (36), WA (10), SA (13) routes added to VIC (52).
+- 2026-04-22: State detection (au_state.py), skip VicPlan aircraft for non-VIC.
+- 2026-04-22: Renamed ptv_rail_near→gtfs_rail_near for national GTFS support.

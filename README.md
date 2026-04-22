@@ -8,7 +8,7 @@ Built by [Limon Tech](https://limontech.net) as the scoring backend for [DA Lead
 
 | Score | Status | Data Sources | Method |
 |-------|--------|-------------|--------|
-| Noise | Live | VicRoads AADT + PTV GTFS + Overture roads/buildings + VicPlan ANEF | CRTN L10 + SEL rail + Maekawa screening + ANEF aircraft |
+| Noise | Live | NFDH + VicRoads AADT + WA MRWA + State GTFS (5 states) + Overture roads/buildings + VicPlan ANEF | CRTN L10 + SEL rail + Maekawa screening + ANEF aircraft |
 | Walkability | Live | Overture POI (227k Melbourne) | Distance-decay across 13 categories |
 | Solar Potential | Live | Global Solar Atlas API | GHI/DNI + orientation + tilt |
 | Flood Risk | Live | State government planning overlays (VIC/NSW/SA/TAS/ACT) | ArcGIS REST point-in-polygon |
@@ -48,17 +48,19 @@ All data is free and open-licensed:
 
 | Dataset | Provider | Size | License |
 |---------|----------|------|---------|
-| Road network | Overture Maps | 592k segments | CDLA Permissive |
-| Building footprints + heights | Overture Maps | 1.72M buildings | CDLA Permissive |
+| Road network | Overture Maps | 3.78M AU segments | CDLA Permissive |
+| Building footprints + heights | Overture Maps | 13.6M AU buildings | CDLA Permissive |
 | POI | Overture Maps | 227k Melbourne | CDLA Permissive |
-| Traffic volumes (AADT) | VicRoads | 14,662 segments | Open Data |
-| Train/tram timetables | PTV GTFS | 52 routes | CC BY 4.0 |
+| Traffic volumes (AADT) | VicRoads + NFDH + MRWA | 23k segments/stations | Open Data |
+| Train/tram timetables | State GTFS (VIC/NSW/QLD/WA/SA) | 135 routes, 5 states | CC BY 4.0 |
 | Airport noise overlays | VicPlan (DELWP) | Real-time API | CC BY 4.0 |
 | Planning scheme overlays | State governments | Real-time API | Open Data |
 | Solar irradiance | Global Solar Atlas | API | CC BY 4.0 |
 | Climate data | Open-Meteo (ERA5) | API | CC BY 4.0 |
 
 ## Validation
+
+**Coverage**: All Australian states. VIC has highest accuracy (VicRoads AADT + PTV GTFS). NSW, QLD, SA, TAS, WA have NFDH/MRWA AADT + state GTFS. NT/ACT use Overture road class estimates.
 
 Noise model validated against:
 - VicRoads AADT (1,742 spatial matches, calibration data)

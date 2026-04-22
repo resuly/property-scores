@@ -14,7 +14,8 @@ Score 0-100 where 100 = quietest.
 
 import math
 
-from property_scores.common.overture import get_db, roads_near, rail_near, aadt_near, ptv_rail_near
+from property_scores.common.overture import get_db, roads_near, rail_near, aadt_near, nfdh_near, gtfs_rail_near
+from property_scores.common.au_state import detect_state
 from property_scores.noise.buildings import barrier_attenuation
 from property_scores.noise.aircraft import aircraft_noise_penalty
 
@@ -121,8 +122,9 @@ def _rail_noise_fallback(rail_class: str, distance_m: float) -> float:
 def noise_score(lat: float, lng: float, radius_m: int = 500,
                 *, source: str | None = None) -> dict:
     db = get_db()
+    state = detect_state(lat, lng)
 
-    # --- VicRoads AADT (ground truth for major roads) ---
+    # --- Measured AADT: VicRoads (VIC) + NFDH (national) ---
     aadt_segments = aadt_near(db, lat, lng, radius_m)
     aadt_levels: list[tuple[float, dict]] = []
     building_screening_total = 0.0
@@ -143,10 +145,31 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
                 "screening_db": round(screening, 1),
             }))
 
-    # --- Overture roads (fill gaps: residential streets not in VicRoads) ---
-    # Dedup: skip Overture major roads within 80m of any VicRoads segment
-    # distance to avoid double-counting the same physical road.
-    vicroads_distances = [d for _, _, _, d, _, _ in aadt_segments]
+    # NFDH national traffic counts (complements VicRoads outside VIC)
+    nfdh_stations = nfdh_near(db, lat, lng, radius_m)
+    for aadt, hv_pct, road_name, dist_m, src_lng, src_lat in nfdh_stations:
+        if any(abs(dist_m - d) < 80 for _, _, _, d, _, _ in aadt_segments):
+            continue
+        l_db = _crtn_noise(int(aadt), dist_m)
+        if l_db > 0:
+            screening = barrier_attenuation(db, src_lng, src_lat, lng, lat, dist_m)
+            l_db_screened = max(l_db - screening, 0.0)
+            if screening > building_screening_total:
+                building_screening_total = screening
+            aadt_levels.append((l_db_screened, {
+                "source": "nfdh",
+                "road_name": road_name,
+                "aadt": int(aadt),
+                "hv_pct": round(max(hv_pct or 0, 0)),
+                "distance_m": round(dist_m, 0),
+                "db": round(l_db_screened, 1),
+                "screening_db": round(screening, 1),
+            }))
+
+    # --- Overture roads (fill gaps: residential streets not in measured AADT) ---
+    # Dedup: skip Overture major roads within 80m of any measured AADT source
+    measured_distances = ([d for _, _, _, d, _, _ in aadt_segments]
+                         + [d for _, _, _, d, _, _ in nfdh_stations])
     roads = roads_near(db, lat, lng, radius_m, source=source)
     overture_levels: list[tuple[float, dict]] = []
     roads_with_speed = 0
@@ -157,7 +180,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
         if speed_kmh:
             roads_with_speed += 1
         if road_class in ("motorway", "trunk", "primary", "secondary"):
-            if any(abs(dist_m - vd) < 80 for vd in vicroads_distances):
+            if any(abs(dist_m - vd) < 80 for vd in measured_distances):
                 continue
         aadt_est = CLASS_TO_AADT.get(road_class, 400)
         l_db = _crtn_noise(aadt_est, dist_m)
@@ -178,13 +201,13 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     road_db = 10 * math.log10(road_energy) if road_energy > 0 else 0.0
 
     # --- Rail/tram (PTV GTFS with real frequencies) ---
-    ptv_routes = ptv_rail_near(db, lat, lng, radius_m)
+    gtfs_routes = gtfs_rail_near(db, lat, lng, radius_m)
     rail_levels: list[tuple[float, dict]] = []
     nearest_tram_m = None
     nearest_train_m = None
-    ptv_found = len(ptv_routes) > 0
+    gtfs_found = len(gtfs_routes) > 0
 
-    for route_type, route_name, dist_m, peak_svc, offpeak_svc in ptv_routes:
+    for route_type, route_name, dist_m, peak_svc, offpeak_svc in gtfs_routes:
         if route_type == 0:
             rail_type = "tram"
             if nearest_tram_m is None or dist_m < nearest_tram_m:
@@ -197,7 +220,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
         l_db = _rail_noise_freq(rail_type, dist_m, svc_per_hr)
         if l_db > 0:
             rail_levels.append((l_db, {
-                "source": "ptv_gtfs",
+                "source": "gtfs",
                 "type": rail_type,
                 "route": route_name,
                 "distance_m": round(dist_m, 0),
@@ -206,7 +229,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
                 "db": round(l_db, 1),
             }))
 
-    if not ptv_found:
+    if not gtfs_found:
         rails = rail_near(db, lat, lng, radius_m, source=source)
         for rail_class, dist_m in rails:
             l_db = _rail_noise_fallback(rail_class, dist_m)
@@ -260,8 +283,10 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
         "score": score,
         "estimated_db": round(l_total, 1),
         "label": label,
+        "state": state,
         "road_count": len(motor_roads),
         "aadt_segments": len(aadt_segments),
+        "nfdh_stations": len(nfdh_stations),
         "roads_with_speed_limit": roads_with_speed,
         "road_db": round(road_db, 1),
     }
@@ -273,8 +298,8 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     if nearest_train_m is not None:
         result["nearest_train_m"] = round(nearest_train_m, 0)
 
-    if ptv_found:
-        result["rail_source"] = "ptv_gtfs"
+    if gtfs_found:
+        result["rail_source"] = "gtfs"
     if top_roads:
         result["dominant_road"] = top_roads[0][1]
     if top_rails:
@@ -310,13 +335,13 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     result = noise_score(args.lat, args.lng, args.radius, source=args.source)
-    print(f"Noise Score: {result['score']}/100 ({result['label']})")
+    print(f"Noise Score: {result['score']}/100 ({result['label']}) — {result.get('state', '?')}")
     print(f"Total: {result['estimated_db']} dB | Road: {result['road_db']} dB", end="")
     if result.get("rail_db"):
         print(f" | Rail: {result['rail_db']} dB", end="")
     if result.get("aircraft_db"):
         print(f" | Aircraft: {result['aircraft_db']} dB", end="")
-    print(f"\nAADT segments: {result['aadt_segments']} | Overture roads: {result['road_count']}")
+    print(f"\nAADT: {result['aadt_segments']} VicRoads + {result['nfdh_stations']} NFDH | Overture roads: {result['road_count']}")
     if result.get("dominant_road"):
         d = result["dominant_road"]
         src = d.get("road_name", d.get("class", "?"))

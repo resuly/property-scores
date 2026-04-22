@@ -32,6 +32,8 @@ from typing import Any
 
 import requests
 
+from property_scores.common.au_state import detect_state
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -147,6 +149,21 @@ def aircraft_noise_penalty(lat: float, lng: float) -> dict:
             source        - str, data source identifier
             airport_type  - str, "melbourne" | "regional" | None
     """
+    # VicPlan overlays are VIC-only; skip API calls for other states
+    state = detect_state(lat, lng)
+    if state != "VIC":
+        return {
+            "penalty_db": 0.0,
+            "zone_code": None,
+            "zone_desc": "Aircraft noise data not available outside VIC",
+            "anef_min": None,
+            "anef_max": None,
+            "lga": None,
+            "impact": "No aircraft noise data for this state.",
+            "source": "none",
+            "airport_type": None,
+        }
+
     # Query both overlay layers (MAEO for Melbourne Airport, AEO for regional)
     maeo_hits = _query_overlay(_MAEO_LAYER, lat, lng)
     aeo_hits = _query_overlay(_AEO_LAYER, lat, lng)

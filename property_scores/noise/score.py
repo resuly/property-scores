@@ -16,7 +16,7 @@ import math
 
 from property_scores.common.overture import get_db, roads_near, rail_near, aadt_near, nfdh_near, gtfs_rail_near
 from property_scores.common.au_state import detect_state
-from property_scores.noise.buildings import barrier_attenuation
+from property_scores.noise.buildings import buildings_in_radius, barrier_attenuation
 from property_scores.noise.aircraft import aircraft_noise_penalty
 
 # --- Calibrated AADT mappings (from VicRoads 2019 ground truth) ---
@@ -74,6 +74,17 @@ CONTINUOUS_FLOW_AADT = 15_000
 TOP_N_ROAD_SOURCES = 3
 TOP_N_RAIL_SOURCES = 2
 
+# L10 → Leq: CRTN predicts L10(18h); Lden and validation use Leq
+L10_TO_LEQ_DB = 3.0
+
+# Austroads standard temporal traffic profile (urban arterial)
+TRAFFIC_DAY_FRAC = 0.80    # 07:00-19:00 (12h)
+TRAFFIC_EVE_FRAC = 0.12    # 19:00-23:00 (4h)
+TRAFFIC_NIGHT_FRAC = 0.08  # 23:00-07:00 (8h)
+_DAY_ADJ = 10 * math.log10(TRAFFIC_DAY_FRAC * 24 / 12)    # +2.04 dB
+_EVE_ADJ = 10 * math.log10(TRAFFIC_EVE_FRAC * 24 / 4)     # -1.43 dB
+_NIGHT_ADJ = 10 * math.log10(TRAFFIC_NIGHT_FRAC * 24 / 8)  # -6.20 dB
+
 
 def _estimate_aadt(road_class: str, speed_kmh: float | None) -> int:
     if speed_kmh is not None and speed_kmh > 0:
@@ -119,19 +130,45 @@ def _rail_noise_fallback(rail_class: str, distance_m: float) -> float:
     return max(l_ref - 10 * math.log10(distance_m / ref_dist) - GROUND_ABSORPTION_DB, 0.0)
 
 
+def _energy_sum(*levels: float) -> float:
+    e = sum(10 ** (l / 10) for l in levels if l > 0)
+    return 10 * math.log10(e) if e > 0 else 0.0
+
+
+def _lden(leq_day: float, leq_eve: float, leq_night: float) -> float:
+    """EU/AU Lden from period Leq values."""
+    return 10 * math.log10(
+        (12 * 10 ** (leq_day / 10)
+         + 4 * 10 ** ((leq_eve + 5) / 10)
+         + 8 * 10 ** ((leq_night + 10) / 10)) / 24
+    )
+
+
 def noise_score(lat: float, lng: float, radius_m: int = 500,
                 *, source: str | None = None) -> dict:
     db = get_db()
     state = detect_state(lat, lng)
 
+    # --- Pre-fetch buildings once for screening calculations ---
+    nearby_buildings = buildings_in_radius(db, lat, lng, radius_m)
+
     # --- Measured AADT: VicRoads (VIC) + NFDH (national) ---
-    aadt_segments = aadt_near(db, lat, lng, radius_m)
+    aadt_segments_raw = aadt_near(db, lat, lng, radius_m)
+    # Dedup directional counts: same road + 10m distance bucket → keep max AADT
+    _seen: dict[tuple, tuple] = {}
+    for row in aadt_segments_raw:
+        aadt_val, _, road_name, dist_m, _, _ = row
+        key = (road_name, round(dist_m, -1))
+        if key not in _seen or aadt_val > _seen[key][0]:
+            _seen[key] = row
+    aadt_segments = list(_seen.values())
+
     aadt_levels: list[tuple[float, dict]] = []
     building_screening_total = 0.0
     for aadt, hv_pct, road_name, dist_m, src_lng, src_lat in aadt_segments:
         l_db = _crtn_noise(int(aadt), dist_m)
         if l_db > 0:
-            screening = barrier_attenuation(db, src_lng, src_lat, lng, lat, dist_m)
+            screening = barrier_attenuation(nearby_buildings, src_lng, src_lat, lng, lat, dist_m)
             l_db_screened = max(l_db - screening, 0.0)
             if screening > building_screening_total:
                 building_screening_total = screening
@@ -152,7 +189,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
             continue
         l_db = _crtn_noise(int(aadt), dist_m)
         if l_db > 0:
-            screening = barrier_attenuation(db, src_lng, src_lat, lng, lat, dist_m)
+            screening = barrier_attenuation(nearby_buildings, src_lng, src_lat, lng, lat, dist_m)
             l_db_screened = max(l_db - screening, 0.0)
             if screening > building_screening_total:
                 building_screening_total = screening
@@ -257,14 +294,31 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
         # Convert to energy for summation with road/rail sources.
         aircraft_db = AMBIENT_DB + aircraft["penalty_db"]
 
-    # --- Energy summation ---
-    aircraft_energy = 10 ** (aircraft_db / 10) if aircraft_db > 0 else 0
-    total_energy = road_energy + rail_energy + aircraft_energy
-    l_total = 10 * math.log10(total_energy) if total_energy > 0 else AMBIENT_DB
-    l_total = max(l_total, AMBIENT_DB)
+    # --- L10 → Leq + Lden (time-of-day) ---
+    road_leq = (road_db - L10_TO_LEQ_DB) if road_db > 0 else 0.0
+    rail_leq = rail_db  # SEL formula already gives Leq
+    aircraft_leq = aircraft_db
 
-    # Score: 40 dB → 100, 75 dB → 0
-    score = max(0, min(100, round((75 - l_total) / 35 * 100)))
+    leq_24h = max(_energy_sum(road_leq, rail_leq, aircraft_leq), AMBIENT_DB)
+
+    # Period Leq — road: Austroads temporal profile; rail: day+evening only
+    leq_day_val = max(_energy_sum(
+        road_leq + _DAY_ADJ if road_leq > 0 else 0,
+        rail_leq,
+        aircraft_leq), AMBIENT_DB)
+    leq_eve_val = max(_energy_sum(
+        road_leq + _EVE_ADJ if road_leq > 0 else 0,
+        max(rail_leq - 5, 0) if rail_leq > 0 else 0,
+        aircraft_leq), AMBIENT_DB)
+    leq_night_val = max(_energy_sum(
+        road_leq + _NIGHT_ADJ if road_leq > 0 else 0,
+        0,  # no passenger rail at night
+        aircraft_leq), AMBIENT_DB)
+
+    lden = _lden(leq_day_val, leq_eve_val, leq_night_val)
+
+    # Score: 40 dB → 100, 75 dB → 0 (based on Lden)
+    score = max(0, min(100, round((75 - lden) / 35 * 100)))
 
     if score >= 80:
         label = "Very Quiet"
@@ -281,7 +335,11 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
 
     result = {
         "score": score,
-        "estimated_db": round(l_total, 1),
+        "estimated_db": round(lden, 1),
+        "leq_db": round(leq_24h, 1),
+        "lden_db": round(lden, 1),
+        "leq_day_db": round(leq_day_val, 1),
+        "leq_night_db": round(leq_night_val, 1),
         "label": label,
         "state": state,
         "road_count": len(motor_roads),
@@ -336,7 +394,8 @@ if __name__ == "__main__":
 
     result = noise_score(args.lat, args.lng, args.radius, source=args.source)
     print(f"Noise Score: {result['score']}/100 ({result['label']}) — {result.get('state', '?')}")
-    print(f"Total: {result['estimated_db']} dB | Road: {result['road_db']} dB", end="")
+    print(f"Lden: {result['lden_db']} dB | Leq24h: {result['leq_db']} dB | Day: {result['leq_day_db']} | Night: {result['leq_night_db']}")
+    print(f"Road: {result['road_db']} dB (L10)", end="")
     if result.get("rail_db"):
         print(f" | Rail: {result['rail_db']} dB", end="")
     if result.get("aircraft_db"):

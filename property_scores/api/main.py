@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from property_scores.noise import noise_score, aircraft_noise_penalty
+from property_scores.noise.debug import noise_debug
 from property_scores.walkability import walkability_score
 from property_scores.solar import solar_score
 from property_scores.flood import flood_score
@@ -38,6 +39,11 @@ def solar_page():
 @app.get("/noise")
 def noise_page():
     return FileResponse(STATIC_DIR / "noise.html")
+
+
+@app.get("/noise/debug")
+def noise_debug_page():
+    return FileResponse(STATIC_DIR / "noise-debug.html")
 
 
 @app.get("/walkability")
@@ -140,6 +146,18 @@ def get_heat_island(lat: float = Query(...), lng: float = Query(...)):
         return heat_island_score(lat, lng)
     except Exception as e:
         logger.exception("heat island score failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/scores/noise/debug")
+def get_noise_debug(
+    lat: float = Query(...), lng: float = Query(...),
+    radius: int = Query(500),
+):
+    try:
+        return noise_debug(lat, lng, radius)
+    except Exception as e:
+        logger.exception("noise debug failed")
         return JSONResponse({"error": str(e)}, status_code=500)
 
 

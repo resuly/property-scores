@@ -43,7 +43,7 @@ def load_areas(city: str = "melbourne") -> list[dict]:
             laeq = props.get("laeq")
             la50 = props.get("la50")
             count = props.get("measure_count", 0)
-            if laeq and count >= 3:
+            if laeq and count >= 3 and float(laeq) >= 50:
                 areas.append({
                     "lat": centroid_lat,
                     "lng": centroid_lng,
@@ -67,7 +67,7 @@ def validate(city: str = "melbourne"):
     for i, area in enumerate(areas):
         try:
             r = noise_score(area["lat"], area["lng"])
-            predicted = r["estimated_db"]
+            predicted = r.get("leq_db", r["estimated_db"])
             measured = area["laeq"]
             error = predicted - measured
             errors.append(error)

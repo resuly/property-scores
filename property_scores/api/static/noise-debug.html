@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Noise Debug Map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; }
+  #map { position: absolute; top: 0; left: 0; right: 360px; bottom: 0; }
+  #panel { position: absolute; top: 0; right: 0; width: 360px; bottom: 0; background: #1e293b; overflow-y: auto; padding: 16px; border-left: 1px solid #334155; }
+  h1 { font-size: 18px; margin-bottom: 8px; }
+  .hint { color: #64748b; font-size: 13px; margin-bottom: 16px; }
+  .coords { display: flex; gap: 6px; margin-bottom: 12px; }
+  .coords input { flex: 1; padding: 8px; border: 1px solid #334155; border-radius: 6px; background: #0f172a; color: #e2e8f0; font-size: 13px; }
+  .coords button { padding: 8px 14px; border: none; border-radius: 6px; background: #8b5cf6; color: #fff; font-weight: 600; cursor: pointer; font-size: 13px; white-space: nowrap; }
+  .coords button:hover { background: #7c3aed; }
+  #score-box { background: #0f172a; border-radius: 8px; padding: 12px; margin-bottom: 12px; display: none; }
+  .score-num { font-size: 36px; font-weight: 700; }
+  .score-label { color: #94a3b8; font-size: 14px; }
+  .score-detail { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 8px; font-size: 13px; }
+  .score-detail .k { color: #64748b; }
+  .score-detail .v { text-align: right; }
+  #sources { font-size: 13px; }
+  #sources h3 { color: #8b5cf6; font-size: 14px; margin: 12px 0 6px; }
+  .src-item { padding: 6px 8px; border-radius: 4px; margin-bottom: 4px; cursor: pointer; transition: background 0.15s; }
+  .src-item:hover { background: #334155; }
+  .src-item .name { font-weight: 600; }
+  .src-item .meta { color: #94a3b8; }
+  .src-road { border-left: 3px solid #ef4444; padding-left: 8px; }
+  .src-nfdh { border-left: 3px solid #f59e0b; padding-left: 8px; }
+  .src-rail { border-left: 3px solid #3b82f6; padding-left: 8px; }
+  #loading { display: none; color: #8b5cf6; padding: 20px; text-align: center; }
+  .legend { position: absolute; bottom: 20px; left: 10px; background: rgba(30,41,59,0.95); padding: 10px 14px; border-radius: 8px; font-size: 12px; color: #e2e8f0; z-index: 1000; }
+  .legend-item { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .legend-line { width: 20px; height: 3px; display: inline-block; border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="panel">
+  <h1>Noise Source Debug</h1>
+  <p class="hint">Click the map or enter coordinates.</p>
+  <div class="coords">
+    <input id="lat" type="number" step="any" placeholder="Lat" value="-37.8136">
+    <input id="lng" type="number" step="any" placeholder="Lng" value="144.9631">
+    <button onclick="query()">Go</button>
+  </div>
+  <div id="loading">Querying noise sources...</div>
+  <div id="score-box"></div>
+  <div id="sources"></div>
+</div>
+
+<div class="legend">
+  <div class="legend-item"><span class="legend-dot" style="background:#ef4444"></span> VicRoads AADT</div>
+  <div class="legend-item"><span class="legend-dot" style="background:#f59e0b"></span> NFDH Station</div>
+  <div class="legend-item"><span class="legend-line" style="background:#3b82f6"></span> Train</div>
+  <div class="legend-item"><span class="legend-line" style="background:#22c55e"></span> Tram</div>
+  <div class="legend-item"><span class="legend-dot" style="background:#a855f7;width:14px;height:14px"></span> Query Point</div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const map = L.map('map').setView([-37.8136, 144.9631], 16);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; OSM &copy; CARTO',
+  maxZoom: 20,
+}).addTo(map);
+
+let layers = L.layerGroup().addTo(map);
+let queryMarker = null;
+
+map.on('click', function(e) {
+  document.getElementById('lat').value = e.latlng.lat.toFixed(6);
+  document.getElementById('lng').value = e.latlng.lng.toFixed(6);
+  query();
+});
+
+async function query() {
+  const lat = parseFloat(document.getElementById('lat').value);
+  const lng = parseFloat(document.getElementById('lng').value);
+  if (isNaN(lat) || isNaN(lng)) return;
+
+  document.getElementById('loading').style.display = 'block';
+  document.getElementById('score-box').style.display = 'none';
+  document.getElementById('sources').innerHTML = '';
+  layers.clearLayers();
+
+  if (queryMarker) map.removeLayer(queryMarker);
+  queryMarker = L.circleMarker([lat, lng], {radius: 8, color: '#a855f7', fillColor: '#a855f7', fillOpacity: 1, weight: 2}).addTo(map);
+  map.setView([lat, lng], map.getZoom() < 15 ? 16 : map.getZoom());
+
+  try {
+    const resp = await fetch(`/scores/noise/debug?lat=${lat}&lng=${lng}&radius=500`);
+    const data = await resp.json();
+    document.getElementById('loading').style.display = 'none';
+    if (data.error) { document.getElementById('sources').innerHTML = `<p style="color:#ef4444">${data.error}</p>`; return; }
+    renderResult(data, lat, lng);
+  } catch(e) {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('sources').innerHTML = `<p style="color:#ef4444">Error: ${e.message}</p>`;
+  }
+}
+
+function renderResult(data, lat, lng) {
+  const s = data.score;
+  const color = s.score >= 60 ? '#22c55e' : s.score >= 40 ? '#f59e0b' : '#ef4444';
+
+  const box = document.getElementById('score-box');
+  box.style.display = 'block';
+  box.innerHTML = `
+    <div class="score-num" style="color:${color}">${s.score}<span style="font-size:16px;color:#64748b">/100</span></div>
+    <div class="score-label">${s.label} &mdash; Lden ${s.lden_db || s.estimated_db} dB &mdash; ${s.state || '?'}</div>
+    <div class="score-detail">
+      <span class="k">Leq 24h</span><span class="v">${s.leq_db || '?'} dB</span>
+      <span class="k">Lden</span><span class="v">${s.lden_db || s.estimated_db} dB</span>
+      <span class="k">Day (7-19)</span><span class="v">${s.leq_day_db || '?'} dB</span>
+      <span class="k">Night (23-7)</span><span class="v">${s.leq_night_db || '?'} dB</span>
+      <span class="k">Road (L10)</span><span class="v">${s.road_db} dB</span>
+      <span class="k">Rail</span><span class="v">${s.rail_db || '0'} dB</span>
+      <span class="k">VicRoads</span><span class="v">${s.aadt_segments}</span>
+      <span class="k">NFDH</span><span class="v">${s.nfdh_stations}</span>
+      <span class="k">Overture roads</span><span class="v">${s.road_count}</span>
+      ${s.max_building_screening_db ? `<span class="k">Screening</span><span class="v">-${s.max_building_screening_db} dB</span>` : ''}
+      ${s.nearest_train_m != null ? `<span class="k">Nearest train</span><span class="v">${s.nearest_train_m}m</span>` : ''}
+      ${s.nearest_tram_m != null ? `<span class="k">Nearest tram</span><span class="v">${s.nearest_tram_m}m</span>` : ''}
+    </div>`;
+
+  const src = data.sources;
+  let html = '';
+
+  // AADT sources
+  if (src.aadt.length) {
+    html += `<h3>VicRoads AADT (${src.aadt.length})</h3>`;
+    src.aadt.sort((a,b) => b.db - a.db);
+    for (const a of src.aadt.slice(0, 10)) {
+      html += `<div class="src-item src-road" data-lat="${a.lat}" data-lng="${a.lng}">
+        <div class="name">${a.road_name || 'Unknown'}</div>
+        <div class="meta">AADT ${a.aadt.toLocaleString()} | ${a.distance_m}m | ${a.db} dB</div>
+      </div>`;
+      const size = Math.min(Math.max(Math.sqrt(a.aadt) / 30, 3), 12);
+      const marker = L.circleMarker([a.lat, a.lng], {
+        radius: size, color: '#ef4444', fillColor: '#ef4444', fillOpacity: 0.7, weight: 1
+      }).bindTooltip(`${a.road_name}<br>AADT: ${a.aadt.toLocaleString()}<br>${a.distance_m}m | ${a.db} dB`, {className: 'dark-tooltip'});
+      layers.addLayer(marker);
+      L.polyline([[lat, lng], [a.lat, a.lng]], {color: '#ef4444', weight: 1, opacity: 0.3, dashArray: '4'}).addTo(layers);
+    }
+  }
+
+  // NFDH sources
+  if (src.nfdh.length) {
+    html += `<h3>NFDH Stations (${src.nfdh.length})</h3>`;
+    src.nfdh.sort((a,b) => b.db - a.db);
+    for (const n of src.nfdh.slice(0, 10)) {
+      html += `<div class="src-item src-nfdh" data-lat="${n.lat}" data-lng="${n.lng}">
+        <div class="name">${n.road_name || 'Station'}</div>
+        <div class="meta">AADT ${n.aadt.toLocaleString()} | ${n.distance_m}m | ${n.db} dB</div>
+      </div>`;
+      const size = Math.min(Math.max(Math.sqrt(n.aadt) / 30, 3), 12);
+      const marker = L.circleMarker([n.lat, n.lng], {
+        radius: size, color: '#f59e0b', fillColor: '#f59e0b', fillOpacity: 0.7, weight: 1
+      }).bindTooltip(`${n.road_name}<br>AADT: ${n.aadt.toLocaleString()}<br>${n.distance_m}m | ${n.db} dB`, {className: 'dark-tooltip'});
+      layers.addLayer(marker);
+      L.polyline([[lat, lng], [n.lat, n.lng]], {color: '#f59e0b', weight: 1, opacity: 0.3, dashArray: '4'}).addTo(layers);
+    }
+  }
+
+  // Rail sources
+  if (src.rail.length) {
+    html += `<h3>Rail/Tram (${src.rail.length})</h3>`;
+    src.rail.sort((a,b) => b.db - a.db);
+    for (const r of src.rail) {
+      const icon = r.type === 'tram' ? 'Tram' : 'Train';
+      html += `<div class="src-item src-rail">
+        <div class="name">${icon}: ${r.route}</div>
+        <div class="meta">${r.distance_m}m | ${r.db} dB | ${r.peak_svc_hr || '?'}/hr peak</div>
+      </div>`;
+    }
+  }
+
+  // Draw rail shapes
+  for (const shape of (src.rail_shapes || [])) {
+    if (shape.coords.length < 2) continue;
+    const color = shape.route_type === 0 ? '#22c55e' : '#3b82f6';
+    L.polyline(shape.coords, {color, weight: 3, opacity: 0.7}).addTo(layers);
+  }
+
+  // Draw radius circle
+  L.circle([lat, lng], {radius: 500, color: '#8b5cf6', fillColor: '#8b5cf6', fillOpacity: 0.03, weight: 1, dashArray: '6'}).addTo(layers);
+
+  document.getElementById('sources').innerHTML = html;
+
+  // Click source items to fly to their location
+  document.querySelectorAll('.src-item[data-lat]').forEach(el => {
+    el.addEventListener('click', () => {
+      map.flyTo([parseFloat(el.dataset.lat), parseFloat(el.dataset.lng)], 18);
+    });
+  });
+}
+</script>
+<style>
+.dark-tooltip { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; font-size: 12px; padding: 4px 8px; border-radius: 4px; }
+.dark-tooltip .leaflet-tooltip-arrow { display: none; }
+</style>
+</body>
+</html>

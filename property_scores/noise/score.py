@@ -75,6 +75,7 @@ ADAPTIVE_THRESHOLD_DB = 6  # include sources within 6 dB of loudest (>25% energy
 MAX_ROAD_SOURCES = 8
 MAX_RAIL_SOURCES = 4
 DEFAULT_SPEED_KMH = 60
+NUM_FACADE_SECTORS = 8  # 45° each
 
 # L10 → Leq: CRTN predicts L10(18h); Lden and validation use Leq
 L10_TO_LEQ_DB = 3.0
@@ -150,6 +151,71 @@ def _energy_sum(*levels: float) -> float:
     return 10 * math.log10(e) if e > 0 else 0.0
 
 
+def _bearing(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    dx = (lng2 - lng1) * math.cos(math.radians((lat1 + lat2) / 2))
+    dy = lat2 - lat1
+    return math.atan2(dx, dy) % (2 * math.pi)
+
+
+def _facade_lden(sources: list[tuple[float, float]], aircraft_db: float) -> dict:
+    """Compute Lden per facade sector from directional sources.
+
+    sources: list of (l10_db, bearing_rad) for road sources, or (leq_db, bearing_rad) for rail.
+    Returns dict with lden_max, lden_min, and per-sector values.
+    """
+    sector_width = 2 * math.pi / NUM_FACADE_SECTORS
+    sector_road: list[list[float]] = [[] for _ in range(NUM_FACADE_SECTORS)]
+    sector_rail: list[list[float]] = [[] for _ in range(NUM_FACADE_SECTORS)]
+
+    for db_val, bearing, is_rail in sources:
+        if db_val <= 0:
+            continue
+        idx = int(bearing / sector_width) % NUM_FACADE_SECTORS
+        if is_rail:
+            sector_rail[idx].append(db_val)
+        else:
+            sector_road[idx].append(db_val)
+
+    sector_ldens = []
+    for i in range(NUM_FACADE_SECTORS):
+        road_e = sum(10 ** (l / 10) for l in sector_road[i])
+        road_db = 10 * math.log10(road_e) if road_e > 0 else 0.0
+        rail_e = sum(10 ** (l / 10) for l in sector_rail[i])
+        rail_db = 10 * math.log10(rail_e) if rail_e > 0 else 0.0
+
+        road_leq = (road_db - L10_TO_LEQ_DB) if road_db > 0 else 0.0
+        rail_leq = rail_db
+        aircraft_leq = aircraft_db
+
+        leq_d = max(_energy_sum(
+            road_leq + _DAY_ADJ if road_leq > 0 else 0,
+            rail_leq, aircraft_leq), AMBIENT_DB)
+        leq_e = max(_energy_sum(
+            road_leq + _EVE_ADJ if road_leq > 0 else 0,
+            max(rail_leq - 5, 0) if rail_leq > 0 else 0,
+            aircraft_leq), AMBIENT_DB)
+        leq_n = max(_energy_sum(
+            road_leq + _NIGHT_ADJ if road_leq > 0 else 0,
+            0, aircraft_leq), AMBIENT_DB)
+
+        sector_ldens.append(round(_lden(leq_d, leq_e, leq_n), 1))
+
+    if not sector_ldens or max(sector_ldens) <= AMBIENT_DB:
+        return {}
+
+    labels = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+    max_idx = sector_ldens.index(max(sector_ldens))
+    min_idx = sector_ldens.index(min(sector_ldens))
+
+    return {
+        "lden_max_facade": max(sector_ldens),
+        "lden_min_facade": min(sector_ldens),
+        "max_facade_dir": labels[max_idx],
+        "min_facade_dir": labels[min_idx],
+        "facade_range_db": round(max(sector_ldens) - min(sector_ldens), 1),
+    }
+
+
 def _lden(leq_day: float, leq_eve: float, leq_night: float) -> float:
     """EU/AU Lden from period Leq values."""
     return 10 * math.log10(
@@ -166,6 +232,9 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
 
     # --- Pre-fetch buildings once for screening calculations ---
     nearby_buildings = buildings_in_radius(db, lat, lng, radius_m)
+
+    # Collect all sources with bearing for facade analysis: (db, bearing, is_rail)
+    _all_directional_sources: list[tuple[float, float, bool]] = []
 
     # --- Measured AADT: VicRoads (VIC) + NFDH (national) ---
     aadt_segments_raw = aadt_near(db, lat, lng, radius_m)
@@ -197,6 +266,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
                 "db": round(l_db_screened, 1),
                 "screening_db": round(screening, 1),
             }))
+            _all_directional_sources.append((l_db_screened, _bearing(lat, lng, src_lat, src_lng), False))
 
     # NFDH national traffic counts (complements VicRoads outside VIC)
     nfdh_stations = nfdh_near(db, lat, lng, radius_m)
@@ -219,6 +289,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
                 "db": round(l_db_screened, 1),
                 "screening_db": round(screening, 1),
             }))
+            _all_directional_sources.append((l_db_screened, _bearing(lat, lng, src_lat, src_lng), False))
 
     # --- Overture roads (fill gaps: residential streets not in measured AADT) ---
     # Dedup: skip Overture major roads within 80m of any measured AADT source
@@ -253,6 +324,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
                 "distance_m": round(dist_m, 0),
                 "db": round(l_db, 1),
             }))
+            _all_directional_sources.append((l_db, _bearing(lat, lng, src_lat, src_lng), False))
 
     # Merge: prefer measured AADT for loud sources, add Overture for minor roads
     all_road_levels = aadt_levels + overture_levels
@@ -308,6 +380,12 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     top_rails = _adaptive_select(rail_levels, max_n=MAX_RAIL_SOURCES)
     rail_energy = sum(10 ** (l / 10) for l, _ in top_rails)
     rail_db = 10 * math.log10(rail_energy) if rail_energy > 0 else 0.0
+
+    # Rail sources: distribute across 2 opposing sectors (rail line passes through)
+    for l_db, _ in top_rails:
+        if l_db > 0:
+            _all_directional_sources.append((l_db - 3, 0.0, True))  # spread to 2 sectors, -3dB each
+            _all_directional_sources.append((l_db - 3, math.pi, True))
 
     # --- Aircraft noise (VicPlan MAEO/AEO overlays) ---
     aircraft = aircraft_noise_penalty(lat, lng)
@@ -388,6 +466,11 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     result["dominant_source"] = top_roads[0][1].get("road_name") or top_roads[0][1].get("class") if top_roads else None
     if building_screening_total > 0:
         result["max_building_screening_db"] = round(building_screening_total, 1)
+
+    # Facade analysis: per-sector Lden
+    facade = _facade_lden(_all_directional_sources, aircraft_db)
+    if facade:
+        result.update(facade)
 
     # Aircraft noise overlay
     if aircraft["zone_code"]:

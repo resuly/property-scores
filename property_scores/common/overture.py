@@ -52,7 +52,9 @@ def roads_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
                ST_Distance(geometry, ST_Point({lng}, {lat})) * {m_per_deg} AS dist_m,
                CASE WHEN speed_limits IS NOT NULL AND len(speed_limits) > 0
                     THEN speed_limits[1].max_speed.value
-                    ELSE NULL END AS speed_kmh
+                    ELSE NULL END AS speed_kmh,
+               ST_X(ST_ClosestPoint(geometry, ST_Point({lng}, {lat}))) AS near_lng,
+               ST_Y(ST_ClosestPoint(geometry, ST_Point({lng}, {lat}))) AS near_lat
         FROM {table}
         WHERE bbox.xmin BETWEEN {lng - delta} AND {lng + delta}
           AND bbox.ymin BETWEEN {lat - delta} AND {lat + delta}

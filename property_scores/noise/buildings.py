@@ -19,7 +19,8 @@ RECEIVER_HEIGHT = 1.5  # ear height
 SOURCE_HEIGHT_ROAD = 0.5  # tire noise height
 SOURCE_HEIGHT_RAIL = 1.0  # rail noise height
 SOUND_WAVELENGTH = 0.34  # ~1 kHz (dominant traffic noise frequency)
-MAX_BARRIER_ATTENUATION = 20.0  # physical limit for single thin barrier
+MAX_SINGLE_BARRIER_DB = 20.0  # physical limit for single thin barrier
+MAX_TOTAL_BARRIER_DB = 25.0  # practical limit for multiple barriers
 
 
 def buildings_in_radius(db, lat: float, lng: float,
@@ -73,7 +74,7 @@ def barrier_attenuation(buildings: list[tuple[float, float, float]],
 
     nx, ny = dx / path_len, dy / path_len
 
-    max_atten = 0.0
+    barriers: list[tuple[float, float]] = []  # (along_position, attenuation)
     for bldg_height, clng, clat in buildings:
         bx = (clng - source_lng) * m_per_deg
         by = (clat - source_lat) * 111_320
@@ -95,9 +96,27 @@ def barrier_attenuation(buildings: list[tuple[float, float, float]],
             continue
 
         fresnel_n = 2 * detour / SOUND_WAVELENGTH
-        atten = min(10 * math.log10(3 + 20 * fresnel_n ** 2), MAX_BARRIER_ATTENUATION)
+        atten = min(10 * math.log10(3 + 20 * fresnel_n ** 2), MAX_SINGLE_BARRIER_DB)
 
-        if atten > max_atten:
-            max_atten = atten
+        barriers.append((along, atten))
 
-    return max_atten
+    if not barriers:
+        return 0.0
+
+    # Multiple barriers: keep best per 20m zone, sum top barriers (diminishing)
+    barriers.sort(key=lambda x: x[1], reverse=True)
+    zones_used: set[int] = set()
+    total = 0.0
+    for along, atten in barriers:
+        zone = int(along / 20)
+        if zone in zones_used:
+            continue
+        zones_used.add(zone)
+        if not zones_used - {zone}:
+            total += atten
+        else:
+            total += atten * 0.4  # diminishing return for additional barriers
+        if total >= MAX_TOTAL_BARRIER_DB:
+            return MAX_TOTAL_BARRIER_DB
+
+    return total

@@ -71,8 +71,10 @@ AMBIENT_DB = 35.0
 EXCESS_ATTENUATION_DB_PER_M = 0.06
 CONTINUOUS_FLOW_AADT = 15_000
 
-TOP_N_ROAD_SOURCES = 3
-TOP_N_RAIL_SOURCES = 2
+ADAPTIVE_THRESHOLD_DB = 6  # include sources within 6 dB of loudest (>25% energy)
+MAX_ROAD_SOURCES = 8
+MAX_RAIL_SOURCES = 4
+DEFAULT_SPEED_KMH = 60
 
 # L10 → Leq: CRTN predicts L10(18h); Lden and validation use Leq
 L10_TO_LEQ_DB = 3.0
@@ -93,10 +95,13 @@ def _estimate_aadt(road_class: str, speed_kmh: float | None) -> int:
     return CLASS_TO_AADT.get(road_class, 400)
 
 
-def _crtn_noise(aadt: int, distance_m: float) -> float:
+def _crtn_noise(aadt: int, distance_m: float,
+                hv_pct: float = 0.0, speed_kmh: float = 0.0) -> float:
     if aadt <= 0:
         return 0.0
     l10_ref = 42.2 + 10 * math.log10(aadt)
+    if hv_pct > 0 and speed_kmh > 0:
+        l10_ref += 10 * math.log10(1 + 5 * hv_pct / speed_kmh)
     if distance_m < MIN_DISTANCE_M:
         distance_m = MIN_DISTANCE_M
     geometric = 10 * math.log10(distance_m / 13.5)
@@ -104,6 +109,16 @@ def _crtn_noise(aadt: int, distance_m: float) -> float:
     duty_cycle = min(1.0, aadt / CONTINUOUS_FLOW_AADT)
     duty_correction = 10 * math.log10(duty_cycle) if duty_cycle > 0 else -30
     return max(l10_ref - geometric - GROUND_ABSORPTION_DB - excess + duty_correction, 0.0)
+
+
+def _adaptive_select(levels: list[tuple[float, dict]],
+                     max_n: int = MAX_ROAD_SOURCES) -> list[tuple[float, dict]]:
+    if not levels:
+        return []
+    sorted_levels = sorted(levels, key=lambda x: x[0], reverse=True)
+    peak = sorted_levels[0][0]
+    filtered = [(l, d) for l, d in sorted_levels if l >= peak - ADAPTIVE_THRESHOLD_DB]
+    return filtered[:max_n]
 
 
 def _rail_noise_freq(rail_type: str, distance_m: float,
@@ -166,7 +181,8 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     aadt_levels: list[tuple[float, dict]] = []
     building_screening_total = 0.0
     for aadt, hv_pct, road_name, dist_m, src_lng, src_lat in aadt_segments:
-        l_db = _crtn_noise(int(aadt), dist_m)
+        hv_val = (hv_pct * 100) if hv_pct else 0.0
+        l_db = _crtn_noise(int(aadt), dist_m, hv_pct=hv_val, speed_kmh=DEFAULT_SPEED_KMH)
         if l_db > 0:
             screening = barrier_attenuation(nearby_buildings, src_lng, src_lat, lng, lat, dist_m)
             l_db_screened = max(l_db - screening, 0.0)
@@ -176,7 +192,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
                 "source": "vicroads",
                 "road_name": road_name,
                 "aadt": int(aadt),
-                "hv_pct": round(hv_pct * 100) if hv_pct else 0,
+                "hv_pct": round(hv_val),
                 "distance_m": round(dist_m, 0),
                 "db": round(l_db_screened, 1),
                 "screening_db": round(screening, 1),
@@ -187,7 +203,8 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     for aadt, hv_pct, road_name, dist_m, src_lng, src_lat in nfdh_stations:
         if any(abs(dist_m - d) < 80 for _, _, _, d, _, _ in aadt_segments):
             continue
-        l_db = _crtn_noise(int(aadt), dist_m)
+        hv_val = max(hv_pct or 0, 0)
+        l_db = _crtn_noise(int(aadt), dist_m, hv_pct=hv_val, speed_kmh=DEFAULT_SPEED_KMH)
         if l_db > 0:
             screening = barrier_attenuation(nearby_buildings, src_lng, src_lat, lng, lat, dist_m)
             l_db_screened = max(l_db - screening, 0.0)
@@ -197,7 +214,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
                 "source": "nfdh",
                 "road_name": road_name,
                 "aadt": int(aadt),
-                "hv_pct": round(max(hv_pct or 0, 0)),
+                "hv_pct": round(hv_val),
                 "distance_m": round(dist_m, 0),
                 "db": round(l_db_screened, 1),
                 "screening_db": round(screening, 1),
@@ -211,7 +228,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     overture_levels: list[tuple[float, dict]] = []
     roads_with_speed = 0
 
-    for road_class, dist_m, speed_kmh in roads:
+    for road_class, dist_m, speed_kmh, src_lng, src_lat in roads:
         if road_class in ("footway", "path", "steps", "cycleway", "pedestrian", "track"):
             continue
         if speed_kmh:
@@ -222,6 +239,12 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
         aadt_est = CLASS_TO_AADT.get(road_class, 400)
         l_db = _crtn_noise(aadt_est, dist_m)
         if l_db > 0:
+            screening = barrier_attenuation(nearby_buildings, src_lng, src_lat, lng, lat, dist_m)
+            l_db = max(l_db - screening, 0.0)
+            if screening > building_screening_total:
+                building_screening_total = screening
+            if l_db <= 0:
+                continue
             overture_levels.append((l_db, {
                 "source": "overture",
                 "class": road_class,
@@ -231,9 +254,9 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
                 "db": round(l_db, 1),
             }))
 
-    # Merge: prefer VicRoads for loud sources, add Overture for minor roads
-    all_road_levels = sorted(aadt_levels + overture_levels, key=lambda x: x[0], reverse=True)
-    top_roads = all_road_levels[:TOP_N_ROAD_SOURCES]
+    # Merge: prefer measured AADT for loud sources, add Overture for minor roads
+    all_road_levels = aadt_levels + overture_levels
+    top_roads = _adaptive_select(all_road_levels)
     road_energy = sum(10 ** (l / 10) for l, _ in top_roads)
     road_db = 10 * math.log10(road_energy) if road_energy > 0 else 0.0
 
@@ -282,7 +305,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
             if rail_class in ("standard_gauge", "narrow_gauge") and (nearest_train_m is None or dist_m < nearest_train_m):
                 nearest_train_m = dist_m
 
-    top_rails = sorted(rail_levels, key=lambda x: x[0], reverse=True)[:TOP_N_RAIL_SOURCES]
+    top_rails = _adaptive_select(rail_levels, max_n=MAX_RAIL_SOURCES)
     rail_energy = sum(10 ** (l / 10) for l, _ in top_rails)
     rail_db = 10 * math.log10(rail_energy) if rail_energy > 0 else 0.0
 

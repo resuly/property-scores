@@ -9,7 +9,7 @@ from property_scores.common.config import data_path
 from property_scores.common.overture import AU_RAIL_SHAPES_FILE, PTV_SHAPES_FILE
 from property_scores.noise.score import (
     noise_score, _crtn_noise, _rail_noise_freq, _rail_noise_fallback,
-    RAIL_EMISSION, CLASS_TO_AADT, TOP_N_ROAD_SOURCES,
+    RAIL_EMISSION, CLASS_TO_AADT, DEFAULT_SPEED_KMH,
 )
 
 
@@ -61,24 +61,28 @@ def noise_debug(lat: float, lng: float, radius_m: int = 500) -> dict:
 
     aadt_sources = []
     for aadt, hv_pct, road_name, dist_m, src_lng, src_lat in aadt_near(db, lat, lng, radius_m):
-        l_db = _crtn_noise(int(aadt), dist_m)
+        hv_val = (hv_pct * 100) if hv_pct else 0.0
+        l_db = _crtn_noise(int(aadt), dist_m, hv_pct=hv_val, speed_kmh=DEFAULT_SPEED_KMH)
         aadt_sources.append({
             "lat": src_lat, "lng": src_lng,
             "source": "vicroads",
             "road_name": road_name,
             "aadt": int(aadt),
+            "hv_pct": round(hv_val),
             "distance_m": round(dist_m),
             "db": round(l_db, 1),
         })
 
     nfdh_sources = []
     for aadt, hv_pct, road_name, dist_m, src_lng, src_lat in nfdh_near(db, lat, lng, radius_m):
-        l_db = _crtn_noise(int(aadt), dist_m)
+        hv_val = max(hv_pct or 0, 0)
+        l_db = _crtn_noise(int(aadt), dist_m, hv_pct=hv_val, speed_kmh=DEFAULT_SPEED_KMH)
         nfdh_sources.append({
             "lat": src_lat, "lng": src_lng,
             "source": "nfdh",
             "road_name": road_name,
             "aadt": int(aadt),
+            "hv_pct": round(hv_val),
             "distance_m": round(dist_m),
             "db": round(l_db, 1),
         })

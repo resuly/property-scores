@@ -362,7 +362,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     nearest_train_m = None
     gtfs_found = len(gtfs_routes) > 0
 
-    for route_type, route_name, dist_m, peak_svc, offpeak_svc in gtfs_routes:
+    for route_type, route_name, dist_m, peak_svc, offpeak_svc, src_lng, src_lat in gtfs_routes:
         if route_type == 0:
             rail_type = "tram"
             if nearest_tram_m is None or dist_m < nearest_tram_m:
@@ -374,15 +374,25 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
         svc_per_hr = peak_svc * 0.4 + offpeak_svc * 0.6
         l_db = _rail_noise_freq(rail_type, dist_m, svc_per_hr)
         if l_db > 0:
-            rail_levels.append((l_db, {
+            raw_screening = barrier_attenuation(nearby_buildings, src_lng, src_lat, lng, lat, dist_m)
+            rail_scr_factor = min(dist_m / 500, 0.6)  # 0 at 0m → 0.6 at 500m
+            screening = raw_screening * rail_scr_factor
+            l_db_screened = max(l_db - screening, 0.0)
+            if raw_screening > building_screening_total:
+                building_screening_total = raw_screening
+            if l_db_screened <= 0:
+                continue
+            rail_levels.append((l_db_screened, {
                 "source": "gtfs",
                 "type": rail_type,
                 "route": route_name,
                 "distance_m": round(dist_m, 0),
                 "peak_svc_hr": round(peak_svc, 1),
                 "offpeak_svc_hr": round(offpeak_svc, 1),
-                "db": round(l_db, 1),
+                "db": round(l_db_screened, 1),
+                "screening_db": round(screening, 1),
             }))
+            _all_directional_sources.append((l_db_screened, _bearing(lat, lng, src_lat, src_lng), True))
 
     if not gtfs_found:
         rails = rail_near(db, lat, lng, radius_m, source=source)
@@ -403,12 +413,6 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     top_rails = _adaptive_select(rail_levels, max_n=MAX_RAIL_SOURCES)
     rail_energy = sum(10 ** (l / 10) for l, _ in top_rails)
     rail_db = 10 * math.log10(rail_energy) if rail_energy > 0 else 0.0
-
-    # Rail sources: distribute across 2 opposing sectors (rail line passes through)
-    for l_db, _ in top_rails:
-        if l_db > 0:
-            _all_directional_sources.append((l_db - 3, 0.0, True))  # spread to 2 sectors, -3dB each
-            _all_directional_sources.append((l_db - 3, math.pi, True))
 
     # --- Aircraft noise (VicPlan MAEO/AEO overlays) ---
     aircraft = aircraft_noise_penalty(lat, lng)

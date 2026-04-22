@@ -179,22 +179,30 @@ def gtfs_rail_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
     delta = radius_m / 111_000 * 1.5
 
     sql = f"""
-        WITH nearby_shapes AS (
-            SELECT shape_id, route_type,
-                   MIN(SQRT(POW((lng - {lng}) * {m_per_deg}, 2) +
-                            POW((lat - {lat}) * 111320, 2))) AS dist_m
+        WITH pts AS (
+            SELECT shape_id, route_type, lng AS pt_lng, lat AS pt_lat,
+                   SQRT(POW((lng - {lng}) * {m_per_deg}, 2) +
+                        POW((lat - {lat}) * 111320, 2)) AS dist_m
             FROM read_parquet('{shapes_path}')
             WHERE lng BETWEEN {lng - delta} AND {lng + delta}
               AND lat BETWEEN {lat - delta} AND {lat + delta}
+        ),
+        nearest AS (
+            SELECT shape_id, route_type,
+                   MIN(dist_m) AS dist_m,
+                   ARG_MIN(pt_lng, dist_m) AS near_lng,
+                   ARG_MIN(pt_lat, dist_m) AS near_lat
+            FROM pts
             GROUP BY shape_id, route_type
             HAVING dist_m < {radius_m}
         )
-        SELECT ns.route_type, f.route_name, ns.dist_m,
-               f.peak_services_per_hour, f.offpeak_services_per_hour
-        FROM nearby_shapes ns
+        SELECT n.route_type, f.route_name, n.dist_m,
+               f.peak_services_per_hour, f.offpeak_services_per_hour,
+               n.near_lng, n.near_lat
+        FROM nearest n
         JOIN read_parquet('{freq_path}') f
-          ON ns.shape_id = f.shape_id
-        ORDER BY ns.dist_m
+          ON n.shape_id = f.shape_id
+        ORDER BY n.dist_m
     """
     return db.sql(sql).fetchall()
 

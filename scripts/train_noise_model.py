@@ -42,6 +42,20 @@ def extract_features(lat: float, lng: float, radius_m: int = 500) -> dict:
         feats["building_height_max"] = 0
         feats["building_height_p75"] = 0
 
+    # --- Urban morphology / street canyon ---
+    # Building density in inner zone (100m) vs full radius
+    m_per_deg = 111_320 * math.cos(math.radians(lat))
+    inner_bldgs = [(h, clng, clat) for h, clng, clat in bldgs
+                   if math.sqrt(((clng - lng) * m_per_deg) ** 2 +
+                                ((clat - lat) * 111_320) ** 2) < 100]
+    feats["building_count_100m"] = len(inner_bldgs)
+    if inner_bldgs:
+        feats["building_height_100m_mean"] = np.mean([h for h, _, _ in inner_bldgs])
+    else:
+        feats["building_height_100m_mean"] = 0
+    # Density ratio: inner vs outer (high = dense core)
+    feats["density_ratio"] = len(inner_bldgs) / max(len(bldgs), 1)
+
     # --- Roads by class ---
     roads = roads_near(db, lat, lng, radius_m)
     motor_roads = [r for r in roads if r[0] not in
@@ -56,6 +70,13 @@ def extract_features(lat: float, lng: float, radius_m: int = 500) -> dict:
     # Speed limit coverage
     with_speed = [r for r in motor_roads if r[2]]
     feats["roads_with_speed_pct"] = len(with_speed) / max(len(motor_roads), 1)
+
+    # Street canyon aspect ratio: avg building height / distance to nearest major road
+    major_classes = ("motorway", "trunk", "primary", "secondary", "tertiary")
+    nearest_major_dist = min((r[1] for r in motor_roads if r[0] in major_classes), default=radius_m)
+    avg_h = feats["building_height_100m_mean"] or feats["building_height_mean"]
+    feats["canyon_ratio"] = avg_h / max(nearest_major_dist, 5)  # H/W ratio
+    feats["nearest_major_dist"] = nearest_major_dist
 
     # Road energy features (unscreened, for ML to learn screening effect)
     road_energies = []
@@ -152,6 +173,21 @@ def extract_features(lat: float, lng: float, radius_m: int = 500) -> dict:
     feats["rail_screened_db_max"] = rail_screened_db
     feats["rail_screening_max"] = max_rail_screening
     feats["rail_screening_delta"] = rail_raw_db - rail_screened_db
+
+    # --- POI noise sources (bars, restaurants, construction, industry) ---
+    try:
+        from property_scores.common.overture import pois_near
+        pois = pois_near(db, lat, lng, 500)
+        noise_cats = {"bar", "nightclub", "pub", "restaurant", "cafe",
+                      "construction", "factory", "industrial"}
+        noise_pois = [p for p in pois if p[0] and any(c in p[0].lower() for c in noise_cats)]
+        feats["poi_noise_count"] = len(noise_pois)
+        feats["poi_noise_min_dist"] = min((p[1] for p in noise_pois), default=500)
+        feats["poi_total_count"] = len(pois)
+    except (FileNotFoundError, Exception):
+        feats["poi_noise_count"] = 0
+        feats["poi_noise_min_dist"] = 500
+        feats["poi_total_count"] = 0
 
     # --- Directional features (road energy variance across sectors) ---
     sector_energy = [0.0] * NUM_FACADE_SECTORS
@@ -315,8 +351,11 @@ def main():
     print(f"\nPhysics baseline (omni vs max): MAE = {base_mae:.2f} dB")
     print(f"Physics baseline (max facade):  MAE = {base_mae_f:.2f} dB")
 
-    # Train with cross-validation
-    print("\n--- XGBoost (MAX facade target) ---")
+    # Residual learning: predict correction = y_true - physics_max_facade
+    y_residual = y_max - physics_max_f
+    print(f"\nResidual stats: mean={np.mean(y_residual):+.1f} std={np.std(y_residual):.1f} range=[{np.min(y_residual):.1f}, {np.max(y_residual):.1f}]")
+
+    print("\n--- XGBoost Residual (physics + ML correction) ---")
     import xgboost as xgb
 
     kf = KFold(n_splits=5, shuffle=True, random_state=42)
@@ -326,7 +365,7 @@ def main():
 
     for fold, (train_idx, val_idx) in enumerate(kf.split(X)):
         X_tr, X_val = X[train_idx], X[val_idx]
-        y_tr, y_val = y_max[train_idx], y_max[val_idx]
+        yr_tr, yr_val = y_residual[train_idx], y_residual[val_idx]
 
         model = xgb.XGBRegressor(
             n_estimators=200, max_depth=4, learning_rate=0.05,
@@ -334,12 +373,13 @@ def main():
             reg_alpha=1.0, reg_lambda=2.0,
             random_state=42,
         )
-        model.fit(X_tr, y_tr, eval_set=[(X_val, y_val)], verbose=False)
+        model.fit(X_tr, yr_tr, eval_set=[(X_val, yr_val)], verbose=False)
 
-        pred = model.predict(X_val)
-        mae = mean_absolute_error(y_val, pred)
-        bias = np.mean(pred - y_val)
-        w5 = np.mean(np.abs(pred - y_val) <= 5) * 100
+        pred_residual = model.predict(X_val)
+        pred_lden = physics_max_f[val_idx] + pred_residual
+        mae = mean_absolute_error(y_max[val_idx], pred_lden)
+        bias = np.mean(pred_lden - y_max[val_idx])
+        w5 = np.mean(np.abs(pred_lden - y_max[val_idx]) <= 5) * 100
         cv_maes.append(mae)
         cv_biases.append(bias)
         cv_w5.append(w5)
@@ -349,14 +389,14 @@ def main():
     print(f"  CV Mean: Bias={np.mean(cv_biases):+.2f} W5={np.mean(cv_w5):.0f}%")
 
     # Train final model on all data
-    print("\nTraining final model on all data...")
+    print("\nTraining final residual model on all data...")
     final_model = xgb.XGBRegressor(
         n_estimators=200, max_depth=4, learning_rate=0.05,
         subsample=0.8, colsample_bytree=0.8,
         reg_alpha=1.0, reg_lambda=2.0,
         random_state=42,
     )
-    final_model.fit(X, y_max)
+    final_model.fit(X, y_residual)
 
     # Feature importance
     importances = final_model.feature_importances_
@@ -374,8 +414,8 @@ def main():
             subsample=0.8, colsample_bytree=0.8,
             reg_alpha=1.0, reg_lambda=2.0, random_state=42,
         )
-        m.fit(X[train_idx], y_max[train_idx], verbose=False)
-        all_preds[val_idx] = m.predict(X[val_idx])
+        m.fit(X[train_idx], y_residual[train_idx], verbose=False)
+        all_preds[val_idx] = physics_max_f[val_idx] + m.predict(X[val_idx])
 
     for lo, hi, label in [(0, 50, "<50"), (50, 60, "50-60"), (60, 70, "60-70"), (70, 100, "70+")]:
         mask = (y_max >= lo) & (y_max < hi)
@@ -404,8 +444,8 @@ def main():
                 subsample=0.8, colsample_bytree=0.8,
                 reg_alpha=1.0, reg_lambda=2.0, random_state=42,
             )
-            m.fit(X[train_mask], y_max[train_mask], verbose=False)
-            preds = m.predict(X[test_mask])
+            m.fit(X[train_mask], y_residual[train_mask], verbose=False)
+            preds = physics_max_f[test_mask] + m.predict(X[test_mask])
             loco_preds[test_mask] = preds
             phys_e = physics_max_f[test_mask] - y_max[test_mask]
             ml_e = preds - y_max[test_mask]
@@ -428,7 +468,8 @@ def main():
         "cv_mae": float(np.mean(cv_maes)),
         "cv_bias": float(np.mean(cv_biases)),
         "n_train": len(X),
-        "target": "lden_max_facade",
+        "target": "residual (lden_true - physics_max_facade)",
+        "mode": "residual",
     }
     with open(model_path, "wb") as f:
         pickle.dump(model_data, f)

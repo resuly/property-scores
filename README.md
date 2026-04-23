@@ -8,7 +8,7 @@ Built by [Limon Tech](https://limontech.net) as the scoring backend for [DA Lead
 
 | Score | Status | Data Sources | Method |
 |-------|--------|-------------|--------|
-| Noise | Live | NFDH + VicRoads AADT + WA MRWA + State GTFS (5 states) + Overture roads/buildings + VicPlan ANEF | CRTN L10 + SEL rail + Maekawa screening + ANEF aircraft |
+| Noise | Live | NFDH AADT + Overture roads/buildings/POIs + State GTFS (6 states, 184 routes) + VicPlan ANEF + NoiseCapture (10K training) | Physics v8 (CRTN + Maekawa + facade) → XGBoost residual → LA50. Test MAE 4.63 dB |
 | Walkability | Live | Overture POI (227k Melbourne) | Distance-decay across 13 categories |
 | Solar Potential | Live | Global Solar Atlas API | GHI/DNI + orientation + tilt |
 | Flood Risk | Live | State government planning overlays (VIC/NSW/SA/TAS/ACT) | ArcGIS REST point-in-polygon |
@@ -50,22 +50,25 @@ All data is free and open-licensed:
 |---------|----------|------|---------|
 | Road network | Overture Maps | 3.78M AU segments | CDLA Permissive |
 | Building footprints + heights | Overture Maps | 13.6M AU buildings | CDLA Permissive |
-| POI | Overture Maps | 227k Melbourne | CDLA Permissive |
-| Traffic volumes (AADT) | VicRoads + NFDH + MRWA | 23k segments/stations | Open Data |
-| Train/tram timetables | State GTFS (VIC/NSW/QLD/WA/SA) | 135 routes, 5 states | CC BY 4.0 |
+| POI | Overture Maps | 1.4M AU-wide | CDLA Permissive |
+| Traffic volumes (AADT) | NFDH + WA MRWA | 8,855 stations, 6 states | Open Data |
+| Train/tram timetables | State GTFS (VIC/NSW/QLD/WA/SA) | 184 routes, 6 states | CC BY 4.0 |
 | Airport noise overlays | VicPlan (DELWP) | Real-time API | CC BY 4.0 |
+| Noise ground truth | NoiseCapture crowdsourced | 9,953 AU hexagons (LA50) | ODbL |
+| Noise calibration | City of Ballarat fixed sensor | 125K readings | CC BY 3.0 |
 | Planning scheme overlays | State governments | Real-time API | Open Data |
 | Solar irradiance | Global Solar Atlas | API | CC BY 4.0 |
 | Climate data | Open-Meteo (ERA5) | API | CC BY 4.0 |
 
 ## Validation
 
-**Coverage**: All Australian states. VIC has highest accuracy (VicRoads AADT + PTV GTFS). NSW, QLD, SA, TAS, WA have NFDH/MRWA AADT + state GTFS. NT/ACT use Overture road class estimates.
+**Coverage**: All Australian states. GTFS rail timetables for VIC/NSW/QLD/WA/SA (184 routes). NFDH AADT for 6 states. Overture roads/buildings/POI AU-wide.
 
-Noise model validated against:
-- VicRoads AADT (1,742 spatial matches, calibration data)
-- NoiseCapture crowdsourced measurements (Melbourne 531 hexagons, Amsterdam 423 hexagons)
-- EU END strategic noise maps (Germany 10m raster, Netherlands contours)
+**Production model** (Physics v8 + XGBoost residual → LA50 background noise):
+- Trained on 9,953 NoiseCapture real measurements (ODbL, zero legal risk)
+- Held-out test (1,991 points): **MAE 4.63 dB, W5 65%, W10 90%**
+- Calibrated against Ballarat fixed sensor (125K readings): +3.3 dB vs professional equipment
+- Benchmarked against Ambient Maps SoundPLAN (527 buildings): MAX facade MAE 4.5 dB
 
 See `docs/noise.md` for full methodology and validation results.
 

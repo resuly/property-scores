@@ -1,6 +1,6 @@
 # Noise Score — Technical Specification
 
-## Status: Phase 4 — Lden + Validation
+## Status: Production (v8 + ML)
 
 | Item | Status |
 |------|--------|
@@ -401,14 +401,14 @@ Remaining +4.2 dB bias breakdown:
 - ~1 dB: model residual (Overture road class overestimates for quiet streets)
 - Worst outliers (+25-30 dB): measurements in parks/indoor (Southbank, Treasury Gardens)
 
-## Known Issues (v5)
+## Known Issues (v8 + ML)
 
-1. **NT/ACT no measured AADT** — rely entirely on Overture class estimates
-2. **Aircraft VIC only** — MAEO/AEO covers Victoria; national ANEF data available but not yet integrated
-3. **ACT light rail not in GTFS** — Transport Canberra feed only includes buses
-4. **No bus noise** — GTFS has bus routes but not yet modeled (lower impact than rail)
-5. **WA AADT sparse in Perth CBD** — nearest station 1.6km away, no help at 500m radius
-6. **Temporal profile is generic** — Austroads 80/12/8 default; NFDH has real hourly data for 3,325 stations
+1. **Aircraft VIC only** — MAEO/AEO covers Victoria; national ANEF available but not yet integrated
+2. **ACT light rail not in GTFS** — Transport Canberra feed only includes buses (route_type 3)
+3. **Quiet areas (<50 dB) least accurate** — MAE 8.0 dB; limited by point-model architecture (no facade polygon)
+4. **QLD accuracy lower** — MAE 6.9; NoiseCapture QLD data may include non-transport noise
+5. **NT/TAS no GTFS** — no urban rail systems; Overture rail fallback used for freight lines
+6. **NFDH 12-bin is vehicle CLASS not time bins** — cannot extract hourly temporal profiles from this data
 
 ## Changelog
 
@@ -431,47 +431,78 @@ Remaining +4.2 dB bias breakdown:
 - 2026-04-22: VicRoads directional dedup (road_name + 10m bucket), fixes energy double-count.
 - 2026-04-22: Noise source debug map (/noise/debug) — Leaflet dark map with AADT/NFDH/rail sources.
 - 2026-04-22: Melbourne validation complete: 488 hex, Bias +4.2, MAE 6.2, W5 57%, W10 81%.
+- 2026-04-22: v6 — HV CRTN correction, adaptive source selection, Overture road screening, multi-barrier.
+- 2026-04-22: v7 — 8-direction facade modeling + diffraction spillover (10%).
+- 2026-04-22: v8 — Rail screening with GTFS coordinates, distance-dependent factor.
+- 2026-04-22: Benchmarked vs Ambient Maps SoundPLAN (527 buildings, AURIN academic sample).
+- 2026-04-22: National GTFS: VIC (53) + NSW (68) + QLD (40) + SA (13) + WA (10) = 184 routes.
+- 2026-04-22: Full AU Overture data: roads 3.7M + buildings 13.6M + POIs 1.4M.
+- 2026-04-22: NoiseCapture Australia bulk download (14,748 hexagons, 2.1M measurements, ODbL).
+- 2026-04-22: Ballarat fixed sensor validation: +3.3 dB vs calibrated instrument (125K readings).
+- 2026-04-22: Production ML model (XGBoost residual → LA50): 10K training, test MAE 4.63, W5 65%, W10 90%.
 
-## Improvement Roadmap (next session handoff)
+## Production Model Pipeline
 
-Ranked by impact/effort. Each item is independent.
+```
+Input (lat, lng)
+    │
+    ▼
+Physics v8 ──────── 57 features ──────► XGBoost residual ───► LA50 (dB)
+  │ CRTN road noise                       │ 300 trees           │
+  │ Maekawa screening                     │ depth 5             │ Property
+  │ GTFS rail (184 routes)                │ Trained on 10K      │ background
+  │ 8-direction facade                    │ NoiseCapture pts    │ noise score
+  │ Building density                      │ (ODbL)              │
+  │ POI noise sources                     │                     │
+  └───────────────────────────────────────┘                     │
+                                                                ▼
+                                                         Score 0-100
+```
 
-### 1. NFDH Hourly Bins → Real Temporal Profile (high impact, medium effort)
-3,325 NFDH stations have 12-bin (2-hourly) data. Currently we only downloaded total AADT.
-- Re-query NFDH API with `counter_type='12-bin'`, extract hourly distribution
-- Replace generic Austroads 80/12/8 with per-station measured day/eve/night fractions
-- Expected: more accurate Lden for locations near NFDH stations, especially freight corridors
+## Production Validation Results
 
-NFDH counter_type breakdown: 12-bin=3,325 | 04-bin=1,822 | 02-bin=2,402 | 01-bin=593 | Class=713
+### Held-out test set (1,991 points, never seen during training)
 
-### 2. Heavy Vehicle CRTN Correction (medium impact, easy)
-CRTN has HV correction: `+10*log10(1 + 5*p/V)` where p=%HV, V=speed(km/h).
-- hv_pct already in VicRoads + NFDH data, just not used in `_crtn_noise()`
-- Would increase noise on freight routes by 2-5 dB
-- NOTE: this increases predictions → makes bias worse unless combined with other fixes
-- Test on freight corridors (Western Ring Road, Hume Freeway) before enabling globally
+| Metric | Value |
+|--------|-------|
+| MAE | **4.63 dB** |
+| Bias | -0.17 dB |
+| Within 5 dB | 65% |
+| Within 10 dB | 90% |
 
-### 3. National ANEF Aircraft Noise (medium impact, medium effort)
-Currently VIC-only via VicPlan API. Airservices Australia publishes national ANEF shapefiles.
-- Download from `data.gov.au` or Airservices AU
-- Parse ANEF contour polygons (20, 25, 30, 35 ANEF zones)
-- Replace VicPlan API call with local spatial lookup (faster, national coverage)
-- Airports affected: Sydney (Kingsford Smith), Brisbane, Perth, Adelaide, Canberra, Gold Coast
+### By noise level (test set)
 
-### 4. Cross-City Validation (medium impact, easy)
-NoiseCapture has data for Sydney, Brisbane, Perth. Run `validate_noise.py --city sydney` etc.
-- Validates NFDH + GTFS accuracy outside Melbourne
-- Tests whether Melbourne-calibrated model generalises
-- Need to download NoiseCapture data for other cities first
+| Level | Physics MAE | ML MAE | ML W5 |
+|-------|-----------|--------|-------|
+| Quiet (40-50 dB) | 9.4 | 8.0 | 35% |
+| Moderate (50-60 dB) | 12.5 | **3.9** | **72%** |
+| Loud (60-70 dB) | 12.7 | **3.6** | **73%** |
+| Very Loud (70-80 dB) | 12.5 | 5.2 | 61% |
 
-### 5. EPA Noise Monitoring Calibration (low-medium impact, medium effort)
-VIC EPA and NSW EPA operate fixed noise monitoring stations with accurate reference microphones.
-- These give ground-truth Leq values without phone-mic bias
-- Even 10-20 reference points would calibrate the ~3 dB phone-mic offset
-- Sources: EPA Victoria data portal, NSW EPA AQMS
+### By state (test set)
 
-### 6. Adaptive TOP_N Sources (low impact, easy)
-Currently fixed TOP_N_ROAD_SOURCES=3. In dense CBDs this ignores 60+ sources;
-in quiet suburbs it may over-represent the few sources present.
-- Alternative: take all sources within 10 dB of maximum
-- Or: logarithmic weighting that diminishes contribution of distant/quiet sources
+| State | MAE | W5 | Test N |
+|-------|-----|-----|--------|
+| VIC | **4.2** | **69%** | 348 |
+| NSW | **4.3** | **68%** | 1393 |
+| WA | 5.3 | 54% | 41 |
+| SA | 6.6 | 50% | 48 |
+| QLD | 6.9 | 41% | 145 |
+
+### Cross-validation with Ambient Maps SoundPLAN (527 buildings, Melbourne CBD)
+
+| Metric | Physics v8 | ML (facade) |
+|--------|-----------|-------------|
+| MAX facade bias | -3.3 dB | **-0.2 dB** |
+| MAE | 6.4 | **4.5** |
+
+### Calibrated sensor validation (Ballarat, 124K professional readings)
+
+Physics Leq vs sensor P50: **+3.3 dB** (single point, calibrated instrument)
+
+## Remaining Improvement Opportunities
+
+1. **National ANEF aircraft noise** — currently VIC only, Airservices AU has national shapefiles
+2. **More calibrated ground truth** — only 1 fixed sensor (Ballarat); DIY measurement at 50-100 locations would validate further
+3. **Terrain/vegetation features** — hills block noise, trees absorb; not yet in feature set
+4. **NFDH 12-bin data** — vehicle CLASS bins (not time bins as initially documented); limited additional value

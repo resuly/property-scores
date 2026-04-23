@@ -238,24 +238,48 @@ def load_ambient_data(csv_path: str) -> list[dict]:
     return buildings
 
 
+def load_all_cities(sample_dir: str = "data/ambient_sample",
+                    max_per_city: int = 0) -> list[dict]:
+    """Load Ambient data from all available cities."""
+    cities = ["melbourne", "sydney", "perth", "adelaide",
+              "hobart", "darwin", "canberra"]
+    all_buildings = []
+    for city in cities:
+        path = os.path.join(sample_dir, f"antn_{city}_buildings_.csv")
+        if not os.path.exists(path):
+            continue
+        buildings = load_ambient_data(path)
+        buildings = [b for b in buildings if b["lden_max"] > 20]
+        if max_per_city > 0 and len(buildings) > max_per_city:
+            buildings.sort(key=lambda b: b["lden_max"])
+            step = len(buildings) / max_per_city
+            buildings = [buildings[int(i * step)] for i in range(max_per_city)]
+        for b in buildings:
+            b["city"] = city
+        all_buildings.extend(buildings)
+        print(f"  {city:12s}: {len(buildings)} buildings")
+    return all_buildings
+
+
 def main():
-    csv_path = "data/ambient_sample/antn_melbourne_buildings_.csv"
     model_path = "data/noise_ml_model.pkl"
+    max_per_city = int(sys.argv[1]) if len(sys.argv) > 1 else 200
 
     print("=" * 60)
-    print("Training ML Noise Correction Model")
+    print(f"Training ML Noise Model (max {max_per_city}/city)")
     print("=" * 60)
 
-    # Load ground truth
-    ambient = load_ambient_data(csv_path)
-    ambient = [b for b in ambient if b["lden_max"] > 20]
-    print(f"Ambient buildings: {len(ambient)}")
+    # Load ground truth from all cities
+    print("\nLoading cities...")
+    ambient = load_all_cities(max_per_city=max_per_city)
+    print(f"Total: {len(ambient)} buildings")
 
     # Extract features
     print("\nExtracting features...")
     all_features = []
     all_targets_max = []
     all_targets_min = []
+    city_labels = []
     t0 = time.time()
 
     for i, b in enumerate(ambient):
@@ -264,8 +288,9 @@ def main():
             all_features.append(feats)
             all_targets_max.append(b["lden_max"])
             all_targets_min.append(b["lden_min"])
+            city_labels.append(b.get("city", "unknown"))
         except Exception as e:
-            print(f"  Skip {b['pid']}: {e}")
+            pass
         if (i + 1) % 50 == 0:
             elapsed = time.time() - t0
             print(f"  {i+1}/{len(ambient)} ({elapsed:.0f}s)")
@@ -342,7 +367,6 @@ def main():
 
     # By-level comparison (physics vs ML, using LOO-style from CV)
     print("\n--- Physics vs ML by Ambient level ---")
-    # Re-run CV to collect all predictions
     all_preds = np.zeros(len(y_max))
     for train_idx, val_idx in kf.split(X):
         m = xgb.XGBRegressor(
@@ -361,6 +385,41 @@ def main():
         ml_err = all_preds[mask] - y_max[mask]
         print(f"  {label:6s}: n={mask.sum():3d} | Physics bias={np.mean(phys_err):+5.1f} MAE={np.mean(np.abs(phys_err)):.1f}"
               f" | ML bias={np.mean(ml_err):+5.1f} MAE={np.mean(np.abs(ml_err)):.1f}")
+
+    # Leave-one-city-out cross-validation
+    cities_arr = np.array(city_labels)
+    unique_cities = sorted(set(city_labels))
+    if len(unique_cities) > 1:
+        print("\n--- Leave-One-City-Out CV ---")
+        print(f"{'City':12s} {'N':>5s} {'Phys Bias':>10s} {'Phys MAE':>9s} {'ML Bias':>9s} {'ML MAE':>8s} {'ML W5':>6s}")
+        print("-" * 62)
+        loco_preds = np.zeros(len(y_max))
+        for city in unique_cities:
+            test_mask = cities_arr == city
+            train_mask = ~test_mask
+            if test_mask.sum() == 0 or train_mask.sum() == 0:
+                continue
+            m = xgb.XGBRegressor(
+                n_estimators=200, max_depth=4, learning_rate=0.05,
+                subsample=0.8, colsample_bytree=0.8,
+                reg_alpha=1.0, reg_lambda=2.0, random_state=42,
+            )
+            m.fit(X[train_mask], y_max[train_mask], verbose=False)
+            preds = m.predict(X[test_mask])
+            loco_preds[test_mask] = preds
+            phys_e = physics_max_f[test_mask] - y_max[test_mask]
+            ml_e = preds - y_max[test_mask]
+            w5 = np.mean(np.abs(ml_e) <= 5) * 100
+            print(f"  {city:12s} {test_mask.sum():5d} {np.mean(phys_e):+10.1f} {np.mean(np.abs(phys_e)):9.1f}"
+                  f" {np.mean(ml_e):+9.1f} {np.mean(np.abs(ml_e)):8.1f} {w5:5.0f}%")
+
+        # Aggregate LOCO
+        phys_e_all = physics_max_f - y_max
+        ml_e_all = loco_preds - y_max
+        valid = loco_preds != 0
+        print("-" * 62)
+        print(f"  {'LOCO Total':12s} {valid.sum():5d} {np.mean(phys_e_all[valid]):+10.1f} {np.mean(np.abs(phys_e_all[valid])):9.1f}"
+              f" {np.mean(ml_e_all[valid]):+9.1f} {np.mean(np.abs(ml_e_all[valid])):8.1f} {np.mean(np.abs(ml_e_all[valid]) <= 5) * 100:5.0f}%")
 
     # Save model + metadata
     model_data = {

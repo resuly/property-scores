@@ -89,7 +89,7 @@ def noise_debug(lat: float, lng: float, radius_m: int = 500) -> dict:
 
     rail_sources = []
     gtfs_routes = gtfs_rail_near(db, lat, lng, radius_m)
-    for route_type, route_name, dist_m, peak_svc, offpeak_svc in gtfs_routes:
+    for route_type, route_name, dist_m, peak_svc, offpeak_svc, src_lng, src_lat in gtfs_routes:
         rail_type = "tram" if route_type == 0 else ("vline" if peak_svc < 4 else "train")
         svc_per_hr = peak_svc * 0.4 + offpeak_svc * 0.6
         l_db = _rail_noise_freq(rail_type, dist_m, svc_per_hr)

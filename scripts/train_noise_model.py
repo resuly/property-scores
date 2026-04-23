@@ -297,9 +297,14 @@ def load_all_cities(sample_dir: str = "data/ambient_sample",
     return all_buildings
 
 
+def _cache_path(max_per_city: int) -> str:
+    return f"data/feature_cache_{max_per_city}.npz"
+
+
 def main():
     model_path = "data/noise_ml_model.pkl"
     max_per_city = int(sys.argv[1]) if len(sys.argv) > 1 else 200
+    force_extract = "--force" in sys.argv
 
     print("=" * 60)
     print(f"Training ML Noise Model (max {max_per_city}/city)")
@@ -310,29 +315,47 @@ def main():
     ambient = load_all_cities(max_per_city=max_per_city)
     print(f"Total: {len(ambient)} buildings")
 
-    # Extract features
-    print("\nExtracting features...")
-    all_features = []
-    all_targets_max = []
-    all_targets_min = []
-    city_labels = []
-    t0 = time.time()
+    cache = _cache_path(max_per_city)
+    if os.path.exists(cache) and not force_extract:
+        print(f"\nLoading cached features from {cache}")
+        data = np.load(cache, allow_pickle=True)
+        all_features = list(data["features"])
+        all_targets_max = list(data["targets_max"])
+        all_targets_min = list(data["targets_min"])
+        city_labels = list(data["cities"])
+        print(f"Loaded {len(all_features)} cached features")
+    else:
+        # Extract features
+        print("\nExtracting features (this takes ~15 min for 1400 buildings)...")
+        all_features = []
+        all_targets_max = []
+        all_targets_min = []
+        city_labels = []
+        t0 = time.time()
 
-    for i, b in enumerate(ambient):
-        try:
-            feats = extract_features(b["lat"], b["lng"])
-            all_features.append(feats)
-            all_targets_max.append(b["lden_max"])
-            all_targets_min.append(b["lden_min"])
-            city_labels.append(b.get("city", "unknown"))
-        except Exception as e:
-            pass
-        if (i + 1) % 50 == 0:
-            elapsed = time.time() - t0
-            print(f"  {i+1}/{len(ambient)} ({elapsed:.0f}s)")
+        for i, b in enumerate(ambient):
+            try:
+                feats = extract_features(b["lat"], b["lng"])
+                all_features.append(feats)
+                all_targets_max.append(b["lden_max"])
+                all_targets_min.append(b["lden_min"])
+                city_labels.append(b.get("city", "unknown"))
+            except Exception as e:
+                pass
+            if (i + 1) % 50 == 0:
+                elapsed = time.time() - t0
+                print(f"  {i+1}/{len(ambient)} ({elapsed:.0f}s)")
 
-    elapsed = time.time() - t0
-    print(f"Features extracted: {len(all_features)} buildings, {elapsed:.0f}s")
+        elapsed = time.time() - t0
+        print(f"Features extracted: {len(all_features)} buildings, {elapsed:.0f}s")
+
+        # Cache features
+        np.savez(cache,
+                 features=np.array(all_features, dtype=object),
+                 targets_max=np.array(all_targets_max),
+                 targets_min=np.array(all_targets_min),
+                 cities=np.array(city_labels))
+        print(f"Cached to {cache}")
 
     # Convert to arrays
     feature_names = sorted(all_features[0].keys())

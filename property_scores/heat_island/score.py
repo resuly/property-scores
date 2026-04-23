@@ -19,9 +19,9 @@ OPEN_METEO_ELEV = "https://api.open-meteo.com/v1/elevation"
 SH_SUMMER_MONTHS = (12, 1, 2)
 
 # Reference temperature range for scoring (Celsius, summer daily max)
-# Melbourne outer suburb ~27°C, CBD ~32°C, inland Australia ~40°C+
+# Hobart ~25°C, Melbourne outer ~27°C, CBD ~32°C, Perth ~36°C, Darwin ~34°C, inland ~42°C
 TEMP_COOL = 22.0
-TEMP_HOT = 35.0
+TEMP_HOT = 42.0
 
 
 def _fetch_summer_temp(lat: float, lng: float) -> tuple[float | None, float | None]:

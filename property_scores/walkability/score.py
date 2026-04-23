@@ -74,10 +74,13 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
     pois = pois_near(db, lat, lng, radius_m, source=source)
 
     nearest: dict[str, float] = {}
+    cat_counts: dict[str, int] = {}
     for poi_cat, dist_m in pois:
         matched = _match_category(poi_cat)
-        if matched and (matched not in nearest or dist_m < nearest[matched]):
-            nearest[matched] = dist_m
+        if matched:
+            cat_counts[matched] = cat_counts.get(matched, 0) + 1
+            if matched not in nearest or dist_m < nearest[matched]:
+                nearest[matched] = dist_m
 
     total_weight = sum(CATEGORY_WEIGHTS.values())
     weighted_sum = 0.0
@@ -86,13 +89,20 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
     for cat, weight in CATEGORY_WEIGHTS.items():
         if cat in nearest:
             d = _decay(nearest[cat])
+            count = cat_counts.get(cat, 0)
+            # Choice penalty: 1 option = 70% credit, 2 = 85%, 3+ = full
+            if count <= 1:
+                d *= 0.7
+            elif count <= 2:
+                d *= 0.85
             category_scores[cat] = {
                 "distance_m": round(nearest[cat]),
                 "decay": round(d, 2),
+                "count": count,
             }
         else:
             d = 0.0
-            category_scores[cat] = {"distance_m": None, "decay": 0.0}
+            category_scores[cat] = {"distance_m": None, "decay": 0.0, "count": 0}
         weighted_sum += weight * d
 
     score = max(0, min(100, round(weighted_sum / total_weight * 100)))

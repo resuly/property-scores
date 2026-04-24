@@ -8,16 +8,31 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from property_scores.noise import noise_score, aircraft_noise_penalty
+from property_scores.noise.cache import lookup as noise_cache_lookup
 from property_scores.noise.debug import noise_debug
 from property_scores.walkability import walkability_score
 from property_scores.solar import solar_score
 from property_scores.flood import flood_score
+from property_scores.flood.cache import lookup as flood_cache_lookup
 from property_scores.bushfire import bushfire_score
 from property_scores.heat_island import heat_island_score
+from property_scores.view_quality import view_quality_score
+from property_scores.contamination import contamination_score
 
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+DISCLAIMER = (
+    "Scores are estimates based on open data and are not professional assessments. "
+    "Do not rely on these scores for insurance, legal, or financial decisions. "
+    "Flood, bushfire, and contamination scores do not replace site-specific investigations."
+)
+
+VIEW_QUALITY_CAVEAT = (
+    "Based on proximity to landscape features and building density, "
+    "not actual line-of-sight analysis. A high score does not guarantee unobstructed views."
+)
 
 app = FastAPI(
     title="Property Scores API",
@@ -66,6 +81,16 @@ def heat_island_page():
     return FileResponse(STATIC_DIR / "heat_island.html")
 
 
+@app.get("/view-quality")
+def view_quality_page():
+    return FileResponse(STATIC_DIR / "view_quality.html")
+
+
+@app.get("/contamination")
+def contamination_page():
+    return FileResponse(STATIC_DIR / "contamination.html")
+
+
 @app.get("/scores")
 def get_all_scores(
     lat: float = Query(..., description="Latitude (WGS84)"),
@@ -76,12 +101,15 @@ def get_all_scores(
     return {
         "lat": lat,
         "lng": lng,
+        "disclaimer": DISCLAIMER,
         "noise": noise_score(lat, lng, source=source_roads),
         "walkability": walkability_score(lat, lng, source=source_pois),
         "solar": solar_score(lat, lng),
         "flood": flood_score(lat, lng),
         "bushfire": bushfire_score(lat, lng),
         "heat_island": heat_island_score(lat, lng),
+        "view_quality": view_quality_score(lat, lng),
+        "contamination": contamination_score(lat, lng),
     }
 
 
@@ -89,8 +117,13 @@ def get_all_scores(
 def get_noise(
     lat: float = Query(...), lng: float = Query(...),
     radius: int = Query(1000), source: str | None = Query(None),
+    nocache: bool = Query(False),
 ):
     try:
+        if not nocache and not source:
+            cached = noise_cache_lookup(lat, lng)
+            if cached:
+                return cached
         return noise_score(lat, lng, radius, source=source)
     except FileNotFoundError as e:
         return JSONResponse({"error": str(e)}, status_code=503)
@@ -123,8 +156,13 @@ def get_solar(
 
 
 @app.get("/scores/flood")
-def get_flood(lat: float = Query(...), lng: float = Query(...)):
+def get_flood(lat: float = Query(...), lng: float = Query(...),
+              nocache: bool = Query(False)):
     try:
+        if not nocache:
+            cached = flood_cache_lookup(lat, lng)
+            if cached:
+                return cached
         return flood_score(lat, lng)
     except Exception as e:
         logger.exception("flood score failed")
@@ -146,6 +184,24 @@ def get_heat_island(lat: float = Query(...), lng: float = Query(...)):
         return heat_island_score(lat, lng)
     except Exception as e:
         logger.exception("heat island score failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/scores/view-quality")
+def get_view_quality(lat: float = Query(...), lng: float = Query(...)):
+    try:
+        return view_quality_score(lat, lng)
+    except Exception as e:
+        logger.exception("view quality score failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/scores/contamination")
+def get_contamination(lat: float = Query(...), lng: float = Query(...)):
+    try:
+        return contamination_score(lat, lng)
+    except Exception as e:
+        logger.exception("contamination score failed")
         return JSONResponse({"error": str(e)}, status_code=500)
 
 

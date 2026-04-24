@@ -8,6 +8,7 @@ import threading
 
 ROADS_FILE = "overture_roads.parquet"
 POIS_FILE = "overture_pois.parquet"
+WATER_FILE = "overture_water.parquet"
 AADT_FILE = "vicroads_aadt_2019.parquet"
 NFDH_FILE = "nfdh_aadt_national.parquet"
 PTV_SHAPES_FILE = "ptv_rail_shapes.parquet"
@@ -209,6 +210,62 @@ def gtfs_rail_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
 
 # Backward-compatible alias
 ptv_rail_near = gtfs_rail_near
+
+
+def water_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
+               radius_m: int = 5000) -> list[tuple]:
+    """Find water features within radius.
+
+    Returns (class, subtype, dist_m) sorted by distance.
+    class: ocean, lake, river, reservoir, pond, stream, etc.
+    """
+    water_path = data_path(WATER_FILE)
+    if not water_path.exists():
+        return []
+    import math
+    m_per_deg = 111_320 * math.cos(math.radians(lat))
+    delta = radius_m / 111_000 * 1.5
+    deg_thresh = radius_m / m_per_deg
+    # Use overlap logic (not BETWEEN) so large polygons (ocean, bay)
+    # whose bbox spans the search area are included.
+    sql = f"""
+        SELECT class, subtype,
+               ST_Distance(geometry, ST_Point({lng}, {lat})) * {m_per_deg} AS dist_m
+        FROM read_parquet('{water_path}')
+        WHERE bbox.xmin <= {lng + delta}
+          AND bbox.xmax >= {lng - delta}
+          AND bbox.ymin <= {lat + delta}
+          AND bbox.ymax >= {lat - delta}
+          AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
+        ORDER BY dist_m
+    """
+    try:
+        return db.sql(sql).fetchall()
+    except Exception:
+        return []
+
+
+def buildings_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
+                   radius_m: int = 500) -> list[tuple]:
+    """Find buildings within radius. Returns (height, dist_m, num_floors)."""
+    buildings_path = data_path("overture_buildings.parquet")
+    if not buildings_path.exists():
+        return []
+    import math
+    m_per_deg = 111_320 * math.cos(math.radians(lat))
+    delta = radius_m / 111_000 * 1.5
+    deg_thresh = radius_m / m_per_deg
+    sql = f"""
+        SELECT height,
+               ST_Distance(geometry, ST_Point({lng}, {lat})) * {m_per_deg} AS dist_m,
+               num_floors
+        FROM read_parquet('{buildings_path}')
+        WHERE bbox.xmin BETWEEN {lng - delta} AND {lng + delta}
+          AND bbox.ymin BETWEEN {lat - delta} AND {lat + delta}
+          AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
+        ORDER BY dist_m
+    """
+    return db.sql(sql).fetchall()
 
 
 def pois_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,

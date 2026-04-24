@@ -40,12 +40,14 @@
   .score-flood .score-bar-fill { background: linear-gradient(90deg, #ef4444, #06b6d4); }
   .score-bushfire .score-bar-fill { background: linear-gradient(90deg, #ef4444, #f97316); }
   .score-heat .score-bar-fill { background: linear-gradient(90deg, #ef4444, #22c55e); }
+  .score-view .score-bar-fill { background: linear-gradient(90deg, #6b7280, #8b5cf6); }
 
   .category-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; font-size: 12px; margin-top: 8px; }
   .cat-item { display: flex; justify-content: space-between; padding: 2px 0; }
   .cat-name { color: #94a3b8; }
   .cat-value { color: #e2e8f0; }
   .cat-missing { color: #475569; }
+  .disclaimer { font-size: 11px; color: #475569; margin-top: 16px; padding: 8px 12px; border-left: 2px solid #334155; line-height: 1.5; }
 </style>
 </head>
 <body>
@@ -61,6 +63,8 @@
       <a href="/flood" style="padding:6px 12px;border-radius:6px;background:#1e293b;color:#06b6d4;font-size:13px;text-decoration:none;border:1px solid #334155;">Flood</a>
       <a href="/bushfire" style="padding:6px 12px;border-radius:6px;background:#1e293b;color:#f97316;font-size:13px;text-decoration:none;border:1px solid #334155;">Bushfire</a>
       <a href="/heat-island" style="padding:6px 12px;border-radius:6px;background:#1e293b;color:#ef4444;font-size:13px;text-decoration:none;border:1px solid #334155;">Heat Island</a>
+      <a href="/view-quality" style="padding:6px 12px;border-radius:6px;background:#1e293b;color:#8b5cf6;font-size:13px;text-decoration:none;border:1px solid #334155;">View Quality</a>
+      <a href="/contamination" style="padding:6px 12px;border-radius:6px;background:#1e293b;color:#10b981;font-size:13px;text-decoration:none;border:1px solid #334155;">Contamination</a>
     </div>
 
     <div class="coord-bar">
@@ -106,20 +110,33 @@ async function fetchScores() {
   btn.textContent = '...';
 
   const results = document.getElementById('results');
-  results.innerHTML = '<div class="status loading">Computing scores...</div>';
+  results.innerHTML = '';
 
   const scores = {};
+  let arrived = 0;
 
-  // Fetch each score independently so partial results show even if one fails
   const endpoints = [
     { key: 'solar', url: `/scores/solar?lat=${lat}&lng=${lng}` },
     { key: 'noise', url: `/scores/noise?lat=${lat}&lng=${lng}` },
     { key: 'walkability', url: `/scores/walkability?lat=${lat}&lng=${lng}` },
+    { key: 'contamination', url: `/scores/contamination?lat=${lat}&lng=${lng}` },
     { key: 'flood', url: `/scores/flood?lat=${lat}&lng=${lng}` },
     { key: 'bushfire', url: `/scores/bushfire?lat=${lat}&lng=${lng}` },
     { key: 'heat_island', url: `/scores/heat-island?lat=${lat}&lng=${lng}` },
+    { key: 'view_quality', url: `/scores/view-quality?lat=${lat}&lng=${lng}` },
   ];
 
+  // Show loading placeholders for slow scores
+  const slowKeys = new Set(['flood', 'bushfire', 'heat_island', 'view_quality']);
+  for (const ep of endpoints) {
+    const div = document.createElement('div');
+    div.id = `score-${ep.key}`;
+    div.className = 'score-card';
+    div.innerHTML = `<div class="score-header"><span class="score-name">${ep.key.replace('_',' ')}</span><span class="score-badge" style="color:#475569">...</span></div>`;
+    results.appendChild(div);
+  }
+
+  // Fetch each independently, render as they arrive
   const promises = endpoints.map(async (ep) => {
     try {
       const resp = await fetch(ep.url);
@@ -128,12 +145,15 @@ async function fetchScores() {
     } catch (err) {
       scores[ep.key] = { error: err.message };
     }
+    arrived++;
+    renderResults(lat, lng, scores);
+    if (arrived === endpoints.length) {
+      btn.disabled = false;
+      btn.textContent = 'Score';
+    }
   });
 
   await Promise.all(promises);
-  btn.disabled = false;
-  btn.textContent = 'Score';
-  renderResults(lat, lng, scores);
 }
 
 function scoreColor(score) {
@@ -230,6 +250,18 @@ function renderResults(lat, lng, scores) {
   if (scores.flood && !scores.flood.error && scores.flood.score != null) {
     const s = scores.flood;
     const zones = s.flood_zones?.length ? s.flood_zones.join(', ') : 'None';
+    let floodDetails = `<dt>Overlay Zones</dt><dd>${zones}</dd>`;
+    if (s.jrc) {
+      floodDetails += `<dt>JRC Flood Cells</dt><dd>${s.jrc.flood_cells}/${s.jrc.total_cells}</dd>`;
+      floodDetails += `<dt>Max Occurrence</dt><dd>${s.jrc.max_occurrence_pct}%</dd>`;
+      if (s.jrc.nearest_water_m != null) floodDetails += `<dt>Nearest Water</dt><dd>${s.jrc.nearest_water_m}m</dd>`;
+    }
+    if (s.hand) {
+      floodDetails += `<dt>HAND</dt><dd>${s.hand.hand_m}m above drainage</dd>`;
+    }
+    if (s.p95) {
+      floodDetails += `<dt>P95 Rainfall</dt><dd>${s.p95.p95_mm}mm/day</dd>`;
+    }
     html += `
       <div class="score-card score-flood">
         <div class="score-header">
@@ -238,10 +270,7 @@ function renderResults(lat, lng, scores) {
         </div>
         <div class="score-label">${s.label} (${s.state || 'N/A'})</div>
         <div class="score-bar"><div class="score-bar-fill" style="width:${s.score}%"></div></div>
-        <dl class="score-details">
-          <dt>Flood Zones</dt><dd>${zones}</dd>
-          <dt>Zone Count</dt><dd>${s.zone_count}</dd>
-        </dl>
+        <dl class="score-details">${floodDetails}</dl>
       </div>`;
   } else {
     html += renderError('Flood Risk', scores.flood);
@@ -251,6 +280,17 @@ function renderResults(lat, lng, scores) {
   if (scores.bushfire && !scores.bushfire.error && scores.bushfire.score != null) {
     const s = scores.bushfire;
     const zones = s.bushfire_zones?.length ? s.bushfire_zones.join(', ') : 'None';
+    let fireDetails = `<dt>Overlay</dt><dd>${zones}</dd>`;
+    if (s.vegetation) {
+      fireDetails += `<dt>Vegetation</dt><dd>${s.vegetation.land_cover_label} (fuel ${s.vegetation.fuel_risk})</dd>`;
+    }
+    if (s.slope) {
+      fireDetails += `<dt>Slope</dt><dd>${s.slope.mean_slope_deg}&deg; avg, ${s.slope.max_slope_deg}&deg; max</dd>`;
+      fireDetails += `<dt>Elevation</dt><dd>${s.slope.elevation_m}m</dd>`;
+    }
+    if (s.fire_history) {
+      fireDetails += `<dt>Fire History</dt><dd>${s.fire_history.seasons_with_fire}/${s.fire_history.total_seasons_checked} seasons</dd>`;
+    }
     html += `
       <div class="score-card score-bushfire">
         <div class="score-header">
@@ -259,9 +299,7 @@ function renderResults(lat, lng, scores) {
         </div>
         <div class="score-label">${s.label}${s.category ? ' — ' + s.category : ''}</div>
         <div class="score-bar"><div class="score-bar-fill" style="width:${s.score}%"></div></div>
-        <dl class="score-details">
-          <dt>Overlay</dt><dd>${zones}</dd>
-        </dl>
+        <dl class="score-details">${fireDetails}</dl>
       </div>`;
   } else {
     html += renderError('Bushfire Risk', scores.bushfire);
@@ -279,8 +317,10 @@ function renderResults(lat, lng, scores) {
         <div class="score-label">${s.label}</div>
         <div class="score-bar"><div class="score-bar-fill" style="width:${s.score}%"></div></div>
         <dl class="score-details">
-          <dt>Summer Mean Max</dt><dd>${s.summer_mean_c}°C</dd>
-          <dt>Summer P90 Max</dt><dd>${s.summer_p90_c}°C</dd>
+          ${s.modis_lst_c ? `<dt>Surface Temp (MODIS)</dt><dd>${s.modis_lst_c}°C</dd>` : ''}
+          ${s.uhi_delta_c != null ? `<dt>UHI Delta</dt><dd>${s.uhi_delta_c > 0 ? '+' : ''}${s.uhi_delta_c}°C</dd>` : ''}
+          ${s.summer_mean_c ? `<dt>ERA5 Summer Mean</dt><dd>${s.summer_mean_c}°C</dd>` : ''}
+          ${s.summer_p90_c ? `<dt>ERA5 P90</dt><dd>${s.summer_p90_c}°C</dd>` : ''}
           ${s.building_density != null ? `<dt>Building Density</dt><dd>${s.building_density}</dd>` : ''}
           ${s.greenspace_factor != null ? `<dt>Green Space</dt><dd>${s.greenspace_factor}</dd>` : ''}
         </dl>
@@ -288,6 +328,54 @@ function renderResults(lat, lng, scores) {
   } else {
     html += renderError('Heat Island', scores.heat_island);
   }
+
+  // View Quality
+  if (scores.view_quality && !scores.view_quality.error && scores.view_quality.score != null) {
+    const s = scores.view_quality;
+    let viewDetails = `<dt>Active Factors</dt><dd>${s.active_factors}/5</dd>`;
+    const f = s.factors || {};
+    if (f.ocean_proximity) viewDetails += `<dt>Ocean</dt><dd>${f.ocean_proximity.distance_m}m (${(f.ocean_proximity.value*100).toFixed(0)}%)</dd>`;
+    if (f.inland_water) viewDetails += `<dt>Inland Water</dt><dd>${f.inland_water.distance_m}m (${(f.inland_water.value*100).toFixed(0)}%)</dd>`;
+    if (f.elevation_advantage) viewDetails += `<dt>Elevation</dt><dd>${f.elevation_advantage.elevation_m}m (+${f.elevation_advantage.advantage_m}m)</dd>`;
+    if (f.green_space) viewDetails += `<dt>Green Space</dt><dd>${f.green_space.count} POIs, nearest ${f.green_space.nearest_m}m</dd>`;
+    if (f.building_openness) viewDetails += `<dt>Buildings 300m</dt><dd>${f.building_openness.buildings_300m} (${f.building_openness.tall_buildings} tall)</dd>`;
+    html += `
+      <div class="score-card score-view">
+        <div class="score-header">
+          <span class="score-name">View Quality</span>
+          <span class="score-badge" style="color:${scoreColor(s.score)}">${s.score}</span>
+        </div>
+        <div class="score-label">${s.label}</div>
+        <div class="score-bar"><div class="score-bar-fill" style="width:${s.score}%"></div></div>
+        <dl class="score-details">${viewDetails}</dl>
+      </div>`;
+  } else {
+    html += renderError('View Quality', scores.view_quality);
+  }
+
+  // Contamination
+  if (scores.contamination && !scores.contamination.error && scores.contamination.score != null) {
+    const s = scores.contamination;
+    const ind = s.industrial || {};
+    let contDetails = `<dt>EPA Sites (2km)</dt><dd>${s.epa_sites_count}</dd>`;
+    if (s.nearest_epa_site) contDetails += `<dt>Nearest EPA</dt><dd>${s.nearest_epa_site.distance_m}m</dd>`;
+    contDetails += `<dt>Industrial POIs (500m)</dt><dd>${ind.count_500m || 0}</dd>`;
+    if (ind.nearest_m) contDetails += `<dt>Nearest Industrial</dt><dd>${ind.nearest_type} (${ind.nearest_m}m)</dd>`;
+    html += `
+      <div class="score-card score-heat">
+        <div class="score-header">
+          <span class="score-name">Contamination</span>
+          <span class="score-badge" style="color:${scoreColor(s.score)}">${s.score}</span>
+        </div>
+        <div class="score-label">${s.label} (${s.state})</div>
+        <div class="score-bar"><div class="score-bar-fill" style="width:${s.score}%"></div></div>
+        <dl class="score-details">${contDetails}</dl>
+      </div>`;
+  } else {
+    html += renderError('Contamination', scores.contamination);
+  }
+
+  html += `<div class="disclaimer">Scores are estimates based on open data and satellite imagery. They are not professional assessments and should not be used for insurance, legal, or financial decisions. View Quality is based on proximity, not actual line-of-sight.</div>`;
 
   el.innerHTML = html;
 }

@@ -1,6 +1,6 @@
 # Noise Score — Technical Specification
 
-## Status: Production (v8 + ML)
+## Status: Production (v8 + commercial hardening)
 
 | Item | Status |
 |------|--------|
@@ -12,7 +12,11 @@
 | Overture Buildings AU-wide | Done (13,575,172 buildings, 2.0 GB) |
 | Building screening model | Done (Maekawa, pre-fetch cached — 54x faster) |
 | State GTFS rail timetables | Done — VIC 52, NSW 24, QLD 36, WA 10, SA 13 routes |
-| ANEF aircraft contours | Done — VIC only (VicPlan MAEO + AEO) |
+| ANEF aircraft contours | **Done — National** (VIC/NSW/QLD/WA civilian + 16 Defence airfields) |
+| Rail excess attenuation | Done — 0.04 dB/m beyond 50m (fixed 200-500m over-prediction) |
+| Joint class x speed AADT | Done — 2D lookup table for better Overture road estimation |
+| Cache system | Done — pre-computed grid + nearest-neighbor lookup (0.87ms) |
+| Terrain screening | Done — DEM elevation profile along source→receiver path, Maekawa barrier, 3m min height |
 | VicRoads directional dedup | Done (road_name + 10m bucket) |
 | VicRoads/Overture/NFDH deduplication | Done (80m distance threshold) |
 | State detection | Done (au_state.py bounding box) |
@@ -500,9 +504,29 @@ Physics v8 ──────── 57 features ──────► XGBoost re
 
 Physics Leq vs sensor P50: **+3.3 dB** (single point, calibrated instrument)
 
+### Independent location-based validation (2026-04-24)
+
+10/12 locations within expected range (**83%**):
+
+| Type | Passed | Example |
+|------|--------|---------|
+| Quiet residential (no rail) | 4/4 | Balwyn North 48.7 dB ✅ |
+| Near rail | 2/2 | Alamein 12m → 73.9 dB ✅ |
+| Noisy arterials | 4/6 | CityLink 70.9 dB ✅ |
+
+Key fixes applied:
+- Rail excess attenuation: 0.04 dB/m beyond 50m (was 0, causing 500m = 59 dB → now 41 dB)
+- Joint class x speed AADT: trunk × 60km/h → 15K (was speed-only 8K)
+
+## Data Disclaimer
+
+Scores are estimates based on open data. They are not professional noise assessments and should not be relied upon for planning, insurance, or legal purposes. Accuracy varies by location and depends on data coverage (AADT stations, GTFS timetables, building footprints).
+
 ## Remaining Improvement Opportunities
 
-1. **National ANEF aircraft noise** — currently VIC only, Airservices AU has national shapefiles
+1. ~~National ANEF aircraft noise~~ ✅ Done — 4 state civilian + 16 Defence airfields
 2. **More calibrated ground truth** — only 1 fixed sensor (Ballarat); DIY measurement at 50-100 locations would validate further
-3. **Terrain/vegetation features** — hills block noise, trees absorb; not yet in feature set
+3. ~~Terrain screening~~ ✅ Done — DEM-based hill detection with Maekawa attenuation (up to 15 dB)
+4. **Vegetation screening** — dense trees absorb 3-8 dB; not yet modeled (would need canopy data)
+5. **QLD/NT AADT gaps** — NFDH coverage sparse; state TMR data could supplement
 4. **NFDH 12-bin data** — vehicle CLASS bins (not time bins as initially documented); limited additional value

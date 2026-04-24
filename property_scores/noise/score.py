@@ -18,6 +18,7 @@ from property_scores.common.overture import get_db, roads_near, rail_near, aadt_
 from property_scores.common.au_state import detect_state
 from property_scores.noise.buildings import buildings_in_radius, barrier_attenuation
 from property_scores.noise.aircraft import aircraft_noise_penalty
+from property_scores.noise.terrain import terrain_attenuation
 
 # --- Calibrated AADT mappings (from VicRoads 2019 ground truth) ---
 # VicRoads monitors arterials/highways, so these are MEDIAN values for
@@ -89,8 +90,23 @@ _EVE_ADJ = 10 * math.log10(TRAFFIC_EVE_FRAC * 24 / 4)     # -1.43 dB
 _NIGHT_ADJ = 10 * math.log10(TRAFFIC_NIGHT_FRAC * 24 / 8)  # -6.20 dB
 
 
+_CLASS_SPEED_AADT: dict[tuple[str, int], int] = {
+    # (class, speed_bucket) → AADT — joint estimation
+    ("motorway", 100): 70_000, ("motorway", 80): 50_000, ("motorway", 60): 30_000,
+    ("trunk", 80): 30_000, ("trunk", 70): 20_000, ("trunk", 60): 15_000,
+    ("primary", 70): 18_000, ("primary", 60): 13_000, ("primary", 50): 9_000,
+    ("secondary", 70): 14_000, ("secondary", 60): 10_000, ("secondary", 50): 7_000,
+    ("tertiary", 60): 5_000, ("tertiary", 50): 3_500, ("tertiary", 40): 2_500,
+    ("residential", 50): 800, ("residential", 40): 500, ("residential", 30): 300,
+}
+
+
 def _estimate_aadt(road_class: str, speed_kmh: float | None) -> int:
     if speed_kmh is not None and speed_kmh > 0:
+        bucket = int(round(speed_kmh / 10) * 10)
+        joint = _CLASS_SPEED_AADT.get((road_class, bucket))
+        if joint:
+            return joint
         best_key = min(SPEED_TO_AADT.keys(), key=lambda k: abs(k - speed_kmh))
         return SPEED_TO_AADT[best_key]
     return CLASS_TO_AADT.get(road_class, 400)
@@ -122,6 +138,9 @@ def _adaptive_select(levels: list[tuple[float, dict]],
     return filtered[:max_n]
 
 
+RAIL_EXCESS_ATTEN_DB_PER_M = 0.04  # ground/atmospheric beyond 50m
+
+
 def _rail_noise_freq(rail_type: str, distance_m: float,
                      services_per_hour: float) -> float:
     """SEL-based rail noise using actual service frequency."""
@@ -133,7 +152,8 @@ def _rail_noise_freq(rail_type: str, distance_m: float,
     sel = l_peak + 10 * math.log10(duration)
     leq = sel + 10 * math.log10(services_per_hour / 3600)
     dist_atten = 10 * math.log10(distance_m / ref_dist)
-    return max(leq - dist_atten - GROUND_ABSORPTION_DB, 0.0)
+    excess = max(0, (distance_m - 50)) * RAIL_EXCESS_ATTEN_DB_PER_M
+    return max(leq - dist_atten - GROUND_ABSORPTION_DB - excess, 0.0)
 
 
 def _rail_noise_fallback(rail_class: str, distance_m: float) -> float:
@@ -143,7 +163,8 @@ def _rail_noise_fallback(rail_class: str, distance_m: float) -> float:
     l_ref, ref_dist = RAIL_NOISE_FALLBACK[rail_class]
     if distance_m < MIN_DISTANCE_M:
         distance_m = MIN_DISTANCE_M
-    return max(l_ref - 10 * math.log10(distance_m / ref_dist) - GROUND_ABSORPTION_DB, 0.0)
+    excess = max(0, (distance_m - 50)) * RAIL_EXCESS_ATTEN_DB_PER_M
+    return max(l_ref - 10 * math.log10(distance_m / ref_dist) - GROUND_ABSORPTION_DB - excess, 0.0)
 
 
 def _energy_sum(*levels: float) -> float:
@@ -288,6 +309,8 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
                 "distance_m": round(dist_m, 0),
                 "db": round(l_db_screened, 1),
                 "screening_db": round(screening, 1),
+                "src_lng": src_lng,
+                "src_lat": src_lat,
             }))
             _all_directional_sources.append((l_db_screened, _bearing(lat, lng, src_lat, src_lng), False))
 
@@ -311,6 +334,8 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
                 "distance_m": round(dist_m, 0),
                 "db": round(l_db_screened, 1),
                 "screening_db": round(screening, 1),
+                "src_lng": src_lng,
+                "src_lat": src_lat,
             }))
             _all_directional_sources.append((l_db_screened, _bearing(lat, lng, src_lat, src_lng), False))
 
@@ -346,6 +371,8 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
                 "aadt_est": aadt_est,
                 "distance_m": round(dist_m, 0),
                 "db": round(l_db, 1),
+                "src_lng": src_lng,
+                "src_lat": src_lat,
             }))
             _all_directional_sources.append((l_db, _bearing(lat, lng, src_lat, src_lng), False))
 
@@ -414,17 +441,36 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     rail_energy = sum(10 ** (l / 10) for l, _ in top_rails)
     rail_db = 10 * math.log10(rail_energy) if rail_energy > 0 else 0.0
 
-    # --- Aircraft noise (VicPlan MAEO/AEO overlays) ---
+    # --- Aircraft noise ---
     aircraft = aircraft_noise_penalty(lat, lng)
     aircraft_db = 0.0
     if aircraft["penalty_db"] > 0:
-        # Aircraft penalty is an ambient dB addition from ANEF contours.
-        # Convert to energy for summation with road/rail sources.
         aircraft_db = AMBIENT_DB + aircraft["penalty_db"]
+
+    # --- Terrain screening (DEM-based, for dominant source >200m) ---
+    terrain_screening = 0.0
+    dominant_all = sorted(
+        [(l, d) for l, d in all_road_levels + rail_levels],
+        key=lambda x: x[0], reverse=True,
+    )
+    if dominant_all:
+        dom_db, dom_info = dominant_all[0]
+        dom_dist = dom_info.get("distance_m", 0)
+        if dom_dist > 200:
+            dom_src_lng = dom_info.get("near_lng") or dom_info.get("src_lng")
+            dom_src_lat = dom_info.get("near_lat") or dom_info.get("src_lat")
+            if dom_src_lng and dom_src_lat:
+                terrain_screening = terrain_attenuation(
+                    dom_src_lat, dom_src_lng, lat, lng, dom_dist,
+                )
+
+    if terrain_screening > 0:
+        road_db = max(0, road_db - terrain_screening * 0.7)
+        rail_db = max(0, rail_db - terrain_screening)
 
     # --- L10 → Leq + Lden (time-of-day) ---
     road_leq = (road_db - L10_TO_LEQ_DB) if road_db > 0 else 0.0
-    rail_leq = rail_db  # SEL formula already gives Leq
+    rail_leq = rail_db
     aircraft_leq = aircraft_db
 
     leq_24h = max(_energy_sum(road_leq, rail_leq, aircraft_leq), AMBIENT_DB)
@@ -459,11 +505,27 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     else:
         label = "Very Loud"
 
+    # Confidence interval based on validation residuals
+    # MAE 4.63 overall; quiet <50dB areas MAE ~8; loud 60-70 areas MAE ~3.6
+    if lden < 50:
+        ci_db = 8.0
+    elif lden < 60:
+        ci_db = 5.0
+    else:
+        ci_db = 4.0
+    # Wider CI when no AADT data
+    if len(aadt_segments) == 0 and len(nfdh_stations) == 0:
+        ci_db += 3.0
+
     motor_roads = [r for r in roads if r[0] not in ("footway", "path", "steps", "cycleway", "pedestrian", "track")]
 
     result = {
         "score": score,
         "estimated_db": round(lden, 1),
+        "disclaimer": "Modelled estimate based on road/rail/aircraft data. Not a professional noise assessment. Actual noise varies with traffic, weather, and time of day.",
+        "confidence_range_db": round(ci_db, 1),
+        "estimated_db_low": round(max(lden - ci_db, AMBIENT_DB), 1),
+        "estimated_db_high": round(lden + ci_db, 1),
         "leq_db": round(leq_24h, 1),
         "lden_db": round(lden, 1),
         "leq_day_db": round(leq_day_val, 1),
@@ -493,6 +555,8 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     result["dominant_source"] = top_roads[0][1].get("road_name") or top_roads[0][1].get("class") if top_roads else None
     if building_screening_total > 0:
         result["max_building_screening_db"] = round(building_screening_total, 1)
+    if terrain_screening > 0:
+        result["terrain_screening_db"] = round(terrain_screening, 1)
 
     # Facade analysis: per-sector Lden
     facade = _facade_lden(_all_directional_sources, aircraft_db)

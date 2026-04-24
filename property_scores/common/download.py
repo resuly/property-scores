@@ -8,7 +8,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from property_scores.common.config import data_path
-from property_scores.common.overture import ROADS_FILE, POIS_FILE
+from property_scores.common.overture import ROADS_FILE, POIS_FILE, WATER_FILE
 from property_scores.noise.buildings import BUILDINGS_FILE
 
 # Australia bounding box (generous)
@@ -55,7 +55,7 @@ def download_overture(overture_type: str, bbox: tuple, output: str) -> int:
 
 def main():
     parser = argparse.ArgumentParser(description="Download Overture data")
-    parser.add_argument("--type", choices=["roads", "pois", "buildings", "both", "all"], default="both")
+    parser.add_argument("--type", choices=["roads", "pois", "buildings", "water", "both", "all"], default="both")
     parser.add_argument("--region", choices=["melbourne", "australia"], default="melbourne",
                         help="melbourne for quick test, australia for full")
     args = parser.parse_args()
@@ -70,6 +70,9 @@ def main():
 
     if args.type in ("buildings", "all"):
         download_overture("building", bbox, BUILDINGS_FILE)
+
+    if args.type in ("water", "all"):
+        download_overture("water", bbox, WATER_FILE)
 
 
 if __name__ == "__main__":

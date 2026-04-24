@@ -91,6 +91,7 @@ def solar_score(lat: float, lng: float, *,
     return {
         "score": score,
         "label": label,
+        "caveat": "Regional solar irradiance estimate. Does not account for roof orientation, shading, or available roof area.",
         "ghi_kwh_m2_year": round(ghi, 1) if ghi else None,
         "dni_kwh_m2_year": round(solar["dni_kwh_m2"], 1) if solar.get("dni_kwh_m2") else None,
         "pvout_kwh_kwp_year": round(pvout, 1),

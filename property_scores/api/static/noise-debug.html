@@ -164,24 +164,28 @@ async function initMap() {
   popup = new mapboxgl.Popup({ closeButton: false, closeOnClick: false });
   map.on('load', ensureHighlightLayer);
   map.on('click', (e) => {
-    // Always re-query noise at this point
-    document.getElementById('lat').value = e.lngLat.lat.toFixed(6);
-    document.getElementById('lng').value = e.lngLat.lng.toFixed(6);
-    query();
-
-    // ALSO highlight the parcel at this point (independent of query lifecycle)
+    // 1. FIRST highlight parcel — must happen before query() runs clearLayers()
+    //    and removes cadastre-hit, otherwise queryRenderedFeatures returns nothing.
     if (document.getElementById('t-parcels')?.checked && map.getLayer('cadastre-hit')) {
       const feats = map.queryRenderedFeatures(e.point, { layers: ['cadastre-hit'] });
       const src = map.getSource('cadastre-highlight-src');
-      if (!src) return;
-      if (feats.length) {
-        src.setData({ type: 'FeatureCollection', features: [feats[0]] });
-        showParcelInfo(feats[0].properties);
-      } else {
-        src.setData({ type: 'FeatureCollection', features: [] });
-        document.getElementById('parcel-info').classList.add('hidden');
+      if (src) {
+        if (feats.length) {
+          src.setData({ type: 'FeatureCollection', features: [feats[0]] });
+          showParcelInfo(feats[0].properties);
+        } else {
+          src.setData({ type: 'FeatureCollection', features: [] });
+          document.getElementById('parcel-info').classList.add('hidden');
+        }
       }
     }
+
+    // 2. THEN re-query noise. clearLayers() wipes cadastre-hit but the highlight
+    //    layer survives (it's not in sourceIds), so the selection stays visible
+    //    while the new cadastre tiles re-attach.
+    document.getElementById('lat').value = e.lngLat.lat.toFixed(6);
+    document.getElementById('lng').value = e.lngLat.lng.toFixed(6);
+    query();
   });
 
   // Wire toggle change handlers — re-render existing data without re-fetching

@@ -421,8 +421,8 @@ function renderResult(data, lat, lng) {
     });
   }
 
-  // ---- Wave ripple animation (uses existing source lines) ----
-  if (t.ripple) startRippleAnimation(lat, lng, src);
+  // ---- Wave ripple animation (driven by facade_sectors so it matches the rose) ----
+  if (t.ripple && s.facade_sectors) startRippleAnimation(lat, lng, s.facade_sectors);
 
   // ---- Facade pie ----
   if (t.facade && s.facade_sectors) drawFacadePie(s, lat, lng);
@@ -581,54 +581,66 @@ function attachLineHover(layerId) {
 }
 
 // ---- Sound wave ripple animation -------------------------------------------
-// For each top source, expand a ring from source toward the receiver in sync
-// with the noise frequency (louder source = faster ripple).
-function startRippleAnimation(lat, lng, src) {
+// Emits expanding 45° arcs from the receiver in each of 8 facade directions.
+// Per-direction wave period (Hz) and max radius scale with that direction's
+// dB, so ripple density visually matches the rose chart 1:1.
+function startRippleAnimation(lat, lng, facadeSectors) {
   if (rippleRAF) cancelAnimationFrame(rippleRAF);
-  // Collect top sources (max 8 total) with src_lat / src_lng + db
-  const all = [];
-  for (const a of src.aadt.slice(0, 4)) all.push({lat: a.lat, lng: a.lng, db: a.db});
-  for (const n of src.nfdh.slice(0, 2)) all.push({lat: n.lat, lng: n.lng, db: n.db});
-  for (const r of src.rail.slice(0, 4)) {
-    if (r.lat != null) all.push({lat: r.lat, lng: r.lng, db: r.db});
-  }
-  if (!all.length) return;
 
-  // Init source: empty FeatureCollection of ripple rings
+  // Init empty source — populated each frame
   addGeoJSON('ripple', { type: 'FeatureCollection', features: [] }, {
     type: 'line',
+    layout: { 'line-cap': 'round' },
     paint: {
       'line-color': ['interpolate', ['linear'], ['get', 'db'], 35, '#22c55e', 55, '#f59e0b', 75, '#ef4444'],
-      'line-width': 2,
-      'line-opacity': ['interpolate', ['linear'], ['get', 'age'], 0, 0.7, 1, 0],
+      'line-width': ['interpolate', ['linear'], ['get', 'db'], 35, 1, 80, 2.5],
+      'line-opacity': ['interpolate', ['linear'], ['get', 'age'], 0, 0.75, 1, 0],
     }
   });
 
   rippleStart = performance.now();
-  const WAVES_PER_SOURCE = 3;
+  const WAVES_PER_DIR = 3;
+  const cosLat = Math.cos(lat * Math.PI / 180);
+
   function tick(now) {
     const elapsed = (now - rippleStart) / 1000;
     const features = [];
-    for (let i = 0; i < all.length; i++) {
-      const s = all[i];
-      const period = Math.max(1.5, 5 - (s.db - 35) / 10);
-      for (let w = 0; w < WAVES_PER_SOURCE; w++) {
-        const phaseOffset = w / WAVES_PER_SOURCE;
-        const phase = ((elapsed / period + i * 0.07 + phaseOffset) % 1);
-        const radiusM = phase * 250;
-        if (radiusM < 4) continue;
+    ROSE_DIRS.forEach((dir, i) => {
+      const db = facadeSectors[dir] || 35;
+      // Louder = faster wave (1.5s @ 80dB → 5s @ 35dB)
+      const period = Math.max(1.5, 5 - (db - 35) / 10);
+      // Louder = farther reach (35dB → 60m, 80dB → 420m)
+      const maxR = 60 + Math.max(0, db - 35) * 8;
+      const startAng = i * 45 - 22.5;
+      const endAng = i * 45 + 22.5;
+
+      for (let w = 0; w < WAVES_PER_DIR; w++) {
+        const phase = ((elapsed / period + w / WAVES_PER_DIR + i * 0.05) % 1);
+        const radiusM = phase * maxR;
+        if (radiusM < 6) continue;
         features.push({
           type: 'Feature',
-          geometry: turf_circle([s.lng, s.lat], radiusM / 1000, 32).geometry,
-          properties: { db: s.db, age: phase },
+          geometry: { type: 'LineString', coordinates: arcCoords(lng, lat, radiusM, startAng, endAng, cosLat) },
+          properties: { db, age: phase },
         });
       }
-    }
+    });
     const source = map.getSource('ripple');
     if (source) source.setData({ type: 'FeatureCollection', features });
     rippleRAF = requestAnimationFrame(tick);
   }
   rippleRAF = requestAnimationFrame(tick);
+}
+
+function arcCoords(centerLng, centerLat, radiusM, startAngleDeg, endAngleDeg, cosLat) {
+  const coords = [];
+  for (let a = startAngleDeg; a <= endAngleDeg; a += 3) {
+    const rad = a * Math.PI / 180;
+    const dlat = radiusM * Math.cos(rad) / 111320;
+    const dlng = radiusM * Math.sin(rad) / (111320 * cosLat);
+    coords.push([centerLng + dlng, centerLat + dlat]);
+  }
+  return coords;
 }
 
 // ---- Facade direction rose chart ------------------------------------------

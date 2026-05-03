@@ -13,6 +13,9 @@
 <style>
   #map { position: absolute; top: 0; left: 0; right: 380px; bottom: 0; }
   .mapboxgl-ctrl-bottom-left, .mapboxgl-ctrl-bottom-right { display: none; }
+  .toggle-row { display: flex; align-items: center; gap: 6px; padding: 4px 0; cursor: pointer; user-select: none; }
+  .toggle-row input { cursor: pointer; }
+  .toggle-row span { font-size: 12px; color: #475569; }
 </style>
 </head>
 <body class="bg-slate-50 font-sans text-slate-900">
@@ -31,8 +34,19 @@
       <input id="lng" type="number" step="any" placeholder="Lng" value="144.9631" class="input-field flex-1 min-w-0">
       <button onclick="query()" class="btn-primary">Go</button>
     </div>
+
+    <!-- Layer toggles -->
+    <div class="card p-3 mb-4">
+      <div class="text-xs font-semibold text-slate-500 mb-2 uppercase tracking-wide">Layers</div>
+      <label class="toggle-row"><input type="checkbox" id="t-screening" checked> <span>Building screening (color sources by attenuation)</span></label>
+      <label class="toggle-row"><input type="checkbox" id="t-ripple" checked> <span>Sound wave ripple animation</span></label>
+      <label class="toggle-row"><input type="checkbox" id="t-terrain" checked> <span>Terrain profile to dominant source</span></label>
+      <label class="toggle-row"><input type="checkbox" id="t-facade" checked> <span>Facade direction pie</span></label>
+    </div>
+
     <div id="loading" class="hidden text-brand-500 text-sm py-5 text-center">Querying noise sources...</div>
     <div id="score-box" class="hidden card p-4 mb-4"></div>
+    <div id="terrain-chart" class="hidden card p-3 mb-4"></div>
     <div id="sources"></div>
   </div>
 </div>
@@ -43,12 +57,21 @@
   <div class="flex items-center gap-2 mb-1"><span class="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block"></span> NFDH Station</div>
   <div class="flex items-center gap-2 mb-1"><span class="w-5 h-0.5 bg-blue-500 inline-block rounded"></span> Train</div>
   <div class="flex items-center gap-2 mb-1"><span class="w-5 h-0.5 bg-green-500 inline-block rounded"></span> Tram</div>
-  <div class="flex items-center gap-2"><span class="w-3.5 h-3.5 rounded-full bg-violet-500 inline-block"></span> Query Point</div>
+  <div class="flex items-center gap-2 mb-1"><span class="w-3.5 h-3.5 rounded-full bg-violet-500 inline-block"></span> Query Point</div>
+  <div class="flex items-center gap-2 pt-1 mt-1 border-t border-slate-200"><span class="w-5 h-0.5 inline-block rounded" style="background:linear-gradient(to right,#ef4444,#22c55e)"></span> Direct → Screened</div>
 </div>
 
 <script>
 let map, popup;
 const sourceIds = [];
+let lastData = null;        // cache of last debug response
+let rippleRAF = null;       // animation frame id
+let rippleStart = 0;        // animation start time
+const TOGGLE_IDS = ['t-screening', 't-ripple', 't-terrain', 't-facade'];
+
+function getToggles() {
+  return Object.fromEntries(TOGGLE_IDS.map(id => [id.slice(2), document.getElementById(id).checked]));
+}
 
 async function initMap() {
   const cfg = await fetch('/api/config').then(r => r.json());
@@ -66,10 +89,18 @@ async function initMap() {
     document.getElementById('lng').value = e.lngLat.lng.toFixed(6);
     query();
   });
+
+  // Wire toggle change handlers — re-render existing data without re-fetching
+  for (const id of TOGGLE_IDS) {
+    document.getElementById(id).addEventListener('change', () => {
+      if (lastData) renderResult(lastData, lastData.query.lat, lastData.query.lng);
+    });
+  }
 }
 initMap();
 
 function clearLayers() {
+  if (rippleRAF) { cancelAnimationFrame(rippleRAF); rippleRAF = null; }
   for (const id of sourceIds) {
     if (map.getLayer(id)) map.removeLayer(id);
     if (map.getSource(id)) map.removeSource(id);
@@ -87,6 +118,17 @@ function scoreColor(score) {
   return score >= 60 ? '#16a34a' : score >= 40 ? '#d97706' : '#dc2626';
 }
 
+// Color a source line by screening dB:
+//   0 dB screening = direct line of sight = red
+//   25 dB screening = fully blocked = green
+function screeningColor(screeningDb) {
+  const t = Math.min(Math.max(screeningDb / 25, 0), 1);
+  const r = Math.round(239 + (34 - 239) * t);   // 239→34
+  const g = Math.round(68 + (197 - 68) * t);    // 68→197
+  const b = Math.round(68 + (94 - 68) * t);     // 68→94
+  return `rgb(${r},${g},${b})`;
+}
+
 async function query() {
   const lat = parseFloat(document.getElementById('lat').value);
   const lng = parseFloat(document.getElementById('lng').value);
@@ -94,27 +136,18 @@ async function query() {
 
   document.getElementById('loading').classList.remove('hidden');
   document.getElementById('score-box').classList.add('hidden');
+  document.getElementById('terrain-chart').classList.add('hidden');
   document.getElementById('sources').innerHTML = '';
   clearLayers();
 
   map.flyTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), 16) });
-
-  // Query point
-  addGeoJSON('query-pt', { type: 'Feature', geometry: { type: 'Point', coordinates: [lng, lat] } }, {
-    type: 'circle', paint: { 'circle-radius': 8, 'circle-color': '#8b5cf6', 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' }
-  });
-
-  // Radius circle (approx)
-  const circle = turf_circle([lng, lat], 0.5);
-  addGeoJSON('radius', circle, {
-    type: 'line', paint: { 'line-color': '#8b5cf6', 'line-width': 1, 'line-dasharray': [4, 4], 'line-opacity': 0.5 }
-  });
 
   try {
     const resp = await fetch(`/scores/noise/debug?lat=${lat}&lng=${lng}&radius=500`);
     const data = await resp.json();
     document.getElementById('loading').classList.add('hidden');
     if (data.error) { document.getElementById('sources').innerHTML = `<p class="text-red-500 text-sm">${data.error}</p>`; return; }
+    lastData = data;
     renderResult(data, lat, lng);
   } catch(e) {
     document.getElementById('loading').classList.add('hidden');
@@ -123,9 +156,12 @@ async function query() {
 }
 
 function renderResult(data, lat, lng) {
+  clearLayers();
+  const t = getToggles();
   const s = data.score;
   const color = scoreColor(s.score);
 
+  // ---- Score panel ----
   const box = document.getElementById('score-box');
   box.classList.remove('hidden');
   box.innerHTML = `
@@ -155,85 +191,85 @@ function renderResult(data, lat, lng) {
       </div>
     </div>` : ''}`;
 
+  // Always-on basics: query point + radius
+  addGeoJSON('query-pt', { type: 'Feature', geometry: { type: 'Point', coordinates: [lng, lat] } }, {
+    type: 'circle', paint: { 'circle-radius': 8, 'circle-color': '#8b5cf6', 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' }
+  });
+  const circle = turf_circle([lng, lat], 0.5);
+  addGeoJSON('radius', circle, {
+    type: 'line', paint: { 'line-color': '#8b5cf6', 'line-width': 1, 'line-dasharray': [4, 4], 'line-opacity': 0.5 }
+  });
+
+  // ---- Source list (sidebar) + map markers ----
   const src = data.sources;
   let html = '';
 
-  // AADT sources
+  // AADT
   if (src.aadt.length) {
     html += `<h3 class="text-sm font-semibold text-brand-600 mt-4 mb-2">VicRoads AADT (${src.aadt.length})</h3>`;
     src.aadt.sort((a,b) => b.db - a.db);
-    const features = [];
-    const lines = [];
+    const features = [], lines = [];
     for (const a of src.aadt.slice(0, 10)) {
       html += `<div class="pl-3 border-l-2 border-red-400 py-1.5 mb-1 cursor-pointer hover:bg-slate-50 rounded-r text-xs" onclick="map.flyTo({center:[${a.lng},${a.lat}],zoom:18})">
         <div class="font-semibold text-slate-700">${a.road_name || 'Unknown'}</div>
-        <div class="text-slate-400">AADT ${a.aadt.toLocaleString()} | ${a.distance_m}m | ${a.db} dB</div>
+        <div class="text-slate-400">AADT ${a.aadt.toLocaleString()} | ${a.distance_m}m | ${a.db} dB${a.screening_db ? ` <span class="text-emerald-600">(-${a.screening_db})</span>` : ''}</div>
       </div>`;
-      features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [a.lng, a.lat] }, properties: { aadt: a.aadt, name: a.road_name, db: a.db, dist: a.distance_m } });
-      lines.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: [[lng, lat], [a.lng, a.lat]] } });
+      features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [a.lng, a.lat] }, properties: { aadt: a.aadt, name: a.road_name, db: a.db, dist: a.distance_m, screening: a.screening_db || 0 } });
+      lines.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: [[lng, lat], [a.lng, a.lat]] }, properties: { screening: a.screening_db || 0, db: a.db, name: a.road_name } });
     }
     if (features.length) {
       addGeoJSON('aadt-pts', { type: 'FeatureCollection', features }, {
         type: 'circle', paint: { 'circle-radius': ['interpolate', ['linear'], ['get', 'aadt'], 0, 3, 50000, 12], 'circle-color': '#ef4444', 'circle-opacity': 0.7 }
       });
-      addGeoJSON('aadt-lines', { type: 'FeatureCollection', features: lines }, {
-        type: 'line', paint: { 'line-color': '#ef4444', 'line-width': 1, 'line-opacity': 0.3, 'line-dasharray': [3, 3] }
-      });
-      map.on('mousemove', 'aadt-pts', (e) => {
-        if (!e.features.length) return;
-        const p = e.features[0].properties;
-        popup.setLngLat(e.lngLat).setHTML(`<div style="font-size:12px"><b>${p.name || 'Unknown'}</b><br>AADT: ${Number(p.aadt).toLocaleString()}<br>${p.dist}m | ${p.db} dB</div>`).addTo(map);
-        map.getCanvas().style.cursor = 'pointer';
-      });
-      map.on('mouseleave', 'aadt-pts', () => { popup.remove(); map.getCanvas().style.cursor = ''; });
+      addGeoJSON('aadt-lines', { type: 'FeatureCollection', features: lines }, sourceLineLayerDef(t.screening));
+      attachLineHover('aadt-lines');
     }
   }
 
-  // NFDH sources
+  // NFDH
   if (src.nfdh.length) {
     html += `<h3 class="text-sm font-semibold text-amber-600 mt-4 mb-2">NFDH Stations (${src.nfdh.length})</h3>`;
     src.nfdh.sort((a,b) => b.db - a.db);
-    const features = [];
-    const nfdhLines = [];
+    const features = [], nLines = [];
     for (const n of src.nfdh.slice(0, 10)) {
       html += `<div class="pl-3 border-l-2 border-amber-400 py-1.5 mb-1 cursor-pointer hover:bg-slate-50 rounded-r text-xs" onclick="map.flyTo({center:[${n.lng},${n.lat}],zoom:18})">
         <div class="font-semibold text-slate-700">${n.road_name || 'Station'}</div>
-        <div class="text-slate-400">AADT ${n.aadt.toLocaleString()} | ${n.distance_m}m | ${n.db} dB</div>
+        <div class="text-slate-400">AADT ${n.aadt.toLocaleString()} | ${n.distance_m}m | ${n.db} dB${n.screening_db ? ` <span class="text-emerald-600">(-${n.screening_db})</span>` : ''}</div>
       </div>`;
-      features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [n.lng, n.lat] }, properties: { aadt: n.aadt, name: n.road_name, db: n.db, dist: n.distance_m } });
-      nfdhLines.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: [[lng, lat], [n.lng, n.lat]] } });
+      features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [n.lng, n.lat] }, properties: { aadt: n.aadt, name: n.road_name, db: n.db, dist: n.distance_m, screening: n.screening_db || 0 } });
+      nLines.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: [[lng, lat], [n.lng, n.lat]] }, properties: { screening: n.screening_db || 0, db: n.db, name: n.road_name } });
     }
     if (features.length) {
       addGeoJSON('nfdh-pts', { type: 'FeatureCollection', features }, {
         type: 'circle', paint: { 'circle-radius': ['interpolate', ['linear'], ['get', 'aadt'], 0, 3, 50000, 12], 'circle-color': '#f59e0b', 'circle-opacity': 0.7 }
       });
-      addGeoJSON('nfdh-lines', { type: 'FeatureCollection', features: nfdhLines }, {
-        type: 'line', paint: { 'line-color': '#f59e0b', 'line-width': 1, 'line-opacity': 0.3, 'line-dasharray': [3, 3] }
-      });
-      map.on('mousemove', 'nfdh-pts', (e) => {
-        if (!e.features.length) return;
-        const p = e.features[0].properties;
-        popup.setLngLat(e.lngLat).setHTML(`<div style="font-size:12px"><b>${p.name || 'NFDH Station'}</b><br>AADT: ${Number(p.aadt).toLocaleString()}<br>${p.dist}m | ${p.db} dB</div>`).addTo(map);
-        map.getCanvas().style.cursor = 'pointer';
-      });
-      map.on('mouseleave', 'nfdh-pts', () => { popup.remove(); map.getCanvas().style.cursor = ''; });
+      addGeoJSON('nfdh-lines', { type: 'FeatureCollection', features: nLines }, sourceLineLayerDef(t.screening));
+      attachLineHover('nfdh-lines');
     }
   }
 
-  // Rail sources
+  // Rail (sidebar list + screening lines if rail source has lat/lng)
   if (src.rail.length) {
     html += `<h3 class="text-sm font-semibold text-blue-600 mt-4 mb-2">Rail/Tram (${src.rail.length})</h3>`;
     src.rail.sort((a,b) => b.db - a.db);
+    const railLineFeats = [];
     for (const r of src.rail) {
       const icon = r.type === 'tram' ? 'Tram' : 'Train';
       html += `<div class="pl-3 border-l-2 border-blue-400 py-1.5 mb-1 text-xs">
         <div class="font-semibold text-slate-700">${icon}: ${r.route}</div>
-        <div class="text-slate-400">${r.distance_m}m | ${r.db} dB | ${r.peak_svc_hr || '?'}/hr peak</div>
+        <div class="text-slate-400">${r.distance_m}m | ${r.db} dB${r.screening_db ? ` <span class="text-emerald-600">(-${r.screening_db})</span>` : ''} | ${r.peak_svc_hr || '?'}/hr peak</div>
       </div>`;
+      if (r.lat != null && r.lng != null) {
+        railLineFeats.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: [[lng, lat], [r.lng, r.lat]] }, properties: { screening: r.screening_db || 0, db: r.db, name: `${icon}: ${r.route}` } });
+      }
+    }
+    if (railLineFeats.length) {
+      addGeoJSON('rail-screening-lines', { type: 'FeatureCollection', features: railLineFeats }, sourceLineLayerDef(t.screening));
+      attachLineHover('rail-screening-lines');
     }
   }
 
-  // Rail shapes
+  // Rail track shapes
   const railFeatures = [];
   for (const shape of (src.rail_shapes || [])) {
     if (shape.coords.length < 2) continue;
@@ -245,48 +281,200 @@ function renderResult(data, lat, lng) {
     });
   }
 
-  // Facade sectors
-  if (s.facade_sectors) {
-    const dirs = ['N','NE','E','SE','S','SW','W','NW'];
-    const vals = dirs.map(d => s.facade_sectors[d] || 35);
-    const maxDb = Math.max(...vals);
-    const minDb = Math.min(...vals);
-    const sectorFeatures = [];
-    dirs.forEach((dir, i) => {
-      const startAngle = i * 45 - 22.5;
-      const endAngle = startAngle + 45;
-      const db = vals[i];
-      const t = maxDb > minDb ? (db - minDb) / (maxDb - minDb) : 0.5;
-      const r = Math.round(t > 0.5 ? 255 : t * 2 * 255);
-      const g = Math.round(t < 0.5 ? 255 : (1 - t) * 2 * 255);
-      const color = `rgb(${r},${g},50)`;
-      const radius = 120;
-      const coords = [[lng, lat]];
-      for (let a = startAngle; a <= endAngle; a += 5) {
-        const rad = a * Math.PI / 180;
-        const dlat = radius * Math.cos(rad) / 111320;
-        const dlng = radius * Math.sin(rad) / (111320 * Math.cos(lat * Math.PI / 180));
-        coords.push([lng + dlng, lat + dlat]);
-      }
-      coords.push([lng, lat]);
-      sectorFeatures.push({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [coords] }, properties: { color, db, dir } });
-    });
-    addGeoJSON('facade', { type: 'FeatureCollection', features: sectorFeatures }, {
-      type: 'fill', paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.35 }
-    });
-    addGeoJSON('facade-border', { type: 'FeatureCollection', features: sectorFeatures }, {
-      type: 'line', paint: { 'line-color': ['get', 'color'], 'line-width': 1, 'line-opacity': 0.6 }
-    });
-    map.on('mousemove', 'facade', (e) => {
-      if (!e.features.length) return;
-      const p = e.features[0].properties;
-      popup.setLngLat(e.lngLat).setHTML(`<span style="font-size:12px;font-weight:600">${p.dir}: ${p.db} dB</span>`).addTo(map);
-      map.getCanvas().style.cursor = 'pointer';
-    });
-    map.on('mouseleave', 'facade', () => { popup.remove(); map.getCanvas().style.cursor = ''; });
+  // ---- Wave ripple animation (uses existing source lines) ----
+  if (t.ripple) startRippleAnimation(lat, lng, src);
+
+  // ---- Facade pie ----
+  if (t.facade && s.facade_sectors) drawFacadePie(s, lat, lng);
+
+  // ---- Terrain elevation profile ----
+  if (t.terrain && data.terrain) {
+    drawTerrainProfile(data.terrain, lat, lng);
+  } else {
+    document.getElementById('terrain-chart').classList.add('hidden');
   }
 
   document.getElementById('sources').innerHTML = html;
+}
+
+// Layer definition for source-to-receiver line, optionally colored by screening
+function sourceLineLayerDef(showScreening) {
+  if (showScreening) {
+    return {
+      type: 'line',
+      paint: {
+        // 0 dB screening (direct) → red, 25 dB → green
+        'line-color': ['interpolate', ['linear'], ['get', 'screening'], 0, '#ef4444', 12, '#f59e0b', 25, '#22c55e'],
+        'line-width': ['interpolate', ['linear'], ['get', 'screening'], 0, 2, 25, 1],
+        'line-opacity': 0.7,
+      }
+    };
+  }
+  return { type: 'line', paint: { 'line-color': '#94a3b8', 'line-width': 1, 'line-opacity': 0.4, 'line-dasharray': [3, 3] } };
+}
+
+function attachLineHover(layerId) {
+  map.on('mousemove', layerId, (e) => {
+    if (!e.features.length) return;
+    const p = e.features[0].properties;
+    popup.setLngLat(e.lngLat).setHTML(
+      `<div style="font-size:12px"><b>${p.name || ''}</b><br>${p.db} dB · screening -${p.screening || 0} dB</div>`
+    ).addTo(map);
+    map.getCanvas().style.cursor = 'pointer';
+  });
+  map.on('mouseleave', layerId, () => { popup.remove(); map.getCanvas().style.cursor = ''; });
+}
+
+// ---- Sound wave ripple animation -------------------------------------------
+// For each top source, expand a ring from source toward the receiver in sync
+// with the noise frequency (louder source = faster ripple).
+function startRippleAnimation(lat, lng, src) {
+  if (rippleRAF) cancelAnimationFrame(rippleRAF);
+  // Collect top sources (max 8 total) with src_lat / src_lng + db
+  const all = [];
+  for (const a of src.aadt.slice(0, 4)) all.push({lat: a.lat, lng: a.lng, db: a.db});
+  for (const n of src.nfdh.slice(0, 2)) all.push({lat: n.lat, lng: n.lng, db: n.db});
+  for (const r of src.rail.slice(0, 4)) {
+    if (r.lat != null) all.push({lat: r.lat, lng: r.lng, db: r.db});
+  }
+  if (!all.length) return;
+
+  // Init source: empty FeatureCollection of ripple rings
+  addGeoJSON('ripple', { type: 'FeatureCollection', features: [] }, {
+    type: 'line',
+    paint: {
+      'line-color': ['interpolate', ['linear'], ['get', 'db'], 35, '#22c55e', 55, '#f59e0b', 75, '#ef4444'],
+      'line-width': 2,
+      'line-opacity': ['interpolate', ['linear'], ['get', 'age'], 0, 0.7, 1, 0],
+    }
+  });
+
+  rippleStart = performance.now();
+  function tick(now) {
+    const elapsed = (now - rippleStart) / 1000; // seconds
+    const features = [];
+    for (let i = 0; i < all.length; i++) {
+      const s = all[i];
+      // Period scales inversely with dB: louder sources ripple faster (1.5s @ 75dB → 4s @ 35dB)
+      const period = Math.max(1.5, 5 - (s.db - 35) / 10);
+      const phase = ((elapsed + i * 0.3) % period) / period;  // 0 → 1
+      const radiusM = phase * 250;  // expand to 250m
+      if (radiusM < 5) continue;
+      features.push({
+        type: 'Feature',
+        geometry: turf_circle([s.lng, s.lat], radiusM / 1000, 48).geometry,
+        properties: { db: s.db, age: phase },
+      });
+    }
+    const source = map.getSource('ripple');
+    if (source) source.setData({ type: 'FeatureCollection', features });
+    rippleRAF = requestAnimationFrame(tick);
+  }
+  rippleRAF = requestAnimationFrame(tick);
+}
+
+// ---- Facade direction pie --------------------------------------------------
+function drawFacadePie(s, lat, lng) {
+  const dirs = ['N','NE','E','SE','S','SW','W','NW'];
+  const vals = dirs.map(d => s.facade_sectors[d] || 35);
+  const maxDb = Math.max(...vals);
+  const minDb = Math.min(...vals);
+  const sectorFeatures = [];
+  dirs.forEach((dir, i) => {
+    const startAngle = i * 45 - 22.5;
+    const endAngle = startAngle + 45;
+    const db = vals[i];
+    const t = maxDb > minDb ? (db - minDb) / (maxDb - minDb) : 0.5;
+    const r = Math.round(t > 0.5 ? 255 : t * 2 * 255);
+    const g = Math.round(t < 0.5 ? 255 : (1 - t) * 2 * 255);
+    const color = `rgb(${r},${g},50)`;
+    const radius = 120;
+    const coords = [[lng, lat]];
+    for (let a = startAngle; a <= endAngle; a += 5) {
+      const rad = a * Math.PI / 180;
+      const dlat = radius * Math.cos(rad) / 111320;
+      const dlng = radius * Math.sin(rad) / (111320 * Math.cos(lat * Math.PI / 180));
+      coords.push([lng + dlng, lat + dlat]);
+    }
+    coords.push([lng, lat]);
+    sectorFeatures.push({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [coords] }, properties: { color, db, dir } });
+  });
+  addGeoJSON('facade', { type: 'FeatureCollection', features: sectorFeatures }, {
+    type: 'fill', paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.35 }
+  });
+  addGeoJSON('facade-border', { type: 'FeatureCollection', features: sectorFeatures }, {
+    type: 'line', paint: { 'line-color': ['get', 'color'], 'line-width': 1, 'line-opacity': 0.6 }
+  });
+  map.on('mousemove', 'facade', (e) => {
+    if (!e.features.length) return;
+    const p = e.features[0].properties;
+    popup.setLngLat(e.lngLat).setHTML(`<span style="font-size:12px;font-weight:600">${p.dir}: ${p.db} dB</span>`).addTo(map);
+    map.getCanvas().style.cursor = 'pointer';
+  });
+  map.on('mouseleave', 'facade', () => { popup.remove(); map.getCanvas().style.cursor = ''; });
+}
+
+// ---- Terrain elevation profile ---------------------------------------------
+function drawTerrainProfile(terrain, lat, lng) {
+  const samples = terrain.samples || [];
+  if (samples.length < 2) {
+    document.getElementById('terrain-chart').classList.add('hidden');
+    return;
+  }
+
+  const W = 320, H = 120, padL = 32, padR = 8, padT = 8, padB = 22;
+  const xs = samples.map(s => s.dist_m);
+  const ys = samples.flatMap(s => [s.elev_m, s.sight_line_m]).filter(v => v != null);
+  const xMin = Math.min(...xs), xMax = Math.max(...xs);
+  const yMin = Math.min(...ys) - 1;
+  const yMax = Math.max(...ys) + 1;
+
+  const sx = d => padL + (d - xMin) / (xMax - xMin) * (W - padL - padR);
+  const sy = e => H - padB - (e - yMin) / (yMax - yMin) * (H - padT - padB);
+
+  // Ground polygon (terrain elevation, filled)
+  let ground = `M ${sx(samples[0].dist_m)} ${H - padB}`;
+  for (const s of samples) ground += ` L ${sx(s.dist_m)} ${sy(s.elev_m)}`;
+  ground += ` L ${sx(samples[samples.length-1].dist_m)} ${H - padB} Z`;
+
+  // Sight line (source ear height → receiver ear height)
+  const sightLine = samples.map((s, i) => `${i === 0 ? 'M' : 'L'} ${sx(s.dist_m)} ${sy(s.sight_line_m)}`).join(' ');
+
+  // Detect any blocking ridges (ground above sight line by ≥ 3m)
+  const blockedSamples = samples.filter(s => (s.elev_m || 0) - (s.sight_line_m || 0) >= 3);
+  const blockedHTML = blockedSamples.length
+    ? `<div class="text-xs text-amber-700 mt-1">Ridge blocks sight line at ${blockedSamples.length} sample point${blockedSamples.length>1?'s':''}.</div>`
+    : `<div class="text-xs text-emerald-700 mt-1">Direct line of sight (no terrain blocking).</div>`;
+
+  const chart = document.getElementById('terrain-chart');
+  chart.classList.remove('hidden');
+  chart.innerHTML = `
+    <div class="flex items-center justify-between mb-1">
+      <div class="text-xs font-semibold text-slate-600">Terrain → ${terrain.source_name || 'Source'}</div>
+      <div class="text-[11px] text-slate-400">${terrain.total_dist_m}m · ${terrain.source_db} dB raw</div>
+    </div>
+    <svg viewBox="0 0 ${W} ${H}" class="w-full">
+      <path d="${ground}" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1"/>
+      <path d="${sightLine}" fill="none" stroke="#ef4444" stroke-width="1.5" stroke-dasharray="3,2"/>
+      <text x="2" y="${sy(yMax)+4}" font-size="9" fill="#64748b">${yMax.toFixed(0)}m</text>
+      <text x="2" y="${sy(yMin)+4}" font-size="9" fill="#64748b">${yMin.toFixed(0)}m</text>
+      <text x="${padL}" y="${H-6}" font-size="9" fill="#64748b">source</text>
+      <text x="${W-padR-30}" y="${H-6}" font-size="9" fill="#64748b">you</text>
+    </svg>
+    ${blockedHTML}
+  `;
+
+  // Also draw source-to-receiver line on map highlighted (so user can see which source profile is for)
+  if (terrain.source_lat != null && terrain.source_lng != null) {
+    addGeoJSON('terrain-line', {
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: [[terrain.source_lng, terrain.source_lat], [lng, lat]] },
+      properties: {},
+    }, {
+      type: 'line',
+      paint: { 'line-color': '#7c3aed', 'line-width': 2, 'line-dasharray': [2, 2], 'line-opacity': 0.8 },
+    });
+  }
 }
 
 function turf_circle(center, radiusKm, steps = 64) {

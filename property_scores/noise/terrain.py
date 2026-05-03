@@ -86,3 +86,56 @@ def terrain_attenuation(source_lat: float, source_lng: float,
             best_atten = atten
 
     return best_atten
+
+
+def elevation_profile(source_lat: float, source_lng: float,
+                      receiver_lat: float, receiver_lng: float,
+                      n_samples: int = 21) -> dict | None:
+    """Sample DEM elevation along the source-receiver path for visualization.
+
+    Returns dict with `samples` (list of {dist_m, elev_m, sight_line_m}),
+    `source_height_m`, `receiver_height_m`, and the total path distance.
+    Returns None if the elevation API fails.
+    """
+    lats = [source_lat + i / (n_samples - 1) * (receiver_lat - source_lat)
+            for i in range(n_samples)]
+    lngs = [source_lng + i / (n_samples - 1) * (receiver_lng - source_lng)
+            for i in range(n_samples)]
+
+    try:
+        resp = requests.get(OPEN_METEO_ELEV, params={
+            "latitude": ",".join(f"{x:.6f}" for x in lats),
+            "longitude": ",".join(f"{x:.6f}" for x in lngs),
+        }, timeout=5)
+        if not resp.ok:
+            return None
+        elevations = resp.json().get("elevation", [])
+        if len(elevations) < n_samples:
+            return None
+    except (requests.RequestException, ValueError, KeyError):
+        return None
+
+    src_elev = elevations[0] + SOURCE_HEIGHT
+    rcv_elev = elevations[-1] + RECEIVER_HEIGHT
+
+    # Total ground distance
+    dlat = (receiver_lat - source_lat) * 111_320
+    dlng = (receiver_lng - source_lng) * 111_320 * math.cos(math.radians((source_lat + receiver_lat) / 2))
+    total_dist = math.sqrt(dlat * dlat + dlng * dlng)
+
+    samples = []
+    for i in range(n_samples):
+        frac = i / (n_samples - 1)
+        sight = src_elev + frac * (rcv_elev - src_elev)
+        samples.append({
+            "dist_m": round(total_dist * frac, 1),
+            "elev_m": round(elevations[i], 1) if elevations[i] is not None else None,
+            "sight_line_m": round(sight, 1),
+        })
+
+    return {
+        "samples": samples,
+        "source_height_m": SOURCE_HEIGHT,
+        "receiver_height_m": RECEIVER_HEIGHT,
+        "total_dist_m": round(total_dist, 1),
+    }

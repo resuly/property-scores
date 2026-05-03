@@ -609,7 +609,7 @@ function startRippleAnimation(lat, lng, src) {
     if (rl.lat != null) emitters.push({lat: rl.lat, lng: rl.lng, db: rl.db});
   }
   emitters.sort((a, b) => b.db - a.db);
-  const top = emitters.slice(0, 25);
+  const top = emitters.slice(0, 12);  // fewer simultaneous emitters reduces visual noise
   if (!top.length) return;
 
   addGeoJSON('ripple', { type: 'FeatureCollection', features: [] }, {
@@ -617,21 +617,21 @@ function startRippleAnimation(lat, lng, src) {
     layout: { 'line-cap': 'round' },
     paint: {
       'line-color': ['interpolate', ['linear'], ['get', 'db'], 35, '#22c55e', 55, '#f59e0b', 75, '#ef4444'],
-      'line-width': ['interpolate', ['linear'], ['get', 'db'], 35, 1, 80, 2.2],
-      'line-opacity': ['interpolate', ['linear'], ['get', 'age'], 0, 0.75, 1, 0],
+      'line-width': ['interpolate', ['linear'], ['get', 'db'], 35, 0.8, 80, 1.8],
+      'line-opacity': ['interpolate', ['linear'], ['get', 'age'], 0, 0.55, 1, 0],
     }
   });
 
   rippleStart = performance.now();
-  const WAVES_PER_SOURCE = 3;
+  const WAVES_PER_SOURCE = 2;  // was 3 — halve overlap
 
   function tick(now) {
     const elapsed = (now - rippleStart) / 1000;
     const features = [];
     for (let i = 0; i < top.length; i++) {
       const s = top[i];
-      // Louder = faster (1.5s @ 80dB → 5s @ 35dB)
-      const period = Math.max(1.5, 5 - (s.db - 35) / 10);
+      // Slower than before: 3s @ 80dB → 8s @ 35dB
+      const period = Math.max(3, 8 - (s.db - 35) / 9);
       // Louder = farther reach (35dB → 80m, 80dB → 360m)
       const maxR = 80 + Math.max(0, s.db - 35) * 6;
       for (let w = 0; w < WAVES_PER_SOURCE; w++) {

@@ -3,7 +3,7 @@
 import math
 
 from property_scores.common.overture import (
-    get_db, aadt_near, nfdh_near, gtfs_rail_near, rail_near,
+    get_db, aadt_near, nfdh_near, gtfs_rail_near, rail_near, roads_near,
 )
 from property_scores.common.config import data_path
 from property_scores.common.overture import AU_RAIL_SHAPES_FILE, PTV_SHAPES_FILE
@@ -135,6 +135,30 @@ def noise_debug(lat: float, lng: float, radius_m: int = 500) -> dict:
 
     rail_shapes = _rail_shapes_near(db, lat, lng, radius_m)
 
+    # Top Overture road sources (lat/lng of closest point on each road segment)
+    # for the ripple animation, so wave fronts emanate from real streets.
+    overture_sources = []
+    for road_class, dist_m, speed_kmh, src_lng, src_lat in roads_near(db, lat, lng, radius_m):
+        if road_class in ("footway", "path", "steps", "cycleway", "pedestrian", "track"):
+            continue
+        aadt_est = CLASS_TO_AADT.get(road_class, 400)
+        l_db = _crtn_noise(aadt_est, dist_m)
+        if l_db <= 0:
+            continue
+        screening = _screening(src_lng, src_lat, dist_m)
+        l_db_screened = max(l_db - screening, 0.0)
+        if l_db_screened < 30:
+            continue
+        overture_sources.append({
+            "lat": src_lat, "lng": src_lng,
+            "class": road_class,
+            "distance_m": round(dist_m),
+            "db": round(l_db_screened, 1),
+            "screening_db": round(screening, 1),
+        })
+    overture_sources.sort(key=lambda s: s["db"], reverse=True)
+    overture_sources = overture_sources[:30]
+
     # Identify dominant source for optional terrain profile (no API call here)
     terrain_source = None
     all_sources = aadt_sources + nfdh_sources + [s for s in rail_sources if "lat" in s]
@@ -157,6 +181,7 @@ def noise_debug(lat: float, lng: float, radius_m: int = 500) -> dict:
             "nfdh": nfdh_sources,
             "rail": rail_sources,
             "rail_shapes": rail_shapes,
+            "overture_roads": overture_sources,
         },
         "terrain_source": terrain_source,
     }

@@ -135,16 +135,23 @@ def noise_debug(lat: float, lng: float, radius_m: int = 500) -> dict:
 
     rail_shapes = _rail_shapes_near(db, lat, lng, radius_m)
 
-    # Top Overture road sources (lat/lng of closest point on each road segment)
-    # for the ripple animation, so wave fronts emanate from real streets.
-    overture_sources = []
+    # Top Overture road sources for the ripple animation.
+    # Two-pass: cheap raw-dB filter to pick top 30 candidates, then run the
+    # expensive barrier_attenuation only on those (avoids screening hundreds
+    # of segments in dense CBD blocks).
+    candidates = []
     for road_class, dist_m, speed_kmh, src_lng, src_lat in roads_near(db, lat, lng, radius_m):
         if road_class in ("footway", "path", "steps", "cycleway", "pedestrian", "track"):
             continue
         aadt_est = CLASS_TO_AADT.get(road_class, 400)
         l_db = _crtn_noise(aadt_est, dist_m)
-        if l_db <= 0:
+        if l_db < 35:
             continue
+        candidates.append((l_db, road_class, dist_m, src_lng, src_lat))
+    candidates.sort(key=lambda x: -x[0])
+
+    overture_sources = []
+    for l_db, road_class, dist_m, src_lng, src_lat in candidates[:30]:
         screening = _screening(src_lng, src_lat, dist_m)
         l_db_screened = max(l_db - screening, 0.0)
         if l_db_screened < 30:
@@ -156,8 +163,6 @@ def noise_debug(lat: float, lng: float, radius_m: int = 500) -> dict:
             "db": round(l_db_screened, 1),
             "screening_db": round(screening, 1),
         })
-    overture_sources.sort(key=lambda s: s["db"], reverse=True)
-    overture_sources = overture_sources[:30]
 
     # Identify dominant source for optional terrain profile (no API call here)
     terrain_source = None

@@ -37,6 +37,12 @@
   .switch-slider:before { content: ''; position: absolute; height: 12px; width: 12px; left: 2px; top: 2px; background: white; border-radius: 50%; transition: transform 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.15); }
   .switch input:checked + .switch-slider { background: #2563eb; }
   .switch input:checked + .switch-slider:before { transform: translateX(14px); }
+  /* Embed mode (e.g. iframe inside DA Leads /scores/noise) — hide debug-only chrome */
+  body.embed .embed-hide { display: none; }
+  body.embed .sidebar-content { padding: 16px; }
+  body.embed #sidebar { width: 320px; }
+  body.embed #map { right: 320px; }
+  body.embed .sidebar-toggle { display: none; }
 </style>
 </head>
 <body class="bg-slate-50 font-sans text-slate-900">
@@ -48,17 +54,17 @@
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 6 15 12 9 18"/></svg>
   </button>
   <div class="sidebar-content p-5">
-    <div class="flex items-center gap-2 mb-1">
+    <div class="flex items-center gap-2 mb-1 embed-hide">
       <a href="/" class="text-slate-400 hover:text-brand-600 text-sm">&larr;</a>
       <h1 class="text-lg font-bold">Noise Source Debug</h1>
     </div>
-    <p class="text-xs text-slate-400 mb-4">Click a parcel to inspect, or empty space to re-query noise.</p>
-    <div class="flex gap-2 mb-2">
+    <p class="text-xs text-slate-400 mb-4 embed-hide">Click a parcel to inspect, or empty space to re-query noise.</p>
+    <div class="flex gap-2 mb-2 embed-hide">
       <input id="lat" type="number" step="any" placeholder="Lat" value="-37.8136" class="input-field flex-1 min-w-0">
       <input id="lng" type="number" step="any" placeholder="Lng" value="144.9631" class="input-field flex-1 min-w-0">
       <button onclick="query()" class="btn-primary">Go</button>
     </div>
-    <div class="flex flex-wrap gap-1 mb-4 text-[11px]">
+    <div class="flex flex-wrap gap-1 mb-4 text-[11px] embed-hide">
       <button onclick="setPoint(-37.8136,144.9631,'CBD')" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">CBD</button>
       <button onclick="setPoint(-37.7950,144.9500,'Royal Park')" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">Royal Park</button>
       <button onclick="setPoint(-37.7125,144.8443,'Tullamarine Fwy')" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">Tullamarine Fwy</button>
@@ -151,6 +157,10 @@ function syncRippleSwitch() {
   document.getElementById('ripple-switch').checked = document.getElementById('t-ripple').checked;
 }
 
+// Embed mode (loaded inside an iframe on /scores/noise/) — strip dev chrome
+const EMBED = new URLSearchParams(location.search).has('embed');
+if (EMBED) document.body.classList.add('embed');
+
 async function initMap() {
   const cfg = await fetch('/api/config').then(r => r.json());
   mapboxgl.accessToken = cfg.mapbox_token;
@@ -198,6 +208,17 @@ async function initMap() {
   syncRippleSwitch();
 
   attachParcelInspector();
+
+  // Auto-query a default point on first load (helpful for embed/landing-page demos)
+  // so visitors immediately see the visualization without having to click first.
+  map.once('idle', () => {
+    const params = new URLSearchParams(location.search);
+    const lat = parseFloat(params.get('lat')) || -37.8136;
+    const lng = parseFloat(params.get('lng')) || 144.9631;
+    document.getElementById('lat').value = lat;
+    document.getElementById('lng').value = lng;
+    query();
+  });
 }
 initMap();
 

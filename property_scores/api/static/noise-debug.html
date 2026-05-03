@@ -44,7 +44,7 @@
       <a href="/" class="text-slate-400 hover:text-brand-600 text-sm">&larr;</a>
       <h1 class="text-lg font-bold">Noise Source Debug</h1>
     </div>
-    <p class="text-xs text-slate-400 mb-4">Click the map or enter coordinates.</p>
+    <p class="text-xs text-slate-400 mb-4">Click a parcel to inspect, or empty space to re-query noise.</p>
     <div class="flex gap-2 mb-2">
       <input id="lat" type="number" step="any" placeholder="Lat" value="-37.8136" class="input-field flex-1 min-w-0">
       <input id="lng" type="number" step="any" placeholder="Lng" value="144.9631" class="input-field flex-1 min-w-0">
@@ -66,10 +66,12 @@
       <label class="toggle-row"><input type="checkbox" id="t-ripple" checked> <span>Sound wave ripple animation</span></label>
       <label class="toggle-row"><input type="checkbox" id="t-terrain" checked> <span>Terrain profile to dominant source</span></label>
       <label class="toggle-row"><input type="checkbox" id="t-facade" checked> <span>Facade direction pie</span></label>
+      <label class="toggle-row"><input type="checkbox" id="t-parcels" checked> <span>Parcel boundaries (click to inspect)</span></label>
     </div>
 
     <div id="loading" class="hidden text-brand-500 text-sm py-5 text-center">Querying noise sources...</div>
     <div id="score-box" class="hidden card p-4 mb-4"></div>
+    <div id="parcel-info" class="hidden card p-3 mb-4 border-violet-200" style="background:#faf5ff"></div>
     <div id="terrain-chart" class="hidden card p-3 mb-4"></div>
     <div id="sources"></div>
   </div>
@@ -95,7 +97,23 @@ const sourceIds = [];
 let lastData = null;        // cache of last debug response
 let rippleRAF = null;       // animation frame id
 let rippleStart = 0;        // animation start time
-const TOGGLE_IDS = ['t-screening', 't-ripple', 't-terrain', 't-facade'];
+const TOGGLE_IDS = ['t-screening', 't-ripple', 't-terrain', 't-facade', 't-parcels'];
+
+// Australia parcel tile URL via DA Leads tile server (Cloudflare-cached, CORS OK)
+const PARCEL_TILE_BASE = 'https://daleads.com.au/tiles';
+// Coarse AU state lookup for picking the right tile source
+function detectState(lat, lng) {
+  if (lat > -10.7 || lat < -44) return null;
+  if (lng < 129) return 'wa';
+  if (lat > -26 && lng < 138) return 'nt';
+  if (lng < 141) return 'sa';
+  if (lat > -29) return 'qld';
+  if (lat < -39 && lng > 143.5) return 'tas';
+  // ACT bbox
+  if (lat > -35.92 && lat < -35.12 && lng > 148.76 && lng < 149.40) return 'act';
+  if (lat < -34) return 'vic';
+  return 'nsw';
+}
 
 function getToggles() {
   return Object.fromEntries(TOGGLE_IDS.map(id => [id.slice(2), document.getElementById(id).checked]));
@@ -119,6 +137,15 @@ async function initMap() {
   map.addControl(new mapboxgl.NavigationControl(), 'top-right');
   popup = new mapboxgl.Popup({ closeButton: false, closeOnClick: false });
   map.on('click', (e) => {
+    // If parcels overlay is on and click hit a parcel: inspect it (don't re-query)
+    if (document.getElementById('t-parcels')?.checked && map.getLayer('cadastre-hit')) {
+      const feats = map.queryRenderedFeatures(e.point, { layers: ['cadastre-hit'] });
+      if (feats.length) {
+        map.getSource('cadastre-highlight-src').setData({ type: 'FeatureCollection', features: [feats[0]] });
+        showParcelInfo(feats[0].properties);
+        return;
+      }
+    }
     document.getElementById('lat').value = e.lngLat.lat.toFixed(6);
     document.getElementById('lng').value = e.lngLat.lng.toFixed(6);
     query();
@@ -130,6 +157,8 @@ async function initMap() {
       if (lastData) renderResult(lastData, lastData.query.lat, lastData.query.lng);
     });
   }
+
+  attachParcelInspector();
 }
 initMap();
 
@@ -351,7 +380,99 @@ function renderResult(data, lat, lng) {
     terrainChart.classList.add('hidden');
   }
 
+  // ---- Parcel cadastre overlay ----
+  if (t.parcels) {
+    const state = detectState(lat, lng);
+    if (state) addCadastreTiles(state);
+  }
+
   document.getElementById('sources').innerHTML = html;
+}
+
+// ---- Parcel cadastre vector tiles ----
+function addCadastreTiles(state) {
+  const sourceUrl = `${PARCEL_TILE_BASE}/${state}_parcels/{z}/{x}/{y}`;
+  if (!map.getSource('cadastre')) {
+    map.addSource('cadastre', {
+      type: 'vector',
+      tiles: [sourceUrl],
+      minzoom: 14,
+      maxzoom: 16,
+    });
+  } else {
+    // State changed → swap tiles
+    const src = map.getSource('cadastre');
+    if (src.tiles?.[0] !== sourceUrl) {
+      map.removeLayer('cadastre-line');
+      if (map.getLayer('cadastre-hit')) map.removeLayer('cadastre-hit');
+      if (map.getLayer('cadastre-highlight')) map.removeLayer('cadastre-highlight');
+      map.removeSource('cadastre');
+      sourceIds.splice(sourceIds.indexOf('cadastre-line'), 1);
+      sourceIds.splice(sourceIds.indexOf('cadastre-hit'), 1);
+      addCadastreTiles(state);
+      return;
+    }
+  }
+  if (!map.getLayer('cadastre-line')) {
+    map.addLayer({
+      id: 'cadastre-line', type: 'line', source: 'cadastre', 'source-layer': 'parcel_lines',
+      minzoom: 14,
+      paint: {
+        'line-color': ['interpolate', ['linear'], ['zoom'], 14, '#a78bfa', 19, '#6d28d9'],
+        'line-width': ['interpolate', ['linear'], ['zoom'], 14, 0.5, 19, 1.2],
+        'line-opacity': 0.8,
+      },
+    });
+    sourceIds.push('cadastre-line');
+  }
+  if (!map.getLayer('cadastre-hit')) {
+    map.addLayer({
+      id: 'cadastre-hit', type: 'fill', source: 'cadastre', 'source-layer': 'parcels',
+      minzoom: 14,
+      paint: { 'fill-color': '#a78bfa', 'fill-opacity': 0.05 },
+    });
+    sourceIds.push('cadastre-hit');
+  }
+  if (!map.getLayer('cadastre-highlight')) {
+    // Empty by default — populated when user clicks a parcel
+    map.addSource('cadastre-highlight-src', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({
+      id: 'cadastre-highlight', type: 'fill', source: 'cadastre-highlight-src',
+      paint: { 'fill-color': '#7c3aed', 'fill-opacity': 0.25 },
+    });
+    map.addLayer({
+      id: 'cadastre-highlight-line', type: 'line', source: 'cadastre-highlight-src',
+      paint: { 'line-color': '#5b21b6', 'line-width': 2 },
+    });
+    sourceIds.push('cadastre-highlight', 'cadastre-highlight-line');
+  }
+}
+
+// Cursor hint when hovering over a clickable parcel
+function attachParcelInspector() {
+  map.on('mousemove', (e) => {
+    if (!document.getElementById('t-parcels')?.checked) return;
+    if (!map.getLayer('cadastre-hit')) return;
+    const feats = map.queryRenderedFeatures(e.point, { layers: ['cadastre-hit'] });
+    map.getCanvas().style.cursor = feats.length ? 'pointer' : '';
+  });
+}
+
+function showParcelInfo(props) {
+  const box = document.getElementById('parcel-info');
+  box.classList.remove('hidden');
+  const rows = Object.entries(props)
+    .filter(([k, v]) => v != null && v !== '' && k !== 'state')
+    .map(([k, v]) => `<div class="flex justify-between py-0.5 text-xs"><span class="text-slate-400">${k}</span><span class="text-slate-700 font-medium">${v}</span></div>`)
+    .join('');
+  box.innerHTML = `
+    <div class="flex items-center justify-between mb-1">
+      <div class="text-xs font-semibold text-violet-700">Parcel</div>
+      <button onclick="document.getElementById('parcel-info').classList.add('hidden'); map.getSource('cadastre-highlight-src').setData({type:'FeatureCollection',features:[]})" class="text-slate-400 hover:text-slate-700 text-xs">✕</button>
+    </div>
+    ${rows}
+    <div class="text-[10px] text-slate-400 mt-1">Right-click another parcel to swap.</div>
+  `;
 }
 
 let terrainFetchToken = 0;

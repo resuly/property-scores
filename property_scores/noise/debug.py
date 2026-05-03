@@ -12,7 +12,6 @@ from property_scores.noise.score import (
     RAIL_EMISSION, CLASS_TO_AADT, DEFAULT_SPEED_KMH,
 )
 from property_scores.noise.buildings import buildings_in_radius, barrier_attenuation
-from property_scores.noise.terrain import elevation_profile
 
 
 def _rail_shapes_near(db, lat: float, lng: float, radius_m: int = 1000) -> list[dict]:
@@ -136,19 +135,19 @@ def noise_debug(lat: float, lng: float, radius_m: int = 500) -> dict:
 
     rail_shapes = _rail_shapes_near(db, lat, lng, radius_m)
 
-    # Terrain elevation profile from receiver to dominant audible source
-    terrain_profile = None
+    # Identify dominant source for optional terrain profile (no API call here)
+    terrain_source = None
     all_sources = aadt_sources + nfdh_sources + [s for s in rail_sources if "lat" in s]
     if all_sources:
-        # Pick dominant: highest db_raw (before screening)
         top = max(all_sources, key=lambda s: s.get("db_raw", 0))
-        if top.get("distance_m", 0) >= 50:  # skip very close sources (profile too short)
-            terrain_profile = elevation_profile(top["lat"], top["lng"], lat, lng)
-            if terrain_profile:
-                terrain_profile["source_name"] = top.get("road_name") or top.get("route")
-                terrain_profile["source_lat"] = top["lat"]
-                terrain_profile["source_lng"] = top["lng"]
-                terrain_profile["source_db"] = top["db_raw"]
+        if top.get("distance_m", 0) >= 50:
+            terrain_source = {
+                "lat": top["lat"],
+                "lng": top["lng"],
+                "name": top.get("road_name") or top.get("route"),
+                "db": top["db_raw"],
+                "distance_m": top["distance_m"],
+            }
 
     return {
         "score": result,
@@ -159,5 +158,5 @@ def noise_debug(lat: float, lng: float, radius_m: int = 500) -> dict:
             "rail": rail_sources,
             "rail_shapes": rail_shapes,
         },
-        "terrain": terrain_profile,
+        "terrain_source": terrain_source,
     }

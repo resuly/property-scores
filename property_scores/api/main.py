@@ -12,6 +12,7 @@ import property_scores.common.config  # noqa: F401 — ensure .env is loaded
 from property_scores.noise import noise_score, aircraft_noise_penalty
 from property_scores.noise.cache import lookup as noise_cache_lookup
 from property_scores.noise.debug import noise_debug
+from property_scores.noise.terrain import elevation_profile
 from property_scores.walkability import walkability_score
 from property_scores.solar import solar_score
 from property_scores.flood import flood_score
@@ -221,6 +222,23 @@ def get_noise_debug(
         return noise_debug(lat, lng, radius)
     except Exception as e:
         logger.exception("noise debug failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/scores/noise/terrain")
+def get_noise_terrain(
+    src_lat: float = Query(...), src_lng: float = Query(...),
+    lat: float = Query(...), lng: float = Query(...),
+):
+    """DEM elevation profile from a source to the receiver. Calls open-meteo
+    (~1-2s); split out from /noise/debug so the main response stays fast."""
+    try:
+        profile = elevation_profile(src_lat, src_lng, lat, lng)
+        if not profile:
+            return JSONResponse({"error": "elevation API unavailable"}, status_code=502)
+        return profile
+    except Exception as e:
+        logger.exception("noise terrain failed")
         return JSONResponse({"error": str(e)}, status_code=500)
 
 

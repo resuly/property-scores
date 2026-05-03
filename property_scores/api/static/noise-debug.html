@@ -287,14 +287,37 @@ function renderResult(data, lat, lng) {
   // ---- Facade pie ----
   if (t.facade && s.facade_sectors) drawFacadePie(s, lat, lng);
 
-  // ---- Terrain elevation profile ----
-  if (t.terrain && data.terrain) {
-    drawTerrainProfile(data.terrain, lat, lng);
+  // ---- Terrain elevation profile (async — open-meteo API ~1-2s) ----
+  const terrainChart = document.getElementById('terrain-chart');
+  if (t.terrain && data.terrain_source) {
+    fetchAndDrawTerrain(data.terrain_source, lat, lng);
   } else {
-    document.getElementById('terrain-chart').classList.add('hidden');
+    terrainChart.classList.add('hidden');
   }
 
   document.getElementById('sources').innerHTML = html;
+}
+
+let terrainFetchToken = 0;
+async function fetchAndDrawTerrain(src, lat, lng) {
+  const myToken = ++terrainFetchToken;
+  const chart = document.getElementById('terrain-chart');
+  chart.classList.remove('hidden');
+  chart.innerHTML = `<div class="text-xs text-slate-400 py-2 text-center">Loading terrain profile to ${src.name || 'source'} (${src.distance_m}m)...</div>`;
+  try {
+    const url = `/scores/noise/terrain?src_lat=${src.lat}&src_lng=${src.lng}&lat=${lat}&lng=${lng}`;
+    const profile = await fetch(url).then(r => r.json());
+    if (myToken !== terrainFetchToken) return;  // a newer query started
+    if (profile.error) { chart.innerHTML = `<div class="text-xs text-red-500 py-2 text-center">Terrain unavailable</div>`; return; }
+    profile.source_name = src.name;
+    profile.source_lat = src.lat;
+    profile.source_lng = src.lng;
+    profile.source_db = src.db;
+    drawTerrainProfile(profile, lat, lng);
+  } catch (e) {
+    if (myToken !== terrainFetchToken) return;
+    chart.innerHTML = `<div class="text-xs text-red-500 py-2 text-center">Terrain fetch failed: ${e.message}</div>`;
+  }
 }
 
 // Layer definition for source-to-receiver line, optionally colored by screening

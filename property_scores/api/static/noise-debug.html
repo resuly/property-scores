@@ -29,10 +29,18 @@
       <h1 class="text-lg font-bold">Noise Source Debug</h1>
     </div>
     <p class="text-xs text-slate-400 mb-4">Click the map or enter coordinates.</p>
-    <div class="flex gap-2 mb-4">
+    <div class="flex gap-2 mb-2">
       <input id="lat" type="number" step="any" placeholder="Lat" value="-37.8136" class="input-field flex-1 min-w-0">
       <input id="lng" type="number" step="any" placeholder="Lng" value="144.9631" class="input-field flex-1 min-w-0">
       <button onclick="query()" class="btn-primary">Go</button>
+    </div>
+    <div class="flex flex-wrap gap-1 mb-4 text-[11px]">
+      <button onclick="setPoint(-37.8136,144.9631,'CBD')" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">CBD</button>
+      <button onclick="setPoint(-37.7950,144.9500,'Royal Park')" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">Royal Park</button>
+      <button onclick="setPoint(-37.7125,144.8443,'Tullamarine Fwy')" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">Tullamarine Fwy</button>
+      <button onclick="setPoint(-37.8670,144.9760,'St Kilda')" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">St Kilda</button>
+      <button onclick="setPoint(-37.7650,145.3367,'Olinda Hills')" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">Olinda Hills</button>
+      <button onclick="setPoint(-37.6675,144.7860,'Tullamarine Apt')" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">Airport</button>
     </div>
 
     <!-- Layer toggles -->
@@ -71,6 +79,12 @@ const TOGGLE_IDS = ['t-screening', 't-ripple', 't-terrain', 't-facade'];
 
 function getToggles() {
   return Object.fromEntries(TOGGLE_IDS.map(id => [id.slice(2), document.getElementById(id).checked]));
+}
+
+function setPoint(lat, lng, label) {
+  document.getElementById('lat').value = lat.toFixed(4);
+  document.getElementById('lng').value = lng.toFixed(4);
+  query();
 }
 
 async function initMap() {
@@ -164,31 +178,45 @@ function renderResult(data, lat, lng) {
   // ---- Score panel ----
   const box = document.getElementById('score-box');
   box.classList.remove('hidden');
+  const sc = Math.max(0, Math.min(100, s.score));
+  const trackColor = sc >= 60 ? 'bg-emerald-100' : sc >= 40 ? 'bg-amber-100' : 'bg-red-100';
+  const fillColor = sc >= 60 ? 'bg-emerald-500' : sc >= 40 ? 'bg-amber-500' : 'bg-red-500';
+  // Compact stat helper. Hint is rendered as a separate dim chip to avoid digits running into the value.
+  const stat = (k, v, hint) => `<div class="flex justify-between items-baseline py-0.5"><span class="text-slate-400">${k}</span><span><span class="text-slate-700 font-medium">${v}</span>${hint ? ` <span class="text-slate-400 text-[10px]" style="margin-left:6px">${hint}</span>` : ''}</span></div>`;
+
   box.innerHTML = `
-    <div class="text-4xl font-bold" style="color:${color}">${s.score}<span class="text-base text-slate-400">/100</span></div>
-    <div class="text-xs text-slate-500 mb-2">${s.label} -- Lden ${s.lden_db || s.estimated_db} dB</div>
-    <div class="grid grid-cols-2 gap-1 text-xs">
-      <span class="text-slate-400">Leq 24h</span><span class="text-right text-slate-600">${s.leq_db || '?'} dB</span>
-      <span class="text-slate-400">Lden</span><span class="text-right text-slate-600">${s.lden_db || s.estimated_db} dB</span>
-      <span class="text-slate-400">Day (7-19)</span><span class="text-right text-slate-600">${s.leq_day_db || '?'} dB</span>
-      <span class="text-slate-400">Night (23-7)</span><span class="text-right text-slate-600">${s.leq_night_db || '?'} dB</span>
-      <span class="text-slate-400">Road (L10)</span><span class="text-right text-slate-600">${s.road_db} dB</span>
-      <span class="text-slate-400">Rail</span><span class="text-right text-slate-600">${s.rail_db || '0'} dB</span>
-      <span class="text-slate-400">VicRoads</span><span class="text-right text-slate-600">${s.aadt_segments}</span>
-      <span class="text-slate-400">NFDH</span><span class="text-right text-slate-600">${s.nfdh_stations}</span>
-      <span class="text-slate-400">Overture roads</span><span class="text-right text-slate-600">${s.road_count}</span>
-      ${s.max_building_screening_db ? `<span class="text-slate-400">Screening</span><span class="text-right text-slate-600">-${s.max_building_screening_db} dB</span>` : ''}
-      ${s.nearest_train_m != null ? `<span class="text-slate-400">Nearest train</span><span class="text-right text-slate-600">${s.nearest_train_m}m</span>` : ''}
-      ${s.nearest_tram_m != null ? `<span class="text-slate-400">Nearest tram</span><span class="text-right text-slate-600">${s.nearest_tram_m}m</span>` : ''}
-    </div>
-    ${s.lden_max_facade ? `
-    <div class="mt-3 pt-3 border-t border-slate-100">
-      <div class="text-xs font-semibold text-brand-600 mb-1">Facade Analysis</div>
-      <div class="grid grid-cols-2 gap-1 text-xs">
-        <span class="text-slate-400">Max facade</span><span class="text-right text-slate-600">${s.lden_max_facade} dB (${s.max_facade_dir})</span>
-        <span class="text-slate-400">Min facade</span><span class="text-right text-slate-600">${s.lden_min_facade} dB (${s.min_facade_dir})</span>
-        <span class="text-slate-400">Range</span><span class="text-right text-slate-600">${s.facade_range_db} dB</span>
+    <div class="flex items-end gap-3 mb-2">
+      <div class="text-4xl font-bold leading-none" style="color:${color}">${sc.toFixed(0)}</div>
+      <div class="flex-1 mb-1">
+        <div class="flex justify-between text-[10px] text-slate-400 mb-1"><span>${s.label}</span><span>Lden ${s.lden_db || s.estimated_db} dB</span></div>
+        <div class="relative h-2 ${trackColor} rounded-full overflow-hidden">
+          <div class="absolute inset-y-0 left-0 ${fillColor} rounded-full transition-all duration-500" style="width:${sc}%"></div>
+        </div>
       </div>
+    </div>
+
+    <div class="text-[10px] text-slate-400 uppercase tracking-wide mt-3 mb-1">Time of day</div>
+    <div class="text-xs">
+      ${stat('Leq 24h', (s.leq_db || '?') + ' dB')}
+      ${stat('Lden (penalised)', (s.lden_db || s.estimated_db) + ' dB')}
+      ${stat('Day 7-19', (s.leq_day_db || '?') + ' dB')}
+      ${stat('Night 23-7', (s.leq_night_db || '?') + ' dB')}
+    </div>
+
+    <div class="text-[10px] text-slate-400 uppercase tracking-wide mt-3 mb-1">By source</div>
+    <div class="text-xs">
+      ${stat('Road (L10)', s.road_db + ' dB', `${s.road_count || 0} segs`)}
+      ${stat('Rail', (s.rail_db || 0) + ' dB', s.nearest_tram_m != null ? `tram ${s.nearest_tram_m}m` : (s.nearest_train_m != null ? `train ${s.nearest_train_m}m` : ''))}
+      ${stat('AADT counts', `${s.aadt_segments || 0} VicRoads · ${s.nfdh_stations || 0} NFDH`)}
+      ${s.max_building_screening_db ? stat('Building screening', `-${s.max_building_screening_db} dB`) : ''}
+    </div>
+
+    ${s.lden_max_facade ? `
+    <div class="text-[10px] text-slate-400 uppercase tracking-wide mt-3 mb-1">Facade asymmetry</div>
+    <div class="text-xs">
+      ${stat('Max', s.lden_max_facade + ' dB', s.max_facade_dir)}
+      ${stat('Min', s.lden_min_facade + ' dB', s.min_facade_dir)}
+      ${stat('Range', s.facade_range_db + ' dB')}
     </div>` : ''}`;
 
   // Always-on basics: query point + radius
@@ -396,42 +424,103 @@ function startRippleAnimation(lat, lng, src) {
   rippleRAF = requestAnimationFrame(tick);
 }
 
-// ---- Facade direction pie --------------------------------------------------
+// ---- Facade direction rose chart ------------------------------------------
+// Petal radius scales with dB on an absolute scale (35→0px, 80→100px),
+// so quiet directions visibly shrink and loud directions stretch out.
+// Color uses an absolute dB scale (green→amber→red) — same scale across
+// all queries so two points are comparable.
+const ROSE_DIRS = ['N','NE','E','SE','S','SW','W','NW'];
+const ROSE_MIN_DB = 35;
+const ROSE_MAX_DB = 80;
+const ROSE_MIN_R = 25;
+const ROSE_MAX_R = 110;
+
+function dbToColor(db) {
+  // 35 dB → emerald, 55 → amber, 75 → red
+  if (db <= 45) return '#22c55e';
+  if (db <= 55) return '#84cc16';
+  if (db <= 65) return '#f59e0b';
+  if (db <= 72) return '#ef4444';
+  return '#b91c1c';
+}
+
+function dbToRadiusM(db) {
+  const t = Math.max(0, Math.min(1, (db - ROSE_MIN_DB) / (ROSE_MAX_DB - ROSE_MIN_DB)));
+  return ROSE_MIN_R + t * (ROSE_MAX_R - ROSE_MIN_R);
+}
+
 function drawFacadePie(s, lat, lng) {
-  const dirs = ['N','NE','E','SE','S','SW','W','NW'];
-  const vals = dirs.map(d => s.facade_sectors[d] || 35);
-  const maxDb = Math.max(...vals);
-  const minDb = Math.min(...vals);
+  const vals = ROSE_DIRS.map(d => s.facade_sectors[d] || 35);
   const sectorFeatures = [];
-  dirs.forEach((dir, i) => {
+  const labelFeatures = [];
+  const cosLat = Math.cos(lat * Math.PI / 180);
+
+  ROSE_DIRS.forEach((dir, i) => {
+    const db = vals[i];
+    const radiusM = dbToRadiusM(db);
     const startAngle = i * 45 - 22.5;
     const endAngle = startAngle + 45;
-    const db = vals[i];
-    const t = maxDb > minDb ? (db - minDb) / (maxDb - minDb) : 0.5;
-    const r = Math.round(t > 0.5 ? 255 : t * 2 * 255);
-    const g = Math.round(t < 0.5 ? 255 : (1 - t) * 2 * 255);
-    const color = `rgb(${r},${g},50)`;
-    const radius = 120;
+    const color = dbToColor(db);
     const coords = [[lng, lat]];
-    for (let a = startAngle; a <= endAngle; a += 5) {
+    for (let a = startAngle; a <= endAngle; a += 3) {
       const rad = a * Math.PI / 180;
-      const dlat = radius * Math.cos(rad) / 111320;
-      const dlng = radius * Math.sin(rad) / (111320 * Math.cos(lat * Math.PI / 180));
+      const dlat = radiusM * Math.cos(rad) / 111320;
+      const dlng = radiusM * Math.sin(rad) / (111320 * cosLat);
       coords.push([lng + dlng, lat + dlat]);
     }
     coords.push([lng, lat]);
-    sectorFeatures.push({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [coords] }, properties: { color, db, dir } });
+    sectorFeatures.push({
+      type: 'Feature',
+      geometry: { type: 'Polygon', coordinates: [coords] },
+      properties: { color, db, dir, radiusM: Math.round(radiusM) }
+    });
+
+    // Label point at sector center, just outside the petal
+    const labelAngle = i * 45;
+    const labelRad = labelAngle * Math.PI / 180;
+    const labelDist = radiusM + 18;
+    const lblLat = lat + labelDist * Math.cos(labelRad) / 111320;
+    const lblLng = lng + labelDist * Math.sin(labelRad) / (111320 * cosLat);
+    labelFeatures.push({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [lblLng, lblLat] },
+      properties: { dir, db: db.toFixed(0), label: `${dir}\n${db.toFixed(0)}dB` }
+    });
   });
+
+  // Fill petals
   addGeoJSON('facade', { type: 'FeatureCollection', features: sectorFeatures }, {
-    type: 'fill', paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.35 }
+    type: 'fill',
+    paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.45 }
   });
+  // Crisp outline so petals stay distinguishable on busy basemaps
   addGeoJSON('facade-border', { type: 'FeatureCollection', features: sectorFeatures }, {
-    type: 'line', paint: { 'line-color': ['get', 'color'], 'line-width': 1, 'line-opacity': 0.6 }
+    type: 'line',
+    paint: { 'line-color': ['get', 'color'], 'line-width': 1.5, 'line-opacity': 0.9 }
   });
+  // Direction + dB text labels just outside each petal
+  addGeoJSON('facade-labels', { type: 'FeatureCollection', features: labelFeatures }, {
+    type: 'symbol',
+    layout: {
+      'text-field': ['get', 'label'],
+      'text-size': 11,
+      'text-font': ['Open Sans Semibold', 'Arial Unicode MS Bold'],
+      'text-allow-overlap': true,
+      'text-anchor': 'center',
+      'text-line-height': 1.0,
+    },
+    paint: {
+      'text-color': '#1e293b',
+      'text-halo-color': 'rgba(255,255,255,0.95)',
+      'text-halo-width': 2,
+    }
+  });
+
+  // Hover for finer detail
   map.on('mousemove', 'facade', (e) => {
     if (!e.features.length) return;
     const p = e.features[0].properties;
-    popup.setLngLat(e.lngLat).setHTML(`<span style="font-size:12px;font-weight:600">${p.dir}: ${p.db} dB</span>`).addTo(map);
+    popup.setLngLat(e.lngLat).setHTML(`<div style="font-size:12px"><b>${p.dir}</b>: ${p.db} dB · ${p.radiusM}m petal</div>`).addTo(map);
     map.getCanvas().style.cursor = 'pointer';
   });
   map.on('mouseleave', 'facade', () => { popup.remove(); map.getCanvas().style.cursor = ''; });

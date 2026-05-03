@@ -35,6 +35,12 @@
 
 <div id="map"></div>
 
+<!-- Floating quick-toggle for the ripple animation -->
+<button id="ripple-fab" class="absolute top-3 left-3 z-10 bg-white/95 backdrop-blur shadow-sm border border-slate-200 rounded-full pl-2 pr-3 py-1.5 text-xs flex items-center gap-1.5 hover:bg-white" title="Pause/play sound wave animation" onclick="toggleRipple()">
+  <span id="ripple-fab-icon" class="text-base leading-none">⏸</span>
+  <span id="ripple-fab-label" class="text-slate-600">Animation</span>
+</button>
+
 <div id="sidebar" class="absolute top-0 right-0 bottom-0 bg-white border-l border-slate-200 overflow-y-auto">
   <button class="sidebar-toggle" onclick="document.body.classList.toggle('sidebar-collapsed'); setTimeout(() => map.resize(), 320)" title="Collapse sidebar">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 6 15 12 9 18"/></svg>
@@ -125,6 +131,19 @@ function setPoint(lat, lng, label) {
   query();
 }
 
+function toggleRipple() {
+  const cb = document.getElementById('t-ripple');
+  cb.checked = !cb.checked;
+  syncRippleFab();
+  cb.dispatchEvent(new Event('change'));  // triggers renderResult re-run
+}
+
+function syncRippleFab() {
+  const on = document.getElementById('t-ripple').checked;
+  document.getElementById('ripple-fab-icon').textContent = on ? '⏸' : '▶';
+  document.getElementById('ripple-fab-label').textContent = on ? 'Pause' : 'Play';
+}
+
 async function initMap() {
   const cfg = await fetch('/api/config').then(r => r.json());
   mapboxgl.accessToken = cfg.mapbox_token;
@@ -154,9 +173,11 @@ async function initMap() {
   // Wire toggle change handlers — re-render existing data without re-fetching
   for (const id of TOGGLE_IDS) {
     document.getElementById(id).addEventListener('change', () => {
+      if (id === 't-ripple') syncRippleFab();
       if (lastData) renderResult(lastData, lastData.query.lat, lastData.query.lng);
     });
   }
+  syncRippleFab();
 
   attachParcelInspector();
 }

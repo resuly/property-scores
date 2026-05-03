@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Noise Debug Map - Property Scores</title>
-<link rel="stylesheet" href="/css/styles.css">
+<link rel="stylesheet" href="/css/styles.css?v=2">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -630,7 +630,7 @@ function drawFacadePie(s, lat, lng) {
     const lblR = r + 14;
     const lx = center + lblR * Math.sin(labelAng);
     const ly = center - lblR * Math.cos(labelAng);
-    const labelText = `${dir} ${db.toFixed(0)}`;
+    const labelText = `${dir} ${db.toFixed(0)} dB`;
     const labelW = labelText.length * 6.2 + 8;
     svg += `<rect class="label-bg" x="${(lx - labelW/2).toFixed(1)}" y="${(ly - 7).toFixed(1)}" width="${labelW.toFixed(1)}" height="14" rx="3"/>`;
     svg += `<text x="${lx.toFixed(1)}" y="${(ly + 3).toFixed(1)}" text-anchor="middle">${labelText}</text>`;

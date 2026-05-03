@@ -162,19 +162,26 @@ async function initMap() {
   });
   map.addControl(new mapboxgl.NavigationControl(), 'top-right');
   popup = new mapboxgl.Popup({ closeButton: false, closeOnClick: false });
+  map.on('load', ensureHighlightLayer);
   map.on('click', (e) => {
-    // If parcels overlay is on and click hit a parcel: inspect it (don't re-query)
-    if (document.getElementById('t-parcels')?.checked && map.getLayer('cadastre-hit')) {
-      const feats = map.queryRenderedFeatures(e.point, { layers: ['cadastre-hit'] });
-      if (feats.length) {
-        map.getSource('cadastre-highlight-src').setData({ type: 'FeatureCollection', features: [feats[0]] });
-        showParcelInfo(feats[0].properties);
-        return;
-      }
-    }
+    // Always re-query noise at this point
     document.getElementById('lat').value = e.lngLat.lat.toFixed(6);
     document.getElementById('lng').value = e.lngLat.lng.toFixed(6);
     query();
+
+    // ALSO highlight the parcel at this point (independent of query lifecycle)
+    if (document.getElementById('t-parcels')?.checked && map.getLayer('cadastre-hit')) {
+      const feats = map.queryRenderedFeatures(e.point, { layers: ['cadastre-hit'] });
+      const src = map.getSource('cadastre-highlight-src');
+      if (!src) return;
+      if (feats.length) {
+        src.setData({ type: 'FeatureCollection', features: [feats[0]] });
+        showParcelInfo(feats[0].properties);
+      } else {
+        src.setData({ type: 'FeatureCollection', features: [] });
+        document.getElementById('parcel-info').classList.add('hidden');
+      }
+    }
   });
 
   // Wire toggle change handlers — re-render existing data without re-fetching
@@ -460,7 +467,6 @@ function addCadastreTiles(state) {
     if (src.tiles?.[0] !== sourceUrl) {
       map.removeLayer('cadastre-line');
       if (map.getLayer('cadastre-hit')) map.removeLayer('cadastre-hit');
-      if (map.getLayer('cadastre-highlight')) map.removeLayer('cadastre-highlight');
       map.removeSource('cadastre');
       sourceIds.splice(sourceIds.indexOf('cadastre-line'), 1);
       sourceIds.splice(sourceIds.indexOf('cadastre-hit'), 1);
@@ -488,19 +494,22 @@ function addCadastreTiles(state) {
     });
     sourceIds.push('cadastre-hit');
   }
-  if (!map.getLayer('cadastre-highlight')) {
-    // Empty by default — populated when user clicks a parcel
-    map.addSource('cadastre-highlight-src', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
-    map.addLayer({
-      id: 'cadastre-highlight', type: 'fill', source: 'cadastre-highlight-src',
-      paint: { 'fill-color': '#7c3aed', 'fill-opacity': 0.25 },
-    });
-    map.addLayer({
-      id: 'cadastre-highlight-line', type: 'line', source: 'cadastre-highlight-src',
-      paint: { 'line-color': '#5b21b6', 'line-width': 2 },
-    });
-    sourceIds.push('cadastre-highlight', 'cadastre-highlight-line');
-  }
+  ensureHighlightLayer();
+}
+
+// Highlight source + layers live for the lifetime of the map (NOT cleared on
+// each query) so a parcel selection persists across re-queries.
+function ensureHighlightLayer() {
+  if (map.getSource('cadastre-highlight-src')) return;
+  map.addSource('cadastre-highlight-src', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addLayer({
+    id: 'cadastre-highlight', type: 'fill', source: 'cadastre-highlight-src',
+    paint: { 'fill-color': '#7c3aed', 'fill-opacity': 0.25 },
+  });
+  map.addLayer({
+    id: 'cadastre-highlight-line', type: 'line', source: 'cadastre-highlight-src',
+    paint: { 'line-color': '#5b21b6', 'line-width': 2 },
+  });
 }
 
 // Cursor hint when hovering over a clickable parcel

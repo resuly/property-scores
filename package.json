@@ -1,0 +1,11 @@
+{
+  "name": "property-scores-frontend",
+  "private": true,
+  "scripts": {
+    "tailwind:build": "npx tailwindcss -i property_scores/api/static/css/input.css -o property_scores/api/static/css/styles.css --minify",
+    "tailwind:watch": "npx tailwindcss -i property_scores/api/static/css/input.css -o property_scores/api/static/css/styles.css --watch"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4"
+  }
+}

@@ -1,0 +1,55 @@
+Design a complete landing page screenshot for "Noise Score" — a property noise intelligence product by DA Leads Australia. The page should look like a real, polished SaaS product website opened in a browser. Dark theme (#0f172a background), purple (#8b5cf6) as primary accent color. Modern, premium tech aesthetic similar to Linear, Vercel, or Mapbox product pages. The design should feel data-driven and trustworthy.
+
+Full page layout from top to bottom:
+
+SECTION 1 — NAVIGATION BAR
+Minimal top nav: logo "Property Scores" on the left, nav links (Noise, Walkability, Solar, Flood, Bushfire, Heat) in center, "Try Free" button on right. Subtle border-bottom.
+
+SECTION 2 — HERO
+Left side: Large headline "Know How Loud It Really Is — Before You Buy" with subtext "AI-powered noise analysis for every address in Australia. Road traffic, rail, tram, aircraft — scored from 0 to 100 with building-by-building accuracy." A search bar with placeholder "Enter an address..." and a purple "Analyze" button.
+Right side: A 3D isometric visualization of a house surrounded by 8 colored directional sectors (red toward a busy road, green on the sheltered side), with a floating score badge showing "72/100 Moderate". Sound wave ripples emanating from a road on one side and a train line on the other. Buildings between the road and house blocking some waves.
+
+SECTION 3 — TRUST BAR
+A horizontal strip showing key stats in a row: "14,748 validated measurements" | "184 rail routes tracked" | "13.6M buildings analyzed" | "MAE 4.63 dB accuracy". Clean icons next to each stat.
+
+SECTION 4 — HOW IT WORKS (3 columns)
+Three cards side by side:
+Card 1: Icon of satellite/data. Title "Multi-Source Data". Text: "We combine road traffic volumes, rail timetables, aircraft flight paths, and 13.6 million building footprints across Australia."
+Card 2: Icon of sound waves + building. Title "Physics + AI Model". Text: "CRTN acoustic propagation with Maekawa building screening, calibrated by machine learning on 10,000+ real noise measurements."
+Card 3: Icon of compass/directions. Title "8-Direction Facade Analysis". Text: "Not just one number — see which side of the building is quiet and which faces the noise. Find your peaceful bedroom."
+
+SECTION 5 — INTERACTIVE DEMO PREVIEW
+A dark card showing a map screenshot (Leaflet dark tiles) with colored pie sectors around a query point, rail lines in blue/green, and a side panel showing: Score 22/100, Lden 67.2 dB, Facade Analysis (Max: 63.2 dB North, Min: 41.8 dB East, Range: 21.4 dB), and a list of nearby rail/tram sources. Caption below: "Live noise analysis at any coordinate in Australia"
+
+SECTION 6 — SCORE SCALE
+A horizontal gradient bar from red (0 "Very Loud") through orange (20 "Loud"), yellow (40 "Moderate"), light green (60 "Quiet") to green (80-100 "Very Quiet"). Current example score highlighted on the bar.
+
+SECTION 7 — DATA SOURCES
+A grid of data source cards with icons/logos:
+- Overture Maps (roads, buildings, POIs)
+- National Traffic Counts (NFDH 8,142 stations)
+- State Rail Timetables (GTFS 184 routes)
+- NoiseCapture (14,748 crowdsourced measurements)
+- VicPlan Aircraft Overlays
+- Ballarat Calibrated Sensor
+Each card shows the data volume and "Open Data" or "CC BY" license badge.
+
+SECTION 8 — ACCURACY / BENCHMARK
+A clean chart or table showing:
+"Validated against 10,000+ real measurements across 7 Australian cities"
+Bar chart comparing Physics Model (MAE 12 dB) vs Our ML Model (MAE 4.63 dB).
+Below: "90% of predictions within 10 dB | Bias < 0.2 dB"
+Small logos: Melbourne, Sydney, Perth, Adelaide, Hobart, Darwin, Canberra
+
+SECTION 9 — CTA FOOTER
+"Ready to check your property?" with a large search input and "Get Noise Score" button. Below: "Free for the first 10 lookups. No credit card required."
+
+Overall requirements:
+- Single continuous page, vertical scroll layout
+- All text must be legible and realistic (not lorem ipsum)
+- Dark background throughout, white/light gray text
+- Purple accent for buttons and highlights
+- Generous whitespace between sections
+- The design should look like a high-resolution screenshot of a real website
+- Aspect ratio: portrait/tall format to show full page
+- No watermarks or AI artifacts

@@ -1,12 +1,14 @@
 """FastAPI entry point for property scores."""
 
 import logging
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+import property_scores.common.config  # noqa: F401 — ensure .env is loaded
 from property_scores.noise import noise_score, aircraft_noise_penalty
 from property_scores.noise.cache import lookup as noise_cache_lookup
 from property_scores.noise.debug import noise_debug
@@ -39,6 +41,11 @@ app = FastAPI(
     description="Open-data property intelligence scoring engine",
     version="0.1.0",
 )
+
+
+@app.get("/api/config")
+def get_config():
+    return {"mapbox_token": os.getenv("MAPBOX_TOKEN", "")}
 
 
 @app.get("/")
@@ -225,3 +232,6 @@ def get_aircraft_noise(lat: float = Query(...), lng: float = Query(...)):
     except Exception as e:
         logger.exception("aircraft noise query failed")
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+app.mount("/css", StaticFiles(directory=STATIC_DIR / "css"), name="css")

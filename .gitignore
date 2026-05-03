@@ -23,3 +23,6 @@ venv/
 *.swp
 
 *.log
+
+.DS_Store
+node_modules/

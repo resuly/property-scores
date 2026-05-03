@@ -3,137 +3,105 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Noise Score — Property Scores by DA Leads</title>
-<style>
-  :root { --bg: #0f172a; --surface: #1e293b; --border: #334155; --text: #e2e8f0; --muted: #94a3b8; --dim: #64748b; --accent: #8b5cf6; --green: #22c55e; }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
-  .container { max-width: 900px; margin: 0 auto; padding: 40px 24px; }
-  .hero { text-align: center; margin-bottom: 48px; }
-  .hero-badge { display: inline-block; padding: 4px 12px; border-radius: 99px; background: rgba(139,92,246,0.15); color: var(--accent); font-size: 13px; font-weight: 600; margin-bottom: 16px; }
-  h1 { font-size: 36px; font-weight: 700; margin-bottom: 12px; }
-  h1 span { color: var(--accent); }
-  .hero p { font-size: 18px; color: var(--muted); max-width: 620px; margin: 0 auto; }
-  .try-section { background: var(--surface); border-radius: 12px; padding: 24px; margin-bottom: 40px; }
-  .try-section h2 { font-size: 18px; margin-bottom: 16px; }
-  .try-form { display: flex; gap: 8px; flex-wrap: wrap; }
-  .try-form input { padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font-size: 15px; width: 160px; }
-  .try-form button { padding: 10px 20px; border: none; border-radius: 8px; background: var(--accent); color: #fff; font-weight: 600; cursor: pointer; font-size: 15px; }
-  .try-form button:hover { background: #7c3aed; }
-  #result { margin-top: 16px; padding: 16px; border-radius: 8px; background: var(--bg); display: none; }
-  .result-score { font-size: 48px; font-weight: 700; }
-  .result-label { font-size: 16px; color: var(--muted); margin-bottom: 12px; }
-  .result-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  .result-item { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border); }
-  .result-key { color: var(--dim); }
-  h2 { font-size: 22px; margin-bottom: 16px; margin-top: 40px; }
-  h3 { font-size: 17px; color: var(--accent); margin-bottom: 8px; margin-top: 24px; }
-  p, li { color: var(--muted); }
-  ul, ol { padding-left: 20px; margin-bottom: 12px; }
-  li { margin-bottom: 6px; }
-  table { width: 100%; border-collapse: collapse; margin: 16px 0; }
-  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); }
-  th { color: var(--dim); font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; }
-  td { color: var(--text); font-size: 14px; }
-  .scale { display: flex; margin: 16px 0; border-radius: 8px; overflow: hidden; }
-  .scale-item { flex: 1; padding: 12px 8px; text-align: center; font-size: 13px; }
-  .scale-item .num { font-size: 18px; font-weight: 700; display: block; }
-  code { background: var(--surface); padding: 2px 6px; border-radius: 4px; font-size: 13px; color: var(--accent); }
-  .vs-table td:first-child { font-weight: 600; }
-  .footer { margin-top: 60px; text-align: center; color: var(--dim); font-size: 13px; }
-  .footer a { color: var(--accent); text-decoration: none; }
-</style>
+<title>Noise Score - Property Scores</title>
+<link rel="stylesheet" href="/css/styles.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 </head>
-<body>
-<div class="container">
+<body class="bg-slate-50 font-sans text-slate-900">
+<div class="max-w-3xl mx-auto px-6 py-10">
+  <a href="/" class="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-brand-600 mb-8">&larr; All Scores</a>
 
-  <div class="hero">
-    <div class="hero-badge">Property Scores by DA Leads</div>
-    <h1><span>Noise</span> Score</h1>
-    <p>Multi-source noise estimation combining real traffic counts, train/tram timetables, aircraft flight paths, and building screening. Higher score means quieter.</p>
+  <div class="text-center mb-12">
+    <span class="inline-block px-3 py-1 rounded-full badge-noise text-xs font-semibold mb-4">Property Scores</span>
+    <h1 class="text-3xl font-bold mb-3"><span class="text-violet-600">Noise</span> Score</h1>
+    <p class="text-slate-500 max-w-xl mx-auto text-sm">Multi-source noise estimation combining real traffic counts, train/tram timetables, aircraft flight paths, and building screening. Higher score means quieter.</p>
   </div>
 
-  <div class="try-section">
-    <h2>Try It</h2>
-    <div class="try-form">
-      <input id="lat" type="number" step="any" placeholder="Latitude" value="-37.8136">
-      <input id="lng" type="number" step="any" placeholder="Longitude" value="144.9631">
-      <button onclick="compute()">Calculate</button>
+  <div class="card p-6 mb-10">
+    <h2 class="text-lg font-semibold mb-4">Try It</h2>
+    <div class="flex gap-2 flex-wrap">
+      <input id="lat" type="number" step="any" placeholder="Latitude" value="-37.8136" class="input-field w-36">
+      <input id="lng" type="number" step="any" placeholder="Longitude" value="144.9631" class="input-field w-36">
+      <button onclick="compute()" class="btn-primary">Calculate</button>
     </div>
-    <div id="result"></div>
+    <div id="result" class="hidden mt-4 p-4 bg-slate-50 rounded-lg"></div>
   </div>
 
-  <h2>What It Measures</h2>
-  <p>The Noise Score rates how quiet a location is on a scale of 0 to 100, where 100 is the quietest. It combines three noise sources (road traffic, rail/tram, aircraft) using physics-based acoustic models and real government data.</p>
+  <div class="prose-scores">
+    <h2>What It Measures</h2>
+    <p>The Noise Score rates how quiet a location is on a scale of 0 to 100, where 100 is the quietest. It combines three noise sources (road traffic, rail/tram, aircraft) using physics-based acoustic models and real government data.</p>
 
-  <div class="scale">
-    <div class="scale-item" style="background:#14532d"><span class="num">80-100</span>Very Quiet</div>
-    <div class="scale-item" style="background:#365314"><span class="num">60-79</span>Quiet</div>
-    <div class="scale-item" style="background:#78350f"><span class="num">40-59</span>Moderate</div>
-    <div class="scale-item" style="background:#92400e"><span class="num">20-39</span>Loud</div>
-    <div class="scale-item" style="background:#7f1d1d"><span class="num">0-19</span>Very Loud</div>
+    <div class="flex rounded-lg overflow-hidden text-xs text-center mb-6">
+      <div class="flex-1 py-3 bg-green-100 text-green-700"><span class="block text-sm font-bold">80-100</span>Very Quiet</div>
+      <div class="flex-1 py-3 bg-emerald-100 text-emerald-700"><span class="block text-sm font-bold">60-79</span>Quiet</div>
+      <div class="flex-1 py-3 bg-amber-100 text-amber-700"><span class="block text-sm font-bold">40-59</span>Moderate</div>
+      <div class="flex-1 py-3 bg-orange-100 text-orange-700"><span class="block text-sm font-bold">20-39</span>Loud</div>
+      <div class="flex-1 py-3 bg-red-100 text-red-700"><span class="block text-sm font-bold">0-19</span>Very Loud</div>
+    </div>
+
+    <h2>Noise Sources</h2>
+
+    <h3>1. Road Traffic</h3>
+    <p>Uses VicRoads AADT (Annual Average Daily Traffic) ground truth for 14,600+ monitored road segments in Victoria. For unmonitored streets, falls back to conservative estimates based on Overture Maps road classification.</p>
+
+    <h3>2. Train &amp; Tram</h3>
+    <p>Uses PTV GTFS timetable data with actual service frequencies per route. SEL-based noise model accounts for peak vs off-peak service rates, pass-by duration, and distance attenuation.</p>
+
+    <h3>3. Aircraft</h3>
+    <p>Queries VicPlan planning overlays for MAEO (Melbourne Airport) and AEO (regional airports) zones. Maps ANEF contours to noise penalties based on AS2021-2015.</p>
+
+    <h2>Methodology</h2>
+
+    <h3>Data Sources</h3>
+    <table>
+      <tr><th>Dataset</th><th>Provider</th><th>Resolution</th><th>Records</th></tr>
+      <tr><td>Road traffic volumes (AADT)</td><td>VicRoads 2019</td><td>Segment-level</td><td>14,662</td></tr>
+      <tr><td>Road network + classification</td><td>Overture Maps</td><td>Segment-level</td><td>592,748</td></tr>
+      <tr><td>Train/tram timetables</td><td>PTV GTFS</td><td>Route-level</td><td>52 routes</td></tr>
+      <tr><td>Building footprints + heights</td><td>Overture Maps</td><td>~1m</td><td>1,720,000</td></tr>
+      <tr><td>Airport noise overlays</td><td>VicPlan (DELWP)</td><td>Polygon</td><td>Real-time API</td></tr>
+    </table>
+
+    <h3>Propagation Model</h3>
+    <ol>
+      <li><strong>Road emission</strong> -- CRTN L10: <code>42.2 + 10 log10(AADT)</code> with duty-cycle correction for low-traffic roads</li>
+      <li><strong>Rail emission</strong> -- SEL-based: <code>L_peak + 10 log10(duration) + 10 log10(N/3600)</code> using actual PTV service counts</li>
+      <li><strong>Distance attenuation</strong> -- <code>10 log10(d / d_ref)</code> + 3 dB ground absorption + 0.06 dB/m excess above 50m</li>
+      <li><strong>Building screening</strong> -- Maekawa barrier formula using Overture building heights, up to 20 dB reduction</li>
+      <li><strong>Energy summation</strong> -- Top-3 road + top-2 rail sources combined: <code>L_total = 10 log10(sum 10^(Li/10))</code></li>
+      <li><strong>Aircraft penalty</strong> -- ANEF zone adds ambient noise from flight path exposure</li>
+    </ol>
+
+    <h3>Deduplication</h3>
+    <p>Roads appearing in both VicRoads AADT and Overture Maps are deduplicated by distance proximity (80m threshold) to prevent double-counting the same physical road.</p>
+
+    <h2>Reference Benchmarks (Melbourne)</h2>
+    <table>
+      <tr><th>Location</th><th>Score</th><th>dB</th><th>Dominant Source</th><th>Label</th></tr>
+      <tr><td>CBD Flinders St</td><td>0</td><td>80</td><td>Flinders St (AADT 20,520) + Traralgon line</td><td>Very Loud</td></tr>
+      <tr><td>South Yarra Station</td><td>0</td><td>78</td><td>Frankston line (22 svc/hr peak)</td><td>Very Loud</td></tr>
+      <tr><td>Toorak Rd</td><td>29</td><td>65</td><td>Frankston line @494m</td><td>Loud</td></tr>
+      <tr><td>Bentleigh residential</td><td>23</td><td>67</td><td>Frankston line @195m</td><td>Loud</td></tr>
+      <tr><td>Keilor (MAEO1)</td><td>79</td><td>47</td><td>Aircraft ANEF 25+ zone</td><td>Quiet</td></tr>
+    </table>
+
+    <h2>Limitations</h2>
+    <ul>
+      <li>VicRoads AADT only covers VIC state-monitored roads (arterials/highways)</li>
+      <li>PTV GTFS covers Melbourne metro only; no interstate rail</li>
+      <li>Aircraft overlays currently VIC only (MAEO + AEO); no NSW/QLD ANEF</li>
+      <li>Building screening only effective for secondary noise sources</li>
+      <li>No industrial or construction noise sources</li>
+    </ul>
+
+    <h2>API</h2>
+    <p><code>GET /scores/noise?lat=-37.8136&amp;lng=144.9631</code></p>
   </div>
 
-  <h2>Noise Sources</h2>
-
-  <h3>1. Road Traffic</h3>
-  <p>Uses VicRoads AADT (Annual Average Daily Traffic) ground truth for 14,600+ monitored road segments in Victoria. For unmonitored streets, falls back to conservative estimates based on Overture Maps road classification.</p>
-
-  <h3>2. Train &amp; Tram</h3>
-  <p>Uses PTV GTFS timetable data with actual service frequencies per route. SEL-based noise model accounts for peak vs off-peak service rates, pass-by duration, and distance attenuation.</p>
-
-  <h3>3. Aircraft</h3>
-  <p>Queries VicPlan planning overlays for MAEO (Melbourne Airport) and AEO (regional airports) zones. Maps ANEF contours to noise penalties based on AS2021-2015.</p>
-
-  <h2>Methodology</h2>
-
-  <h3>Data Sources</h3>
-  <table>
-    <tr><th>Dataset</th><th>Provider</th><th>Resolution</th><th>Records</th></tr>
-    <tr><td>Road traffic volumes (AADT)</td><td>VicRoads 2019</td><td>Segment-level</td><td>14,662</td></tr>
-    <tr><td>Road network + classification</td><td>Overture Maps</td><td>Segment-level</td><td>592,748</td></tr>
-    <tr><td>Train/tram timetables</td><td>PTV GTFS</td><td>Route-level</td><td>52 routes</td></tr>
-    <tr><td>Building footprints + heights</td><td>Overture Maps</td><td>~1m</td><td>1,720,000</td></tr>
-    <tr><td>Airport noise overlays</td><td>VicPlan (DELWP)</td><td>Polygon</td><td>Real-time API</td></tr>
-  </table>
-
-  <h3>Propagation Model</h3>
-  <ol>
-    <li><strong>Road emission</strong> &mdash; CRTN L10: <code>42.2 + 10 log10(AADT)</code> with duty-cycle correction for low-traffic roads</li>
-    <li><strong>Rail emission</strong> &mdash; SEL-based: <code>L_peak + 10 log10(duration) + 10 log10(N/3600)</code> using actual PTV service counts</li>
-    <li><strong>Distance attenuation</strong> &mdash; <code>10 log10(d / d_ref)</code> + 3 dB ground absorption + 0.06 dB/m excess above 50m</li>
-    <li><strong>Building screening</strong> &mdash; Maekawa barrier formula using Overture building heights, up to 20 dB reduction</li>
-    <li><strong>Energy summation</strong> &mdash; Top-3 road + top-2 rail sources combined: <code>L_total = 10 log10(sum 10^(Li/10))</code></li>
-    <li><strong>Aircraft penalty</strong> &mdash; ANEF zone adds ambient noise from flight path exposure</li>
-  </ol>
-
-  <h3>Deduplication</h3>
-  <p>Roads appearing in both VicRoads AADT and Overture Maps are deduplicated by distance proximity (80m threshold) to prevent double-counting the same physical road.</p>
-
-  <h2>Reference Benchmarks (Melbourne)</h2>
-  <table>
-    <tr><th>Location</th><th>Score</th><th>dB</th><th>Dominant Source</th><th>Label</th></tr>
-    <tr><td>CBD Flinders St</td><td>0</td><td>80</td><td>Flinders St (AADT 20,520) + Traralgon line</td><td>Very Loud</td></tr>
-    <tr><td>South Yarra Station</td><td>0</td><td>78</td><td>Frankston line (22 svc/hr peak)</td><td>Very Loud</td></tr>
-    <tr><td>Toorak Rd</td><td>29</td><td>65</td><td>Frankston line @494m</td><td>Loud</td></tr>
-    <tr><td>Bentleigh residential</td><td>23</td><td>67</td><td>Frankston line @195m</td><td>Loud</td></tr>
-    <tr><td>Keilor (MAEO1)</td><td>79</td><td>47</td><td>Aircraft ANEF 25+ zone</td><td>Quiet</td></tr>
-  </table>
-
-  <h2>Limitations</h2>
-  <ul>
-    <li>VicRoads AADT only covers VIC state-monitored roads (arterials/highways)</li>
-    <li>PTV GTFS covers Melbourne metro only; no interstate rail</li>
-    <li>Aircraft overlays currently VIC only (MAEO + AEO); no NSW/QLD ANEF</li>
-    <li>Building screening only effective for secondary noise sources (nearest road usually has line-of-sight)</li>
-    <li>No industrial or construction noise sources</li>
-  </ul>
-
-  <h2>API</h2>
-  <p><code>GET /scores/noise?lat=-37.8136&amp;lng=144.9631</code></p>
-
-  <div class="footer">
-    <p>Built by <a href="https://daleads.com.au">DA Leads</a> | Data: <a href="https://overturemaps.org">Overture Maps</a> + <a href="https://vicroadsdata.vicroadsopendatatest.opendata.arcgis.com/">VicRoads</a> + <a href="https://www.ptv.vic.gov.au/footer/data-and-reporting/datasets/">PTV GTFS</a> + <a href="https://mapshare.vic.gov.au/vicplan/">VicPlan</a></p>
+  <div class="mt-16 pt-6 border-t border-slate-100 text-center text-xs text-slate-400">
+    Built by <a href="https://daleads.com.au" class="text-brand-500 hover:text-brand-600 no-underline">DA Leads</a> | Data: <a href="https://overturemaps.org" class="text-brand-500 hover:text-brand-600 no-underline">Overture Maps</a> + VicRoads + PTV GTFS + VicPlan
   </div>
 </div>
 
@@ -142,29 +110,29 @@ async function compute() {
   const lat = document.getElementById('lat').value;
   const lng = document.getElementById('lng').value;
   const el = document.getElementById('result');
-  el.style.display = 'block';
-  el.innerHTML = '<div style="color:#8b5cf6">Computing multi-source noise...</div>';
+  el.classList.remove('hidden');
+  el.innerHTML = '<div class="text-brand-500 text-sm">Computing multi-source noise...</div>';
   try {
     const resp = await fetch(`/scores/noise?lat=${lat}&lng=${lng}`);
     const d = await resp.json();
-    if (d.error) { el.innerHTML = `<div style="color:#ef4444">${d.error}</div>`; return; }
-    const color = d.score >= 60 ? '#22c55e' : d.score >= 40 ? '#f59e0b' : '#ef4444';
+    if (d.error) { el.innerHTML = `<div class="text-red-500 text-sm">${d.error}</div>`; return; }
+    const color = d.score >= 60 ? '#16a34a' : d.score >= 40 ? '#d97706' : '#dc2626';
     let grid = `
-      <div class="result-item"><span class="result-key">Total Noise</span><span>${d.estimated_db} dB</span></div>
-      <div class="result-item"><span class="result-key">Road Noise</span><span>${d.road_db} dB</span></div>`;
-    if (d.rail_db) grid += `<div class="result-item"><span class="result-key">Rail Noise</span><span>${d.rail_db} dB</span></div>`;
-    if (d.aircraft_db) grid += `<div class="result-item"><span class="result-key">Aircraft Noise</span><span>${d.aircraft_db} dB</span></div>`;
-    if (d.dominant_source) grid += `<div class="result-item"><span class="result-key">Dominant Source</span><span>${d.dominant_source}</span></div>`;
-    if (d.aadt_segments) grid += `<div class="result-item"><span class="result-key">AADT Segments</span><span>${d.aadt_segments}</span></div>`;
-    if (d.nearest_tram_m != null) grid += `<div class="result-item"><span class="result-key">Nearest Tram</span><span>${d.nearest_tram_m}m</span></div>`;
-    if (d.nearest_train_m != null) grid += `<div class="result-item"><span class="result-key">Nearest Train</span><span>${d.nearest_train_m}m</span></div>`;
-    if (d.max_building_screening_db) grid += `<div class="result-item"><span class="result-key">Building Screening</span><span>-${d.max_building_screening_db} dB</span></div>`;
-    if (d.aircraft) grid += `<div class="result-item"><span class="result-key">Aircraft Zone</span><span>${d.aircraft.zone_code} (ANEF ${d.aircraft.anef_min}+)</span></div>`;
+      <div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Total Noise</span><span class="text-slate-600">${d.estimated_db} dB</span></div>
+      <div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Road Noise</span><span class="text-slate-600">${d.road_db} dB</span></div>`;
+    if (d.rail_db) grid += `<div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Rail Noise</span><span class="text-slate-600">${d.rail_db} dB</span></div>`;
+    if (d.aircraft_db) grid += `<div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Aircraft</span><span class="text-slate-600">${d.aircraft_db} dB</span></div>`;
+    if (d.dominant_source) grid += `<div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Dominant</span><span class="text-slate-600">${d.dominant_source}</span></div>`;
+    if (d.nearest_tram_m != null) grid += `<div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Nearest Tram</span><span class="text-slate-600">${d.nearest_tram_m}m</span></div>`;
+    if (d.nearest_train_m != null) grid += `<div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Nearest Train</span><span class="text-slate-600">${d.nearest_train_m}m</span></div>`;
+    if (d.max_building_screening_db) grid += `<div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Building Screen</span><span class="text-slate-600">-${d.max_building_screening_db} dB</span></div>`;
+    if (d.aircraft) grid += `<div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Aircraft Zone</span><span class="text-slate-600">${d.aircraft.zone_code} (ANEF ${d.aircraft.anef_min}+)</span></div>`;
+    grid += `<div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">AADT Segments</span><span class="text-slate-600">${d.aadt_segments}</span></div>`;
     el.innerHTML = `
-      <div class="result-score" style="color:${color}">${d.score}<span style="font-size:20px;color:var(--dim)">/100</span></div>
-      <div class="result-label">${d.label}</div>
-      <div class="result-grid">${grid}</div>`;
-  } catch (e) { el.innerHTML = `<div style="color:#ef4444">Error: ${e.message}</div>`; }
+      <div class="text-5xl font-bold" style="color:${color}">${d.score}<span class="text-xl text-slate-400">/100</span></div>
+      <div class="text-sm text-slate-500 mb-3">${d.label}</div>
+      <div class="grid grid-cols-2 gap-2 text-sm">${grid}</div>`;
+  } catch (e) { el.innerHTML = `<div class="text-red-500 text-sm">Error: ${e.message}</div>`; }
 }
 </script>
 </body>

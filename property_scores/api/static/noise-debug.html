@@ -3,139 +3,155 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Noise Debug Map</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<title>Noise Debug Map - Property Scores</title>
+<link rel="stylesheet" href="/css/styles.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.css" rel="stylesheet">
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.js"></script>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; }
-  #map { position: absolute; top: 0; left: 0; right: 360px; bottom: 0; }
-  #panel { position: absolute; top: 0; right: 0; width: 360px; bottom: 0; background: #1e293b; overflow-y: auto; padding: 16px; border-left: 1px solid #334155; }
-  h1 { font-size: 18px; margin-bottom: 8px; }
-  .hint { color: #64748b; font-size: 13px; margin-bottom: 16px; }
-  .coords { display: flex; gap: 6px; margin-bottom: 12px; }
-  .coords input { flex: 1; padding: 8px; border: 1px solid #334155; border-radius: 6px; background: #0f172a; color: #e2e8f0; font-size: 13px; }
-  .coords button { padding: 8px 14px; border: none; border-radius: 6px; background: #8b5cf6; color: #fff; font-weight: 600; cursor: pointer; font-size: 13px; white-space: nowrap; }
-  .coords button:hover { background: #7c3aed; }
-  #score-box { background: #0f172a; border-radius: 8px; padding: 12px; margin-bottom: 12px; display: none; }
-  .score-num { font-size: 36px; font-weight: 700; }
-  .score-label { color: #94a3b8; font-size: 14px; }
-  .score-detail { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 8px; font-size: 13px; }
-  .score-detail .k { color: #64748b; }
-  .score-detail .v { text-align: right; }
-  #sources { font-size: 13px; }
-  #sources h3 { color: #8b5cf6; font-size: 14px; margin: 12px 0 6px; }
-  .src-item { padding: 6px 8px; border-radius: 4px; margin-bottom: 4px; cursor: pointer; transition: background 0.15s; }
-  .src-item:hover { background: #334155; }
-  .src-item .name { font-weight: 600; }
-  .src-item .meta { color: #94a3b8; }
-  .src-road { border-left: 3px solid #ef4444; padding-left: 8px; }
-  .src-nfdh { border-left: 3px solid #f59e0b; padding-left: 8px; }
-  .src-rail { border-left: 3px solid #3b82f6; padding-left: 8px; }
-  #loading { display: none; color: #8b5cf6; padding: 20px; text-align: center; }
-  .legend { position: absolute; bottom: 20px; left: 10px; background: rgba(30,41,59,0.95); padding: 10px 14px; border-radius: 8px; font-size: 12px; color: #e2e8f0; z-index: 1000; }
-  .legend-item { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
-  .legend-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
-  .legend-line { width: 20px; height: 3px; display: inline-block; border-radius: 2px; }
+  #map { position: absolute; top: 0; left: 0; right: 380px; bottom: 0; }
+  .mapboxgl-ctrl-bottom-left, .mapboxgl-ctrl-bottom-right { display: none; }
 </style>
 </head>
-<body>
+<body class="bg-slate-50 font-sans text-slate-900">
 
 <div id="map"></div>
 
-<div id="panel">
-  <h1>Noise Source Debug</h1>
-  <p class="hint">Click the map or enter coordinates.</p>
-  <div class="coords">
-    <input id="lat" type="number" step="any" placeholder="Lat" value="-37.8136">
-    <input id="lng" type="number" step="any" placeholder="Lng" value="144.9631">
-    <button onclick="query()">Go</button>
+<div class="absolute top-0 right-0 w-[380px] bottom-0 bg-white border-l border-slate-200 overflow-y-auto">
+  <div class="p-5">
+    <div class="flex items-center gap-2 mb-1">
+      <a href="/" class="text-slate-400 hover:text-brand-600 text-sm">&larr;</a>
+      <h1 class="text-lg font-bold">Noise Source Debug</h1>
+    </div>
+    <p class="text-xs text-slate-400 mb-4">Click the map or enter coordinates.</p>
+    <div class="flex gap-2 mb-4">
+      <input id="lat" type="number" step="any" placeholder="Lat" value="-37.8136" class="input-field flex-1 min-w-0">
+      <input id="lng" type="number" step="any" placeholder="Lng" value="144.9631" class="input-field flex-1 min-w-0">
+      <button onclick="query()" class="btn-primary">Go</button>
+    </div>
+    <div id="loading" class="hidden text-brand-500 text-sm py-5 text-center">Querying noise sources...</div>
+    <div id="score-box" class="hidden card p-4 mb-4"></div>
+    <div id="sources"></div>
   </div>
-  <div id="loading">Querying noise sources...</div>
-  <div id="score-box"></div>
-  <div id="sources"></div>
 </div>
 
-<div class="legend">
-  <div class="legend-item"><span class="legend-dot" style="background:#ef4444"></span> VicRoads AADT</div>
-  <div class="legend-item"><span class="legend-dot" style="background:#f59e0b"></span> NFDH Station</div>
-  <div class="legend-item"><span class="legend-line" style="background:#3b82f6"></span> Train</div>
-  <div class="legend-item"><span class="legend-line" style="background:#22c55e"></span> Tram</div>
-  <div class="legend-item"><span class="legend-dot" style="background:#a855f7;width:14px;height:14px"></span> Query Point</div>
+<!-- Legend -->
+<div class="absolute bottom-5 left-3 bg-white/95 backdrop-blur rounded-lg shadow-sm border border-slate-200 px-3 py-2 text-xs text-slate-600 z-10">
+  <div class="flex items-center gap-2 mb-1"><span class="w-2.5 h-2.5 rounded-full bg-red-500 inline-block"></span> VicRoads AADT</div>
+  <div class="flex items-center gap-2 mb-1"><span class="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block"></span> NFDH Station</div>
+  <div class="flex items-center gap-2 mb-1"><span class="w-5 h-0.5 bg-blue-500 inline-block rounded"></span> Train</div>
+  <div class="flex items-center gap-2 mb-1"><span class="w-5 h-0.5 bg-green-500 inline-block rounded"></span> Tram</div>
+  <div class="flex items-center gap-2"><span class="w-3.5 h-3.5 rounded-full bg-violet-500 inline-block"></span> Query Point</div>
 </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-const map = L.map('map').setView([-37.8136, 144.9631], 16);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-  attribution: '&copy; OSM &copy; CARTO',
-  maxZoom: 20,
-}).addTo(map);
+let map, popup;
+const sourceIds = [];
 
-let layers = L.layerGroup().addTo(map);
-let queryMarker = null;
+async function initMap() {
+  const cfg = await fetch('/api/config').then(r => r.json());
+  mapboxgl.accessToken = cfg.mapbox_token;
+  map = new mapboxgl.Map({
+    container: 'map',
+    style: 'mapbox://styles/mapbox/light-v11',
+    center: [144.9631, -37.8136],
+    zoom: 16,
+  });
+  map.addControl(new mapboxgl.NavigationControl(), 'top-right');
+  popup = new mapboxgl.Popup({ closeButton: false, closeOnClick: false });
+  map.on('click', (e) => {
+    document.getElementById('lat').value = e.lngLat.lat.toFixed(6);
+    document.getElementById('lng').value = e.lngLat.lng.toFixed(6);
+    query();
+  });
+}
+initMap();
 
-map.on('click', function(e) {
-  document.getElementById('lat').value = e.latlng.lat.toFixed(6);
-  document.getElementById('lng').value = e.latlng.lng.toFixed(6);
-  query();
-});
+function clearLayers() {
+  for (const id of sourceIds) {
+    if (map.getLayer(id)) map.removeLayer(id);
+    if (map.getSource(id)) map.removeSource(id);
+  }
+  sourceIds.length = 0;
+}
+
+function addGeoJSON(id, geojson, layerDef) {
+  map.addSource(id, { type: 'geojson', data: geojson });
+  map.addLayer({ id, source: id, ...layerDef });
+  sourceIds.push(id);
+}
+
+function scoreColor(score) {
+  return score >= 60 ? '#16a34a' : score >= 40 ? '#d97706' : '#dc2626';
+}
 
 async function query() {
   const lat = parseFloat(document.getElementById('lat').value);
   const lng = parseFloat(document.getElementById('lng').value);
   if (isNaN(lat) || isNaN(lng)) return;
 
-  document.getElementById('loading').style.display = 'block';
-  document.getElementById('score-box').style.display = 'none';
+  document.getElementById('loading').classList.remove('hidden');
+  document.getElementById('score-box').classList.add('hidden');
   document.getElementById('sources').innerHTML = '';
-  layers.clearLayers();
+  clearLayers();
 
-  if (queryMarker) map.removeLayer(queryMarker);
-  queryMarker = L.circleMarker([lat, lng], {radius: 8, color: '#a855f7', fillColor: '#a855f7', fillOpacity: 1, weight: 2}).addTo(map);
-  map.setView([lat, lng], map.getZoom() < 15 ? 16 : map.getZoom());
+  map.flyTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), 16) });
+
+  // Query point
+  addGeoJSON('query-pt', { type: 'Feature', geometry: { type: 'Point', coordinates: [lng, lat] } }, {
+    type: 'circle', paint: { 'circle-radius': 8, 'circle-color': '#8b5cf6', 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' }
+  });
+
+  // Radius circle (approx)
+  const circle = turf_circle([lng, lat], 0.5);
+  addGeoJSON('radius', circle, {
+    type: 'line', paint: { 'line-color': '#8b5cf6', 'line-width': 1, 'line-dasharray': [4, 4], 'line-opacity': 0.5 }
+  });
 
   try {
     const resp = await fetch(`/scores/noise/debug?lat=${lat}&lng=${lng}&radius=500`);
     const data = await resp.json();
-    document.getElementById('loading').style.display = 'none';
-    if (data.error) { document.getElementById('sources').innerHTML = `<p style="color:#ef4444">${data.error}</p>`; return; }
+    document.getElementById('loading').classList.add('hidden');
+    if (data.error) { document.getElementById('sources').innerHTML = `<p class="text-red-500 text-sm">${data.error}</p>`; return; }
     renderResult(data, lat, lng);
   } catch(e) {
-    document.getElementById('loading').style.display = 'none';
-    document.getElementById('sources').innerHTML = `<p style="color:#ef4444">Error: ${e.message}</p>`;
+    document.getElementById('loading').classList.add('hidden');
+    document.getElementById('sources').innerHTML = `<p class="text-red-500 text-sm">Error: ${e.message}</p>`;
   }
 }
 
 function renderResult(data, lat, lng) {
   const s = data.score;
-  const color = s.score >= 60 ? '#22c55e' : s.score >= 40 ? '#f59e0b' : '#ef4444';
+  const color = scoreColor(s.score);
 
   const box = document.getElementById('score-box');
-  box.style.display = 'block';
+  box.classList.remove('hidden');
   box.innerHTML = `
-    <div class="score-num" style="color:${color}">${s.score}<span style="font-size:16px;color:#64748b">/100</span></div>
-    <div class="score-label">${s.label} &mdash; Lden ${s.lden_db || s.estimated_db} dB &mdash; ${s.state || '?'}</div>
-    <div class="score-detail">
-      <span class="k">Leq 24h</span><span class="v">${s.leq_db || '?'} dB</span>
-      <span class="k">Lden</span><span class="v">${s.lden_db || s.estimated_db} dB</span>
-      <span class="k">Day (7-19)</span><span class="v">${s.leq_day_db || '?'} dB</span>
-      <span class="k">Night (23-7)</span><span class="v">${s.leq_night_db || '?'} dB</span>
-      <span class="k">Road (L10)</span><span class="v">${s.road_db} dB</span>
-      <span class="k">Rail</span><span class="v">${s.rail_db || '0'} dB</span>
-      <span class="k">VicRoads</span><span class="v">${s.aadt_segments}</span>
-      <span class="k">NFDH</span><span class="v">${s.nfdh_stations}</span>
-      <span class="k">Overture roads</span><span class="v">${s.road_count}</span>
-      ${s.max_building_screening_db ? `<span class="k">Screening</span><span class="v">-${s.max_building_screening_db} dB</span>` : ''}
-      ${s.nearest_train_m != null ? `<span class="k">Nearest train</span><span class="v">${s.nearest_train_m}m</span>` : ''}
-      ${s.nearest_tram_m != null ? `<span class="k">Nearest tram</span><span class="v">${s.nearest_tram_m}m</span>` : ''}
+    <div class="text-4xl font-bold" style="color:${color}">${s.score}<span class="text-base text-slate-400">/100</span></div>
+    <div class="text-xs text-slate-500 mb-2">${s.label} -- Lden ${s.lden_db || s.estimated_db} dB</div>
+    <div class="grid grid-cols-2 gap-1 text-xs">
+      <span class="text-slate-400">Leq 24h</span><span class="text-right text-slate-600">${s.leq_db || '?'} dB</span>
+      <span class="text-slate-400">Lden</span><span class="text-right text-slate-600">${s.lden_db || s.estimated_db} dB</span>
+      <span class="text-slate-400">Day (7-19)</span><span class="text-right text-slate-600">${s.leq_day_db || '?'} dB</span>
+      <span class="text-slate-400">Night (23-7)</span><span class="text-right text-slate-600">${s.leq_night_db || '?'} dB</span>
+      <span class="text-slate-400">Road (L10)</span><span class="text-right text-slate-600">${s.road_db} dB</span>
+      <span class="text-slate-400">Rail</span><span class="text-right text-slate-600">${s.rail_db || '0'} dB</span>
+      <span class="text-slate-400">VicRoads</span><span class="text-right text-slate-600">${s.aadt_segments}</span>
+      <span class="text-slate-400">NFDH</span><span class="text-right text-slate-600">${s.nfdh_stations}</span>
+      <span class="text-slate-400">Overture roads</span><span class="text-right text-slate-600">${s.road_count}</span>
+      ${s.max_building_screening_db ? `<span class="text-slate-400">Screening</span><span class="text-right text-slate-600">-${s.max_building_screening_db} dB</span>` : ''}
+      ${s.nearest_train_m != null ? `<span class="text-slate-400">Nearest train</span><span class="text-right text-slate-600">${s.nearest_train_m}m</span>` : ''}
+      ${s.nearest_tram_m != null ? `<span class="text-slate-400">Nearest tram</span><span class="text-right text-slate-600">${s.nearest_tram_m}m</span>` : ''}
     </div>
     ${s.lden_max_facade ? `
-    <div style="margin-top:10px;padding-top:10px;border-top:1px solid #334155">
-      <div style="font-size:13px;color:#8b5cf6;font-weight:600;margin-bottom:6px">Facade Analysis</div>
-      <div class="score-detail">
-        <span class="k">Max facade</span><span class="v">${s.lden_max_facade} dB (${s.max_facade_dir})</span>
-        <span class="k">Min facade</span><span class="v">${s.lden_min_facade} dB (${s.min_facade_dir})</span>
-        <span class="k">Range</span><span class="v">${s.facade_range_db} dB</span>
+    <div class="mt-3 pt-3 border-t border-slate-100">
+      <div class="text-xs font-semibold text-brand-600 mb-1">Facade Analysis</div>
+      <div class="grid grid-cols-2 gap-1 text-xs">
+        <span class="text-slate-400">Max facade</span><span class="text-right text-slate-600">${s.lden_max_facade} dB (${s.max_facade_dir})</span>
+        <span class="text-slate-400">Min facade</span><span class="text-right text-slate-600">${s.lden_min_facade} dB (${s.min_facade_dir})</span>
+        <span class="text-slate-400">Range</span><span class="text-right text-slate-600">${s.facade_range_db} dB</span>
       </div>
     </div>` : ''}`;
 
@@ -144,109 +160,145 @@ function renderResult(data, lat, lng) {
 
   // AADT sources
   if (src.aadt.length) {
-    html += `<h3>VicRoads AADT (${src.aadt.length})</h3>`;
+    html += `<h3 class="text-sm font-semibold text-brand-600 mt-4 mb-2">VicRoads AADT (${src.aadt.length})</h3>`;
     src.aadt.sort((a,b) => b.db - a.db);
+    const features = [];
+    const lines = [];
     for (const a of src.aadt.slice(0, 10)) {
-      html += `<div class="src-item src-road" data-lat="${a.lat}" data-lng="${a.lng}">
-        <div class="name">${a.road_name || 'Unknown'}</div>
-        <div class="meta">AADT ${a.aadt.toLocaleString()} | ${a.distance_m}m | ${a.db} dB</div>
+      html += `<div class="pl-3 border-l-2 border-red-400 py-1.5 mb-1 cursor-pointer hover:bg-slate-50 rounded-r text-xs" onclick="map.flyTo({center:[${a.lng},${a.lat}],zoom:18})">
+        <div class="font-semibold text-slate-700">${a.road_name || 'Unknown'}</div>
+        <div class="text-slate-400">AADT ${a.aadt.toLocaleString()} | ${a.distance_m}m | ${a.db} dB</div>
       </div>`;
-      const size = Math.min(Math.max(Math.sqrt(a.aadt) / 30, 3), 12);
-      const marker = L.circleMarker([a.lat, a.lng], {
-        radius: size, color: '#ef4444', fillColor: '#ef4444', fillOpacity: 0.7, weight: 1
-      }).bindTooltip(`${a.road_name}<br>AADT: ${a.aadt.toLocaleString()}<br>${a.distance_m}m | ${a.db} dB`, {className: 'dark-tooltip'});
-      layers.addLayer(marker);
-      L.polyline([[lat, lng], [a.lat, a.lng]], {color: '#ef4444', weight: 1, opacity: 0.3, dashArray: '4'}).addTo(layers);
+      features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [a.lng, a.lat] }, properties: { aadt: a.aadt, name: a.road_name, db: a.db, dist: a.distance_m } });
+      lines.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: [[lng, lat], [a.lng, a.lat]] } });
+    }
+    if (features.length) {
+      addGeoJSON('aadt-pts', { type: 'FeatureCollection', features }, {
+        type: 'circle', paint: { 'circle-radius': ['interpolate', ['linear'], ['get', 'aadt'], 0, 3, 50000, 12], 'circle-color': '#ef4444', 'circle-opacity': 0.7 }
+      });
+      addGeoJSON('aadt-lines', { type: 'FeatureCollection', features: lines }, {
+        type: 'line', paint: { 'line-color': '#ef4444', 'line-width': 1, 'line-opacity': 0.3, 'line-dasharray': [3, 3] }
+      });
+      map.on('mousemove', 'aadt-pts', (e) => {
+        if (!e.features.length) return;
+        const p = e.features[0].properties;
+        popup.setLngLat(e.lngLat).setHTML(`<div style="font-size:12px"><b>${p.name || 'Unknown'}</b><br>AADT: ${Number(p.aadt).toLocaleString()}<br>${p.dist}m | ${p.db} dB</div>`).addTo(map);
+        map.getCanvas().style.cursor = 'pointer';
+      });
+      map.on('mouseleave', 'aadt-pts', () => { popup.remove(); map.getCanvas().style.cursor = ''; });
     }
   }
 
   // NFDH sources
   if (src.nfdh.length) {
-    html += `<h3>NFDH Stations (${src.nfdh.length})</h3>`;
+    html += `<h3 class="text-sm font-semibold text-amber-600 mt-4 mb-2">NFDH Stations (${src.nfdh.length})</h3>`;
     src.nfdh.sort((a,b) => b.db - a.db);
+    const features = [];
+    const nfdhLines = [];
     for (const n of src.nfdh.slice(0, 10)) {
-      html += `<div class="src-item src-nfdh" data-lat="${n.lat}" data-lng="${n.lng}">
-        <div class="name">${n.road_name || 'Station'}</div>
-        <div class="meta">AADT ${n.aadt.toLocaleString()} | ${n.distance_m}m | ${n.db} dB</div>
+      html += `<div class="pl-3 border-l-2 border-amber-400 py-1.5 mb-1 cursor-pointer hover:bg-slate-50 rounded-r text-xs" onclick="map.flyTo({center:[${n.lng},${n.lat}],zoom:18})">
+        <div class="font-semibold text-slate-700">${n.road_name || 'Station'}</div>
+        <div class="text-slate-400">AADT ${n.aadt.toLocaleString()} | ${n.distance_m}m | ${n.db} dB</div>
       </div>`;
-      const size = Math.min(Math.max(Math.sqrt(n.aadt) / 30, 3), 12);
-      const marker = L.circleMarker([n.lat, n.lng], {
-        radius: size, color: '#f59e0b', fillColor: '#f59e0b', fillOpacity: 0.7, weight: 1
-      }).bindTooltip(`${n.road_name}<br>AADT: ${n.aadt.toLocaleString()}<br>${n.distance_m}m | ${n.db} dB`, {className: 'dark-tooltip'});
-      layers.addLayer(marker);
-      L.polyline([[lat, lng], [n.lat, n.lng]], {color: '#f59e0b', weight: 1, opacity: 0.3, dashArray: '4'}).addTo(layers);
+      features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [n.lng, n.lat] }, properties: { aadt: n.aadt, name: n.road_name, db: n.db, dist: n.distance_m } });
+      nfdhLines.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: [[lng, lat], [n.lng, n.lat]] } });
+    }
+    if (features.length) {
+      addGeoJSON('nfdh-pts', { type: 'FeatureCollection', features }, {
+        type: 'circle', paint: { 'circle-radius': ['interpolate', ['linear'], ['get', 'aadt'], 0, 3, 50000, 12], 'circle-color': '#f59e0b', 'circle-opacity': 0.7 }
+      });
+      addGeoJSON('nfdh-lines', { type: 'FeatureCollection', features: nfdhLines }, {
+        type: 'line', paint: { 'line-color': '#f59e0b', 'line-width': 1, 'line-opacity': 0.3, 'line-dasharray': [3, 3] }
+      });
+      map.on('mousemove', 'nfdh-pts', (e) => {
+        if (!e.features.length) return;
+        const p = e.features[0].properties;
+        popup.setLngLat(e.lngLat).setHTML(`<div style="font-size:12px"><b>${p.name || 'NFDH Station'}</b><br>AADT: ${Number(p.aadt).toLocaleString()}<br>${p.dist}m | ${p.db} dB</div>`).addTo(map);
+        map.getCanvas().style.cursor = 'pointer';
+      });
+      map.on('mouseleave', 'nfdh-pts', () => { popup.remove(); map.getCanvas().style.cursor = ''; });
     }
   }
 
   // Rail sources
   if (src.rail.length) {
-    html += `<h3>Rail/Tram (${src.rail.length})</h3>`;
+    html += `<h3 class="text-sm font-semibold text-blue-600 mt-4 mb-2">Rail/Tram (${src.rail.length})</h3>`;
     src.rail.sort((a,b) => b.db - a.db);
     for (const r of src.rail) {
       const icon = r.type === 'tram' ? 'Tram' : 'Train';
-      html += `<div class="src-item src-rail">
-        <div class="name">${icon}: ${r.route}</div>
-        <div class="meta">${r.distance_m}m | ${r.db} dB | ${r.peak_svc_hr || '?'}/hr peak</div>
+      html += `<div class="pl-3 border-l-2 border-blue-400 py-1.5 mb-1 text-xs">
+        <div class="font-semibold text-slate-700">${icon}: ${r.route}</div>
+        <div class="text-slate-400">${r.distance_m}m | ${r.db} dB | ${r.peak_svc_hr || '?'}/hr peak</div>
       </div>`;
     }
   }
 
-  // Draw rail shapes
+  // Rail shapes
+  const railFeatures = [];
   for (const shape of (src.rail_shapes || [])) {
     if (shape.coords.length < 2) continue;
-    const color = shape.route_type === 0 ? '#22c55e' : '#3b82f6';
-    L.polyline(shape.coords, {color, weight: 3, opacity: 0.7}).addTo(layers);
+    railFeatures.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: shape.coords.map(c => [c[1], c[0]]) }, properties: { type: shape.route_type } });
+  }
+  if (railFeatures.length) {
+    addGeoJSON('rail-lines', { type: 'FeatureCollection', features: railFeatures }, {
+      type: 'line', paint: { 'line-color': ['match', ['get', 'type'], 0, '#22c55e', '#3b82f6'], 'line-width': 3, 'line-opacity': 0.7 }
+    });
   }
 
-  // Draw radius circle
-  L.circle([lat, lng], {radius: 500, color: '#8b5cf6', fillColor: '#8b5cf6', fillOpacity: 0.03, weight: 1, dashArray: '6'}).addTo(layers);
-
-  // Draw facade sectors
+  // Facade sectors
   if (s.facade_sectors) {
     const dirs = ['N','NE','E','SE','S','SW','W','NW'];
     const vals = dirs.map(d => s.facade_sectors[d] || 35);
     const maxDb = Math.max(...vals);
     const minDb = Math.min(...vals);
-
+    const sectorFeatures = [];
     dirs.forEach((dir, i) => {
       const startAngle = i * 45 - 22.5;
       const endAngle = startAngle + 45;
       const db = vals[i];
       const t = maxDb > minDb ? (db - minDb) / (maxDb - minDb) : 0.5;
-      // green (quiet) → yellow → red (loud)
       const r = Math.round(t > 0.5 ? 255 : t * 2 * 255);
       const g = Math.round(t < 0.5 ? 255 : (1 - t) * 2 * 255);
       const color = `rgb(${r},${g},50)`;
-
-      const radius = 120; // meters
-      const points = [[lat, lng]];
+      const radius = 120;
+      const coords = [[lng, lat]];
       for (let a = startAngle; a <= endAngle; a += 5) {
         const rad = a * Math.PI / 180;
         const dlat = radius * Math.cos(rad) / 111320;
         const dlng = radius * Math.sin(rad) / (111320 * Math.cos(lat * Math.PI / 180));
-        points.push([lat + dlat, lng + dlng]);
+        coords.push([lng + dlng, lat + dlat]);
       }
-      points.push([lat, lng]);
-
-      L.polygon(points, {
-        color: color, fillColor: color, fillOpacity: 0.35, weight: 1, opacity: 0.6
-      }).bindTooltip(`${dir}: ${db} dB`, {className: 'dark-tooltip'}).addTo(layers);
+      coords.push([lng, lat]);
+      sectorFeatures.push({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [coords] }, properties: { color, db, dir } });
     });
+    addGeoJSON('facade', { type: 'FeatureCollection', features: sectorFeatures }, {
+      type: 'fill', paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.35 }
+    });
+    addGeoJSON('facade-border', { type: 'FeatureCollection', features: sectorFeatures }, {
+      type: 'line', paint: { 'line-color': ['get', 'color'], 'line-width': 1, 'line-opacity': 0.6 }
+    });
+    map.on('mousemove', 'facade', (e) => {
+      if (!e.features.length) return;
+      const p = e.features[0].properties;
+      popup.setLngLat(e.lngLat).setHTML(`<span style="font-size:12px;font-weight:600">${p.dir}: ${p.db} dB</span>`).addTo(map);
+      map.getCanvas().style.cursor = 'pointer';
+    });
+    map.on('mouseleave', 'facade', () => { popup.remove(); map.getCanvas().style.cursor = ''; });
   }
 
   document.getElementById('sources').innerHTML = html;
+}
 
-  // Click source items to fly to their location
-  document.querySelectorAll('.src-item[data-lat]').forEach(el => {
-    el.addEventListener('click', () => {
-      map.flyTo([parseFloat(el.dataset.lat), parseFloat(el.dataset.lng)], 18);
-    });
-  });
+function turf_circle(center, radiusKm, steps = 64) {
+  const coords = [];
+  for (let i = 0; i <= steps; i++) {
+    const angle = (i / steps) * 2 * Math.PI;
+    const dx = radiusKm * Math.cos(angle) / (111.32 * Math.cos(center[1] * Math.PI / 180));
+    const dy = radiusKm * Math.sin(angle) / 110.574;
+    coords.push([center[0] + dx, center[1] + dy]);
+  }
+  return { type: 'Feature', geometry: { type: 'LineString', coordinates: coords } };
 }
 </script>
-<style>
-.dark-tooltip { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; font-size: 12px; padding: 4px 8px; border-radius: 4px; }
-.dark-tooltip .leaflet-tooltip-arrow { display: none; }
-</style>
 </body>
 </html>

@@ -4,106 +4,94 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Property Scores — Dev Test</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="/css/styles.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.css" rel="stylesheet">
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.js"></script>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; }
-  #app { display: flex; height: 100vh; }
-  #map { flex: 1; }
-  #panel { width: 420px; overflow-y: auto; padding: 24px; border-left: 1px solid #1e293b; }
-  h1 { font-size: 20px; margin-bottom: 4px; }
-  .subtitle { color: #94a3b8; font-size: 13px; margin-bottom: 20px; }
-  .coord-bar { display: flex; gap: 8px; margin-bottom: 16px; }
-  .coord-bar input { flex: 1; padding: 8px 12px; border: 1px solid #334155; border-radius: 6px; background: #1e293b; color: #e2e8f0; font-size: 14px; }
-  .coord-bar button { padding: 8px 16px; border: none; border-radius: 6px; background: #3b82f6; color: #fff; cursor: pointer; font-size: 14px; white-space: nowrap; }
-  .coord-bar button:hover { background: #2563eb; }
-  .coord-bar button:disabled { background: #475569; cursor: not-allowed; }
-
-  .score-card { background: #1e293b; border-radius: 10px; padding: 16px; margin-bottom: 12px; }
-  .score-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-  .score-name { font-size: 16px; font-weight: 600; }
-  .score-badge { font-size: 28px; font-weight: 700; }
-  .score-label { font-size: 13px; color: #94a3b8; margin-bottom: 12px; }
-  .score-bar { height: 6px; border-radius: 3px; background: #334155; margin-bottom: 12px; }
-  .score-bar-fill { height: 100%; border-radius: 3px; transition: width 0.5s ease; }
-  .score-details { font-size: 13px; color: #94a3b8; }
-  .score-details dt { float: left; width: 180px; color: #64748b; }
-  .score-details dd { margin-left: 180px; margin-bottom: 4px; }
-
-  .status { text-align: center; padding: 40px; color: #64748b; }
-  .status.loading { color: #f59e0b; }
-  .status.error { color: #ef4444; }
-
-  .score-solar .score-bar-fill { background: linear-gradient(90deg, #f59e0b, #eab308); }
-  .score-noise .score-bar-fill { background: linear-gradient(90deg, #ef4444, #22c55e); }
-  .score-walk .score-bar-fill { background: linear-gradient(90deg, #ef4444, #3b82f6); }
-  .score-flood .score-bar-fill { background: linear-gradient(90deg, #ef4444, #06b6d4); }
-  .score-bushfire .score-bar-fill { background: linear-gradient(90deg, #ef4444, #f97316); }
-  .score-heat .score-bar-fill { background: linear-gradient(90deg, #ef4444, #22c55e); }
-  .score-view .score-bar-fill { background: linear-gradient(90deg, #6b7280, #8b5cf6); }
-
-  .category-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; font-size: 12px; margin-top: 8px; }
-  .cat-item { display: flex; justify-content: space-between; padding: 2px 0; }
-  .cat-name { color: #94a3b8; }
-  .cat-value { color: #e2e8f0; }
-  .cat-missing { color: #475569; }
-  .disclaimer { font-size: 11px; color: #475569; margin-top: 16px; padding: 8px 12px; border-left: 2px solid #334155; line-height: 1.5; }
+  #map { position: absolute; inset: 0; }
+  .mapboxgl-ctrl-bottom-left, .mapboxgl-ctrl-bottom-right { display: none; }
 </style>
 </head>
-<body>
-<div id="app">
-  <div id="map"></div>
-  <div id="panel">
-    <h1>Property Scores</h1>
-    <p class="subtitle">Click map or enter coordinates to compute scores</p>
-    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
-      <a href="/solar" style="padding:6px 12px;border-radius:6px;background:#1e293b;color:#eab308;font-size:13px;text-decoration:none;border:1px solid #334155;">Solar</a>
-      <a href="/noise" style="padding:6px 12px;border-radius:6px;background:#1e293b;color:#8b5cf6;font-size:13px;text-decoration:none;border:1px solid #334155;">Noise</a>
-      <a href="/walkability" style="padding:6px 12px;border-radius:6px;background:#1e293b;color:#3b82f6;font-size:13px;text-decoration:none;border:1px solid #334155;">Walkability</a>
-      <a href="/flood" style="padding:6px 12px;border-radius:6px;background:#1e293b;color:#06b6d4;font-size:13px;text-decoration:none;border:1px solid #334155;">Flood</a>
-      <a href="/bushfire" style="padding:6px 12px;border-radius:6px;background:#1e293b;color:#f97316;font-size:13px;text-decoration:none;border:1px solid #334155;">Bushfire</a>
-      <a href="/heat-island" style="padding:6px 12px;border-radius:6px;background:#1e293b;color:#ef4444;font-size:13px;text-decoration:none;border:1px solid #334155;">Heat Island</a>
-      <a href="/view-quality" style="padding:6px 12px;border-radius:6px;background:#1e293b;color:#8b5cf6;font-size:13px;text-decoration:none;border:1px solid #334155;">View Quality</a>
-      <a href="/contamination" style="padding:6px 12px;border-radius:6px;background:#1e293b;color:#10b981;font-size:13px;text-decoration:none;border:1px solid #334155;">Contamination</a>
-    </div>
+<body class="bg-slate-50 font-sans text-slate-900">
 
-    <div class="coord-bar">
-      <input id="lat" type="number" step="any" placeholder="Latitude" value="-37.8136">
-      <input id="lng" type="number" step="any" placeholder="Longitude" value="144.9631">
-      <button id="btn-go" onclick="fetchScores()">Score</button>
-    </div>
+<div class="flex h-screen">
+  <!-- Map -->
+  <div class="flex-1 relative">
+    <div id="map"></div>
+  </div>
 
-    <div id="results">
-      <div class="status">Click anywhere on the map to begin</div>
+  <!-- Panel -->
+  <div class="w-[420px] border-l border-slate-200 bg-white overflow-y-auto">
+    <div class="p-6">
+      <!-- Header -->
+      <div class="mb-5">
+        <h1 class="text-xl font-bold text-slate-900">Property Scores</h1>
+        <p class="text-xs text-slate-400 mt-1">Click map or enter coordinates to compute scores</p>
+      </div>
+
+      <!-- Navigation pills -->
+      <div class="flex flex-wrap gap-1.5 mb-5">
+        <a href="/solar" class="px-2.5 py-1 rounded-md text-xs font-medium border border-slate-200 bg-white text-amber-600 hover:bg-amber-50 transition-colors">Solar</a>
+        <a href="/noise" class="px-2.5 py-1 rounded-md text-xs font-medium border border-slate-200 bg-white text-violet-600 hover:bg-violet-50 transition-colors">Noise</a>
+        <a href="/walkability" class="px-2.5 py-1 rounded-md text-xs font-medium border border-slate-200 bg-white text-blue-600 hover:bg-blue-50 transition-colors">Walkability</a>
+        <a href="/flood" class="px-2.5 py-1 rounded-md text-xs font-medium border border-slate-200 bg-white text-cyan-600 hover:bg-cyan-50 transition-colors">Flood</a>
+        <a href="/bushfire" class="px-2.5 py-1 rounded-md text-xs font-medium border border-slate-200 bg-white text-orange-600 hover:bg-orange-50 transition-colors">Bushfire</a>
+        <a href="/heat-island" class="px-2.5 py-1 rounded-md text-xs font-medium border border-slate-200 bg-white text-red-600 hover:bg-red-50 transition-colors">Heat Island</a>
+        <a href="/view-quality" class="px-2.5 py-1 rounded-md text-xs font-medium border border-slate-200 bg-white text-violet-600 hover:bg-violet-50 transition-colors">View Quality</a>
+        <a href="/contamination" class="px-2.5 py-1 rounded-md text-xs font-medium border border-slate-200 bg-white text-emerald-600 hover:bg-emerald-50 transition-colors">Contamination</a>
+      </div>
+
+      <!-- Coordinate input -->
+      <div class="flex gap-2 mb-5">
+        <input id="lat" type="number" step="any" placeholder="Latitude" value="-37.8136"
+               class="input-field flex-1 min-w-0">
+        <input id="lng" type="number" step="any" placeholder="Longitude" value="144.9631"
+               class="input-field flex-1 min-w-0">
+        <button id="btn-go" onclick="fetchScores()" class="btn-primary whitespace-nowrap">Score</button>
+      </div>
+
+      <!-- Results -->
+      <div id="results">
+        <div class="text-center py-10 text-sm text-slate-400">Click anywhere on the map to begin</div>
+      </div>
     </div>
   </div>
 </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-const map = L.map('map').setView([-37.8136, 144.9631], 12);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-  attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',
-  maxZoom: 20,
-  subdomains: 'abcd',
-}).addTo(map);
+let map, marker;
 
-let marker = null;
-
-map.on('click', (e) => {
-  document.getElementById('lat').value = e.latlng.lat.toFixed(6);
-  document.getElementById('lng').value = e.latlng.lng.toFixed(6);
-  fetchScores();
-});
+async function initMap() {
+  const cfg = await fetch('/api/config').then(r => r.json());
+  mapboxgl.accessToken = cfg.mapbox_token;
+  map = new mapboxgl.Map({
+    container: 'map',
+    style: 'mapbox://styles/mapbox/light-v11',
+    center: [144.9631, -37.8136],
+    zoom: 12,
+  });
+  map.addControl(new mapboxgl.NavigationControl(), 'top-right');
+  map.on('click', (e) => {
+    document.getElementById('lat').value = e.lngLat.lat.toFixed(6);
+    document.getElementById('lng').value = e.lngLat.lng.toFixed(6);
+    fetchScores();
+  });
+}
+initMap();
 
 async function fetchScores() {
   const lat = parseFloat(document.getElementById('lat').value);
   const lng = parseFloat(document.getElementById('lng').value);
   if (isNaN(lat) || isNaN(lng)) return;
 
-  if (marker) map.removeLayer(marker);
-  marker = L.marker([lat, lng]).addTo(map);
-  map.setView([lat, lng], Math.max(map.getZoom(), 13));
+  if (marker) marker.remove();
+  marker = new mapboxgl.Marker({ color: '#2563eb' })
+    .setLngLat([lng, lat])
+    .addTo(map);
+  map.flyTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), 13) });
 
   const btn = document.getElementById('btn-go');
   btn.disabled = true;
@@ -111,9 +99,6 @@ async function fetchScores() {
 
   const results = document.getElementById('results');
   results.innerHTML = '';
-
-  const scores = {};
-  let arrived = 0;
 
   const endpoints = [
     { key: 'solar', url: `/scores/solar?lat=${lat}&lng=${lng}` },
@@ -126,17 +111,17 @@ async function fetchScores() {
     { key: 'view_quality', url: `/scores/view-quality?lat=${lat}&lng=${lng}` },
   ];
 
-  // Show loading placeholders for slow scores
-  const slowKeys = new Set(['flood', 'bushfire', 'heat_island', 'view_quality']);
+  const scores = {};
+  let arrived = 0;
+
   for (const ep of endpoints) {
     const div = document.createElement('div');
     div.id = `score-${ep.key}`;
-    div.className = 'score-card';
-    div.innerHTML = `<div class="score-header"><span class="score-name">${ep.key.replace('_',' ')}</span><span class="score-badge" style="color:#475569">...</span></div>`;
+    div.className = 'card p-4 mb-3';
+    div.innerHTML = `<div class="flex justify-between items-center"><span class="text-sm font-semibold text-slate-700">${ep.key.replace('_',' ')}</span><span class="text-2xl font-bold text-slate-300">...</span></div>`;
     results.appendChild(div);
   }
 
-  // Fetch each independently, render as they arrive
   const promises = endpoints.map(async (ep) => {
     try {
       const resp = await fetch(ep.url);
@@ -157,9 +142,9 @@ async function fetchScores() {
 }
 
 function scoreColor(score) {
-  if (score >= 70) return '#22c55e';
-  if (score >= 40) return '#f59e0b';
-  return '#ef4444';
+  if (score >= 70) return '#16a34a';
+  if (score >= 40) return '#d97706';
+  return '#dc2626';
 }
 
 function renderResults(lat, lng, scores) {
@@ -169,226 +154,138 @@ function renderResults(lat, lng, scores) {
   // Solar
   if (scores.solar && !scores.solar.error && scores.solar.score != null) {
     const s = scores.solar;
-    html += `
-      <div class="score-card score-solar">
-        <div class="score-header">
-          <span class="score-name">Solar Potential</span>
-          <span class="score-badge" style="color:${scoreColor(s.score)}">${s.score}</span>
-        </div>
-        <div class="score-label">${s.label}</div>
-        <div class="score-bar"><div class="score-bar-fill" style="width:${s.score}%;background:${scoreColor(s.score)}"></div></div>
-        <dl class="score-details">
-          <dt>GHI</dt><dd>${s.ghi_kwh_m2_year ?? 'N/A'} kWh/m&sup2;/year</dd>
-          <dt>DNI</dt><dd>${s.dni_kwh_m2_year ?? 'N/A'} kWh/m&sup2;/year</dd>
-          <dt>PV Output</dt><dd>${s.pvout_kwh_kwp_year} kWh/kWp/year</dd>
-          <dt>Optimal Tilt</dt><dd>${s.optimal_tilt_deg}&deg;</dd>
-          <dt>Avg Temperature</dt><dd>${s.temp_avg_c}&deg;C</dd>
-          <dt>Elevation</dt><dd>${s.elevation_m}m</dd>
-          ${s.estimated_annual_kwh ? `<dt>Est. Annual (50m&sup2; roof)</dt><dd>${s.estimated_annual_kwh.toLocaleString()} kWh</dd>` : ''}
-        </dl>
-      </div>`;
-  } else {
-    html += renderError('Solar Potential', scores.solar);
-  }
+    html += scoreCard('Solar Potential', s.score, s.label, 'bar-solar', 'badge-solar', `
+      <dt>GHI</dt><dd>${s.ghi_kwh_m2_year ?? 'N/A'} kWh/m&sup2;/year</dd>
+      <dt>DNI</dt><dd>${s.dni_kwh_m2_year ?? 'N/A'} kWh/m&sup2;/year</dd>
+      <dt>PV Output</dt><dd>${s.pvout_kwh_kwp_year} kWh/kWp/year</dd>
+      <dt>Optimal Tilt</dt><dd>${s.optimal_tilt_deg}&deg;</dd>
+      <dt>Avg Temperature</dt><dd>${s.temp_avg_c}&deg;C</dd>
+      <dt>Elevation</dt><dd>${s.elevation_m}m</dd>
+      ${s.estimated_annual_kwh ? `<dt>Est. Annual (50m&sup2;)</dt><dd>${s.estimated_annual_kwh.toLocaleString()} kWh</dd>` : ''}`);
+  } else { html += errorCard('Solar Potential', scores.solar); }
 
   // Noise
   if (scores.noise && !scores.noise.error && scores.noise.score != null) {
     const s = scores.noise;
-    let noiseDetails = `
-          <dt>Total Noise</dt><dd>${s.estimated_db} dB</dd>
-          <dt>Road Noise</dt><dd>${s.road_db} dB</dd>`;
-    if (s.rail_db) noiseDetails += `<dt>Rail Noise</dt><dd>${s.rail_db} dB</dd>`;
-    if (s.aircraft_db) noiseDetails += `<dt>Aircraft Noise</dt><dd>${s.aircraft_db} dB</dd>`;
-    if (s.dominant_source) noiseDetails += `<dt>Dominant</dt><dd>${s.dominant_source}</dd>`;
-    if (s.nearest_tram_m != null) noiseDetails += `<dt>Nearest Tram</dt><dd>${s.nearest_tram_m}m</dd>`;
-    if (s.nearest_train_m != null) noiseDetails += `<dt>Nearest Train</dt><dd>${s.nearest_train_m}m</dd>`;
-    if (s.max_building_screening_db) noiseDetails += `<dt>Building Screening</dt><dd>-${s.max_building_screening_db} dB</dd>`;
-    if (s.aircraft) noiseDetails += `<dt>Aircraft Zone</dt><dd>${s.aircraft.zone_code}</dd>`;
-    noiseDetails += `<dt>AADT Segments</dt><dd>${s.aadt_segments}</dd>`;
-    html += `
-      <div class="score-card score-noise">
-        <div class="score-header">
-          <span class="score-name">Noise Level</span>
-          <span class="score-badge" style="color:${scoreColor(s.score)}">${s.score}</span>
-        </div>
-        <div class="score-label">${s.label} &mdash; ~${s.estimated_db} dB</div>
-        <div class="score-bar"><div class="score-bar-fill" style="width:${s.score}%"></div></div>
-        <dl class="score-details">${noiseDetails}</dl>
-      </div>`;
-  } else {
-    html += renderError('Noise Level', scores.noise);
-  }
+    let d = `<dt>Total Noise</dt><dd>${s.estimated_db} dB</dd><dt>Road Noise</dt><dd>${s.road_db} dB</dd>`;
+    if (s.rail_db) d += `<dt>Rail Noise</dt><dd>${s.rail_db} dB</dd>`;
+    if (s.aircraft_db) d += `<dt>Aircraft</dt><dd>${s.aircraft_db} dB</dd>`;
+    if (s.dominant_source) d += `<dt>Dominant</dt><dd>${s.dominant_source}</dd>`;
+    if (s.nearest_tram_m != null) d += `<dt>Nearest Tram</dt><dd>${s.nearest_tram_m}m</dd>`;
+    if (s.nearest_train_m != null) d += `<dt>Nearest Train</dt><dd>${s.nearest_train_m}m</dd>`;
+    if (s.max_building_screening_db) d += `<dt>Building Screen</dt><dd>-${s.max_building_screening_db} dB</dd>`;
+    if (s.aircraft) d += `<dt>Aircraft Zone</dt><dd>${s.aircraft.zone_code}</dd>`;
+    d += `<dt>AADT Segments</dt><dd>${s.aadt_segments}</dd>`;
+    html += scoreCard('Noise Level', s.score, `${s.label} — ~${s.estimated_db} dB`, 'bar-noise', 'badge-noise', d);
+  } else { html += errorCard('Noise Level', scores.noise); }
 
   // Walkability
   if (scores.walkability && !scores.walkability.error && scores.walkability.score != null) {
     const s = scores.walkability;
-    html += `
-      <div class="score-card score-walk">
-        <div class="score-header">
-          <span class="score-name">Walkability</span>
-          <span class="score-badge" style="color:${scoreColor(s.score)}">${s.score}</span>
-        </div>
-        <div class="score-label">${s.label}</div>
-        <div class="score-bar"><div class="score-bar-fill" style="width:${s.score}%"></div></div>
-        <dl class="score-details">
-          <dt>POIs Found</dt><dd>${s.poi_count}</dd>
-        </dl>
-        <div class="category-grid">
-          ${Object.entries(s.category_scores || {}).map(([cat, info]) => `
-            <div class="cat-item">
-              <span class="cat-name">${cat}</span>
-              <span class="${info.distance_m ? 'cat-value' : 'cat-missing'}">${info.distance_m ? info.distance_m + 'm' : 'none'}</span>
-            </div>
-          `).join('')}
-        </div>
-      </div>`;
-  } else {
-    html += renderError('Walkability', scores.walkability);
-  }
+    let d = `<dt>POIs Found</dt><dd>${s.poi_count}</dd>`;
+    const cats = Object.entries(s.category_scores || {}).map(([cat, info]) =>
+      `<div class="flex justify-between py-0.5 text-xs"><span class="text-slate-400">${cat}</span><span class="${info.distance_m ? 'text-slate-700' : 'text-slate-300'}">${info.distance_m ? info.distance_m + 'm' : 'none'}</span></div>`
+    ).join('');
+    html += scoreCard('Walkability', s.score, s.label, 'bar-walk', 'badge-walk', d, cats ? `<div class="grid grid-cols-2 gap-x-3 mt-2 pt-2 border-t border-slate-100">${cats}</div>` : '');
+  } else { html += errorCard('Walkability', scores.walkability); }
 
   // Flood
   if (scores.flood && !scores.flood.error && scores.flood.score != null) {
     const s = scores.flood;
     const zones = s.flood_zones?.length ? s.flood_zones.join(', ') : 'None';
-    let floodDetails = `<dt>Overlay Zones</dt><dd>${zones}</dd>`;
+    let d = `<dt>Overlay Zones</dt><dd>${zones}</dd>`;
     if (s.jrc) {
-      floodDetails += `<dt>JRC Flood Cells</dt><dd>${s.jrc.flood_cells}/${s.jrc.total_cells}</dd>`;
-      floodDetails += `<dt>Max Occurrence</dt><dd>${s.jrc.max_occurrence_pct}%</dd>`;
-      if (s.jrc.nearest_water_m != null) floodDetails += `<dt>Nearest Water</dt><dd>${s.jrc.nearest_water_m}m</dd>`;
+      d += `<dt>JRC Flood Cells</dt><dd>${s.jrc.flood_cells}/${s.jrc.total_cells}</dd>`;
+      d += `<dt>Max Occurrence</dt><dd>${s.jrc.max_occurrence_pct}%</dd>`;
+      if (s.jrc.nearest_water_m != null) d += `<dt>Nearest Water</dt><dd>${s.jrc.nearest_water_m}m</dd>`;
     }
-    if (s.hand) {
-      floodDetails += `<dt>HAND</dt><dd>${s.hand.hand_m}m above drainage</dd>`;
-    }
-    if (s.p95) {
-      floodDetails += `<dt>P95 Rainfall</dt><dd>${s.p95.p95_mm}mm/day</dd>`;
-    }
-    html += `
-      <div class="score-card score-flood">
-        <div class="score-header">
-          <span class="score-name">Flood Risk</span>
-          <span class="score-badge" style="color:${scoreColor(s.score)}">${s.score}</span>
-        </div>
-        <div class="score-label">${s.label} (${s.state || 'N/A'})</div>
-        <div class="score-bar"><div class="score-bar-fill" style="width:${s.score}%"></div></div>
-        <dl class="score-details">${floodDetails}</dl>
-      </div>`;
-  } else {
-    html += renderError('Flood Risk', scores.flood);
-  }
+    if (s.hand) d += `<dt>HAND</dt><dd>${s.hand.hand_m}m above drainage</dd>`;
+    if (s.p95) d += `<dt>P95 Rainfall</dt><dd>${s.p95.p95_mm}mm/day</dd>`;
+    html += scoreCard('Flood Risk', s.score, `${s.label} (${s.state || 'N/A'})`, 'bar-flood', 'badge-flood', d);
+  } else { html += errorCard('Flood Risk', scores.flood); }
 
   // Bushfire
   if (scores.bushfire && !scores.bushfire.error && scores.bushfire.score != null) {
     const s = scores.bushfire;
     const zones = s.bushfire_zones?.length ? s.bushfire_zones.join(', ') : 'None';
-    let fireDetails = `<dt>Overlay</dt><dd>${zones}</dd>`;
-    if (s.vegetation) {
-      fireDetails += `<dt>Vegetation</dt><dd>${s.vegetation.land_cover_label} (fuel ${s.vegetation.fuel_risk})</dd>`;
-    }
+    let d = `<dt>Overlay</dt><dd>${zones}</dd>`;
+    if (s.vegetation) d += `<dt>Vegetation</dt><dd>${s.vegetation.land_cover_label} (fuel ${s.vegetation.fuel_risk})</dd>`;
     if (s.slope) {
-      fireDetails += `<dt>Slope</dt><dd>${s.slope.mean_slope_deg}&deg; avg, ${s.slope.max_slope_deg}&deg; max</dd>`;
-      fireDetails += `<dt>Elevation</dt><dd>${s.slope.elevation_m}m</dd>`;
+      d += `<dt>Slope</dt><dd>${s.slope.mean_slope_deg}&deg; avg, ${s.slope.max_slope_deg}&deg; max</dd>`;
+      d += `<dt>Elevation</dt><dd>${s.slope.elevation_m}m</dd>`;
     }
-    if (s.fire_history) {
-      fireDetails += `<dt>Fire History</dt><dd>${s.fire_history.seasons_with_fire}/${s.fire_history.total_seasons_checked} seasons</dd>`;
-    }
-    html += `
-      <div class="score-card score-bushfire">
-        <div class="score-header">
-          <span class="score-name">Bushfire Risk</span>
-          <span class="score-badge" style="color:${scoreColor(s.score)}">${s.score}</span>
-        </div>
-        <div class="score-label">${s.label}${s.category ? ' — ' + s.category : ''}</div>
-        <div class="score-bar"><div class="score-bar-fill" style="width:${s.score}%"></div></div>
-        <dl class="score-details">${fireDetails}</dl>
-      </div>`;
-  } else {
-    html += renderError('Bushfire Risk', scores.bushfire);
-  }
+    if (s.fire_history) d += `<dt>Fire History</dt><dd>${s.fire_history.seasons_with_fire}/${s.fire_history.total_seasons_checked} seasons</dd>`;
+    html += scoreCard('Bushfire Risk', s.score, `${s.label}${s.category ? ' — ' + s.category : ''}`, 'bar-bushfire', 'badge-fire', d);
+  } else { html += errorCard('Bushfire Risk', scores.bushfire); }
 
   // Heat Island
   if (scores.heat_island && !scores.heat_island.error && scores.heat_island.score != null) {
     const s = scores.heat_island;
-    html += `
-      <div class="score-card score-heat">
-        <div class="score-header">
-          <span class="score-name">Heat Island</span>
-          <span class="score-badge" style="color:${scoreColor(s.score)}">${s.score}</span>
-        </div>
-        <div class="score-label">${s.label}</div>
-        <div class="score-bar"><div class="score-bar-fill" style="width:${s.score}%"></div></div>
-        <dl class="score-details">
-          ${s.modis_lst_c ? `<dt>Surface Temp (MODIS)</dt><dd>${s.modis_lst_c}°C</dd>` : ''}
-          ${s.uhi_delta_c != null ? `<dt>UHI Delta</dt><dd>${s.uhi_delta_c > 0 ? '+' : ''}${s.uhi_delta_c}°C</dd>` : ''}
-          ${s.summer_mean_c ? `<dt>ERA5 Summer Mean</dt><dd>${s.summer_mean_c}°C</dd>` : ''}
-          ${s.summer_p90_c ? `<dt>ERA5 P90</dt><dd>${s.summer_p90_c}°C</dd>` : ''}
-          ${s.building_density != null ? `<dt>Building Density</dt><dd>${s.building_density}</dd>` : ''}
-          ${s.greenspace_factor != null ? `<dt>Green Space</dt><dd>${s.greenspace_factor}</dd>` : ''}
-        </dl>
-      </div>`;
-  } else {
-    html += renderError('Heat Island', scores.heat_island);
-  }
+    let d = '';
+    if (s.modis_lst_c) d += `<dt>Surface Temp</dt><dd>${s.modis_lst_c}°C</dd>`;
+    if (s.uhi_delta_c != null) d += `<dt>UHI Delta</dt><dd>${s.uhi_delta_c > 0 ? '+' : ''}${s.uhi_delta_c}°C</dd>`;
+    if (s.summer_mean_c) d += `<dt>ERA5 Summer Mean</dt><dd>${s.summer_mean_c}°C</dd>`;
+    if (s.summer_p90_c) d += `<dt>ERA5 P90</dt><dd>${s.summer_p90_c}°C</dd>`;
+    if (s.building_density != null) d += `<dt>Building Density</dt><dd>${s.building_density}</dd>`;
+    if (s.greenspace_factor != null) d += `<dt>Green Space</dt><dd>${s.greenspace_factor}</dd>`;
+    html += scoreCard('Heat Island', s.score, s.label, 'bar-heat', 'badge-heat', d);
+  } else { html += errorCard('Heat Island', scores.heat_island); }
 
   // View Quality
   if (scores.view_quality && !scores.view_quality.error && scores.view_quality.score != null) {
     const s = scores.view_quality;
-    let viewDetails = `<dt>Active Factors</dt><dd>${s.active_factors}/5</dd>`;
+    let d = `<dt>Active Factors</dt><dd>${s.active_factors}/5</dd>`;
     const f = s.factors || {};
-    if (f.ocean_proximity) viewDetails += `<dt>Ocean</dt><dd>${f.ocean_proximity.distance_m}m (${(f.ocean_proximity.value*100).toFixed(0)}%)</dd>`;
-    if (f.inland_water) viewDetails += `<dt>Inland Water</dt><dd>${f.inland_water.distance_m}m (${(f.inland_water.value*100).toFixed(0)}%)</dd>`;
-    if (f.elevation_advantage) viewDetails += `<dt>Elevation</dt><dd>${f.elevation_advantage.elevation_m}m (+${f.elevation_advantage.advantage_m}m)</dd>`;
-    if (f.green_space) viewDetails += `<dt>Green Space</dt><dd>${f.green_space.count} POIs, nearest ${f.green_space.nearest_m}m</dd>`;
-    if (f.building_openness) viewDetails += `<dt>Buildings 300m</dt><dd>${f.building_openness.buildings_300m} (${f.building_openness.tall_buildings} tall)</dd>`;
-    html += `
-      <div class="score-card score-view">
-        <div class="score-header">
-          <span class="score-name">View Quality</span>
-          <span class="score-badge" style="color:${scoreColor(s.score)}">${s.score}</span>
-        </div>
-        <div class="score-label">${s.label}</div>
-        <div class="score-bar"><div class="score-bar-fill" style="width:${s.score}%"></div></div>
-        <dl class="score-details">${viewDetails}</dl>
-      </div>`;
-  } else {
-    html += renderError('View Quality', scores.view_quality);
-  }
+    if (f.ocean_proximity) d += `<dt>Ocean</dt><dd>${f.ocean_proximity.distance_m}m (${(f.ocean_proximity.value*100).toFixed(0)}%)</dd>`;
+    if (f.inland_water) d += `<dt>Inland Water</dt><dd>${f.inland_water.distance_m}m (${(f.inland_water.value*100).toFixed(0)}%)</dd>`;
+    if (f.elevation_advantage) d += `<dt>Elevation</dt><dd>${f.elevation_advantage.elevation_m}m (+${f.elevation_advantage.advantage_m}m)</dd>`;
+    if (f.green_space) d += `<dt>Green Space</dt><dd>${f.green_space.count} POIs, nearest ${f.green_space.nearest_m}m</dd>`;
+    if (f.building_openness) d += `<dt>Buildings 300m</dt><dd>${f.building_openness.buildings_300m} (${f.building_openness.tall_buildings} tall)</dd>`;
+    html += scoreCard('View Quality', s.score, s.label, 'bar-view', 'badge-view', d);
+  } else { html += errorCard('View Quality', scores.view_quality); }
 
   // Contamination
   if (scores.contamination && !scores.contamination.error && scores.contamination.score != null) {
     const s = scores.contamination;
     const ind = s.industrial || {};
-    let contDetails = `<dt>EPA Sites (2km)</dt><dd>${s.epa_sites_count}</dd>`;
-    if (s.nearest_epa_site) contDetails += `<dt>Nearest EPA</dt><dd>${s.nearest_epa_site.distance_m}m</dd>`;
-    contDetails += `<dt>Industrial POIs (500m)</dt><dd>${ind.count_500m || 0}</dd>`;
-    if (ind.nearest_m) contDetails += `<dt>Nearest Industrial</dt><dd>${ind.nearest_type} (${ind.nearest_m}m)</dd>`;
-    html += `
-      <div class="score-card score-heat">
-        <div class="score-header">
-          <span class="score-name">Contamination</span>
-          <span class="score-badge" style="color:${scoreColor(s.score)}">${s.score}</span>
-        </div>
-        <div class="score-label">${s.label} (${s.state})</div>
-        <div class="score-bar"><div class="score-bar-fill" style="width:${s.score}%"></div></div>
-        <dl class="score-details">${contDetails}</dl>
-      </div>`;
-  } else {
-    html += renderError('Contamination', scores.contamination);
-  }
+    let d = `<dt>EPA Sites (2km)</dt><dd>${s.epa_sites_count}</dd>`;
+    if (s.nearest_epa_site) d += `<dt>Nearest EPA</dt><dd>${s.nearest_epa_site.distance_m}m</dd>`;
+    d += `<dt>Industrial POIs (500m)</dt><dd>${ind.count_500m || 0}</dd>`;
+    if (ind.nearest_m) d += `<dt>Nearest Industrial</dt><dd>${ind.nearest_type} (${ind.nearest_m}m)</dd>`;
+    html += scoreCard('Contamination', s.score, `${s.label} (${s.state})`, 'bar-contam', 'badge-contam', d);
+  } else { html += errorCard('Contamination', scores.contamination); }
 
-  html += `<div class="disclaimer">Scores are estimates based on open data and satellite imagery. They are not professional assessments and should not be used for insurance, legal, or financial decisions. View Quality is based on proximity, not actual line-of-sight.</div>`;
+  html += `<div class="mt-4 px-3 py-2 border-l-2 border-slate-200 text-[11px] text-slate-400 leading-relaxed">Scores are estimates based on open data and satellite imagery. They are not professional assessments and should not be used for insurance, legal, or financial decisions. View Quality is based on proximity, not actual line-of-sight.</div>`;
 
   el.innerHTML = html;
 }
 
-function renderError(name, data) {
+function scoreCard(name, score, label, barClass, badgeClass, detailsHtml, extraHtml) {
+  const color = scoreColor(score);
+  return `
+    <div class="card p-4 mb-3">
+      <div class="flex justify-between items-center mb-2">
+        <span class="text-sm font-semibold text-slate-700">${name}</span>
+        <span class="text-2xl font-bold" style="color:${color}">${score}</span>
+      </div>
+      <div class="text-xs text-slate-400 mb-3">${label}</div>
+      <div class="h-1.5 rounded-full bg-slate-100 mb-3">
+        <div class="${barClass} h-full rounded-full transition-all duration-500" style="width:${score}%"></div>
+      </div>
+      <dl class="text-xs [&>dt]:float-left [&>dt]:w-[160px] [&>dt]:text-slate-400 [&>dd]:ml-[160px] [&>dd]:text-slate-600 [&>dd]:mb-1">${detailsHtml}</dl>
+      ${extraHtml || ''}
+    </div>`;
+}
+
+function errorCard(name, data) {
   const msg = data?.error || 'Not available';
   return `
-    <div class="score-card">
-      <div class="score-header">
-        <span class="score-name">${name}</span>
-        <span class="score-badge" style="color:#475569">—</span>
+    <div class="card p-4 mb-3">
+      <div class="flex justify-between items-center">
+        <span class="text-sm font-semibold text-slate-700">${name}</span>
+        <span class="text-2xl font-bold text-slate-300">&mdash;</span>
       </div>
-      <div class="score-label status error" style="text-align:left">${msg}</div>
+      <div class="text-xs text-red-500 mt-2">${msg}</div>
     </div>`;
 }
 </script>

@@ -3,114 +3,76 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Flood Risk Score — Property Scores by DA Leads</title>
-<style>
-  :root { --bg: #0f172a; --surface: #1e293b; --border: #334155; --text: #e2e8f0; --muted: #94a3b8; --dim: #64748b; --accent: #06b6d4; --green: #22c55e; }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
-  .container { max-width: 900px; margin: 0 auto; padding: 40px 24px; }
-  .hero { text-align: center; margin-bottom: 48px; }
-  .hero-badge { display: inline-block; padding: 4px 12px; border-radius: 99px; background: rgba(6,182,212,0.15); color: var(--accent); font-size: 13px; font-weight: 600; margin-bottom: 16px; }
-  h1 { font-size: 36px; font-weight: 700; margin-bottom: 12px; }
-  h1 span { color: var(--accent); }
-  .hero p { font-size: 18px; color: var(--muted); max-width: 600px; margin: 0 auto; }
-  .try-section { background: var(--surface); border-radius: 12px; padding: 24px; margin-bottom: 40px; }
-  .try-section h2 { font-size: 18px; margin-bottom: 16px; }
-  .try-form { display: flex; gap: 8px; flex-wrap: wrap; }
-  .try-form input { padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font-size: 15px; width: 160px; }
-  .try-form button { padding: 10px 20px; border: none; border-radius: 8px; background: var(--accent); color: #000; font-weight: 600; cursor: pointer; font-size: 15px; }
-  .try-form button:hover { background: #0891b2; }
-  #result { margin-top: 16px; padding: 16px; border-radius: 8px; background: var(--bg); display: none; }
-  .result-score { font-size: 48px; font-weight: 700; }
-  .result-label { font-size: 16px; color: var(--muted); margin-bottom: 12px; }
-  .result-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  .result-item { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border); }
-  .result-key { color: var(--dim); }
-  h2 { font-size: 22px; margin-bottom: 16px; margin-top: 40px; }
-  h3 { font-size: 17px; color: var(--accent); margin-bottom: 8px; margin-top: 24px; }
-  p, li { color: var(--muted); }
-  ul { padding-left: 20px; margin-bottom: 12px; }
-  li { margin-bottom: 6px; }
-  table { width: 100%; border-collapse: collapse; margin: 16px 0; }
-  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); }
-  th { color: var(--dim); font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; }
-  td { color: var(--text); font-size: 14px; }
-  .scale { display: flex; margin: 16px 0; border-radius: 8px; overflow: hidden; }
-  .scale-item { flex: 1; padding: 12px 8px; text-align: center; font-size: 13px; }
-  .scale-item .num { font-size: 18px; font-weight: 700; display: block; }
-  code { background: var(--surface); padding: 2px 6px; border-radius: 4px; font-size: 13px; color: var(--accent); }
-  .footer { margin-top: 60px; text-align: center; color: var(--dim); font-size: 13px; }
-  .footer a { color: var(--accent); text-decoration: none; }
-</style>
+<title>Flood Risk Score - Property Scores</title>
+<link rel="stylesheet" href="/css/styles.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 </head>
-<body>
-<div class="container">
-  <div class="hero">
-    <div class="hero-badge">Property Scores by DA Leads</div>
-    <h1><span>Flood Risk</span> Score</h1>
-    <p>Check if a property sits within a government-designated flood overlay using official state planning data across Australia.</p>
+<body class="bg-slate-50 font-sans text-slate-900">
+<div class="max-w-3xl mx-auto px-6 py-10">
+  <a href="/" class="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-brand-600 mb-8">&larr; All Scores</a>
+
+  <div class="text-center mb-12">
+    <span class="inline-block px-3 py-1 rounded-full badge-flood text-xs font-semibold mb-4">Property Scores</span>
+    <h1 class="text-3xl font-bold mb-3"><span class="text-cyan-600">Flood Risk</span> Score</h1>
+    <p class="text-slate-500 max-w-xl mx-auto text-sm">Check if a property sits within a government-designated flood overlay using official state planning data across Australia.</p>
   </div>
 
-  <div class="try-section">
-    <h2>Try It</h2>
-    <div class="try-form">
-      <input id="lat" type="number" step="any" placeholder="Latitude" value="-37.8136">
-      <input id="lng" type="number" step="any" placeholder="Longitude" value="144.9631">
-      <button onclick="compute()">Check Flood Risk</button>
+  <div class="card p-6 mb-10">
+    <h2 class="text-lg font-semibold mb-4">Try It</h2>
+    <div class="flex gap-2 flex-wrap">
+      <input id="lat" type="number" step="any" placeholder="Latitude" value="-37.8136" class="input-field w-36">
+      <input id="lng" type="number" step="any" placeholder="Longitude" value="144.9631" class="input-field w-36">
+      <button onclick="compute()" class="btn-primary">Check Flood Risk</button>
     </div>
-    <div id="result"></div>
+    <div id="result" class="hidden mt-4 p-4 bg-slate-50 rounded-lg"></div>
   </div>
 
-  <h2>What It Measures</h2>
-  <p>The Flood Risk Score checks whether a property falls within officially designated flood overlays in state government planning schemes. A higher score means lower flood risk.</p>
+  <div class="prose-scores">
+    <h2>What It Measures</h2>
+    <p>The Flood Risk Score checks whether a property falls within officially designated flood overlays in state government planning schemes. A higher score means lower flood risk.</p>
 
-  <div class="scale">
-    <div class="scale-item" style="background:#7f1d1d"><span class="num">0-20</span>Very High Risk</div>
-    <div class="scale-item" style="background:#92400e"><span class="num">21-40</span>High Risk</div>
-    <div class="scale-item" style="background:#78350f"><span class="num">41-60</span>Moderate</div>
-    <div class="scale-item" style="background:#365314"><span class="num">61-80</span>Low Risk</div>
-    <div class="scale-item" style="background:#14532d"><span class="num">81-100</span>Very Low Risk</div>
+    <div class="flex rounded-lg overflow-hidden text-xs text-center mb-6">
+      <div class="flex-1 py-3 bg-red-100 text-red-700"><span class="block text-sm font-bold">0-20</span>Very High</div>
+      <div class="flex-1 py-3 bg-orange-100 text-orange-700"><span class="block text-sm font-bold">21-40</span>High</div>
+      <div class="flex-1 py-3 bg-amber-100 text-amber-700"><span class="block text-sm font-bold">41-60</span>Moderate</div>
+      <div class="flex-1 py-3 bg-emerald-100 text-emerald-700"><span class="block text-sm font-bold">61-80</span>Low</div>
+      <div class="flex-1 py-3 bg-green-100 text-green-700"><span class="block text-sm font-bold">81-100</span>Very Low</div>
+    </div>
+
+    <h2>Methodology</h2>
+
+    <h3>Data Sources</h3>
+    <table>
+      <tr><th>State</th><th>Source</th><th>Overlays</th></tr>
+      <tr><td>VIC</td><td>DELWP Planning Schemes API</td><td>FO (Floodway), LSIO, SBO, RFO</td></tr>
+      <tr><td>NSW</td><td>Environment NSW GeoServer</td><td>Flood Prone Land (Layer 230)</td></tr>
+      <tr><td>SA</td><td>Location SA</td><td>Flood Hazard (Layers 16, 17, 51)</td></tr>
+      <tr><td>TAS</td><td>TheList Tasmania</td><td>Flood-prone areas (Layer 3)</td></tr>
+      <tr><td>ACT</td><td>ACTmapi</td><td>Flood Planning Control Area</td></tr>
+    </table>
+
+    <h3>Severity Mapping</h3>
+    <table>
+      <tr><th>Overlay</th><th>Severity</th><th>Score Range</th></tr>
+      <tr><td>Floodway Overlay (FO)</td><td>Very High</td><td>10-20</td></tr>
+      <tr><td>Rural Floodway Overlay (RFO)</td><td>High</td><td>15-25</td></tr>
+      <tr><td>General Flood Overlay</td><td>High</td><td>20-40</td></tr>
+      <tr><td>Land Subject to Inundation (LSIO)</td><td>Moderate</td><td>30-50</td></tr>
+      <tr><td>Special Building Overlay (SBO)</td><td>Low-Moderate</td><td>40-55</td></tr>
+      <tr><td>No overlay</td><td>Very Low</td><td>85-90</td></tr>
+    </table>
+
+    <h2>Coverage</h2>
+    <p>Currently covers VIC, NSW, SA, TAS and ACT. QLD, WA and NT planning overlay data is not yet available via public ArcGIS services.</p>
+
+    <h2>API</h2>
+    <p><code>GET /scores/flood?lat=-37.8136&amp;lng=144.9631</code></p>
   </div>
 
-  <h2>Methodology</h2>
-
-  <h3>Data Sources</h3>
-  <table>
-    <tr><th>State</th><th>Source</th><th>Overlays</th></tr>
-    <tr><td>VIC</td><td>DELWP Planning Schemes API</td><td>FO (Floodway), LSIO, SBO, RFO</td></tr>
-    <tr><td>NSW</td><td>Environment NSW GeoServer</td><td>Flood Prone Land (Layer 230)</td></tr>
-    <tr><td>SA</td><td>Location SA</td><td>Flood Hazard (Layers 16, 17, 51)</td></tr>
-    <tr><td>TAS</td><td>TheList Tasmania</td><td>Flood-prone areas (Layer 3)</td></tr>
-    <tr><td>ACT</td><td>ACTmapi</td><td>Flood Planning Control Area</td></tr>
-  </table>
-
-  <h3>Scoring Logic</h3>
-  <ol>
-    <li><strong>State detection</strong> — Identify the Australian state from coordinates using bounding boxes.</li>
-    <li><strong>Overlay query</strong> — Query the relevant state's ArcGIS REST API for flood planning overlays at the point.</li>
-    <li><strong>Severity classification</strong> — Classify by severity: Floodway (most severe) to Land Subject to Inundation (moderate).</li>
-    <li><strong>Score assignment</strong> — Multiple overlapping zones take the worst (lowest) score.</li>
-  </ol>
-
-  <h3>Severity Mapping</h3>
-  <table>
-    <tr><th>Overlay</th><th>Severity</th><th>Score Range</th></tr>
-    <tr><td>Floodway Overlay (FO)</td><td>Very High</td><td>10-20</td></tr>
-    <tr><td>Rural Floodway Overlay (RFO)</td><td>High</td><td>15-25</td></tr>
-    <tr><td>General Flood Overlay</td><td>High</td><td>20-40</td></tr>
-    <tr><td>Land Subject to Inundation (LSIO)</td><td>Moderate</td><td>30-50</td></tr>
-    <tr><td>Special Building Overlay (SBO)</td><td>Low-Moderate</td><td>40-55</td></tr>
-    <tr><td>No overlay</td><td>Very Low</td><td>85-90</td></tr>
-  </table>
-
-  <h2>Coverage</h2>
-  <p>Currently covers VIC, NSW, SA, TAS and ACT. QLD, WA and NT planning overlay data is not yet available via public ArcGIS services. Locations in unsupported states return a default score of 85 with a note.</p>
-
-  <h2>API</h2>
-  <p><code>GET /scores/flood?lat=-37.8136&amp;lng=144.9631</code></p>
-
-  <div class="footer">
-    <p>Built by <a href="https://daleads.com.au">DA Leads</a> | Data: State Government Planning Schemes (Open Data)</p>
+  <div class="mt-16 pt-6 border-t border-slate-100 text-center text-xs text-slate-400">
+    Built by <a href="https://daleads.com.au" class="text-brand-500 hover:text-brand-600 no-underline">DA Leads</a> | Data: State Government Planning Schemes (Open Data)
   </div>
 </div>
 
@@ -119,24 +81,22 @@ async function compute() {
   const lat = document.getElementById('lat').value;
   const lng = document.getElementById('lng').value;
   const el = document.getElementById('result');
-  el.style.display = 'block';
-  el.innerHTML = '<div style="color:#06b6d4">Checking flood overlays...</div>';
+  el.classList.remove('hidden');
+  el.innerHTML = '<div class="text-brand-500 text-sm">Checking flood overlays...</div>';
   try {
     const resp = await fetch(`/scores/flood?lat=${lat}&lng=${lng}`);
     const d = await resp.json();
-    if (d.error) { el.innerHTML = `<div style="color:#ef4444">${d.error}</div>`; return; }
-    const color = d.score >= 70 ? '#22c55e' : d.score >= 40 ? '#f59e0b' : '#ef4444';
+    if (d.error) { el.innerHTML = `<div class="text-red-500 text-sm">${d.error}</div>`; return; }
+    const color = d.score >= 70 ? '#16a34a' : d.score >= 40 ? '#d97706' : '#dc2626';
     const zones = d.flood_zones?.length ? d.flood_zones.join(', ') : 'None detected';
     el.innerHTML = `
-      <div class="result-score" style="color:${color}">${d.score}<span style="font-size:20px;color:var(--dim)">/100</span></div>
-      <div class="result-label">${d.label} (${d.state || 'Unknown state'})</div>
-      <div class="result-grid">
-        <div class="result-item"><span class="result-key">Flood Zones</span><span>${zones}</span></div>
-        <div class="result-item"><span class="result-key">Zone Count</span><span>${d.zone_count}</span></div>
+      <div class="text-5xl font-bold" style="color:${color}">${d.score}<span class="text-xl text-slate-400">/100</span></div>
+      <div class="text-sm text-slate-500 mb-3">${d.label} (${d.state || 'Unknown state'})</div>
+      <div class="grid grid-cols-2 gap-2 text-sm">
+        <div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Flood Zones</span><span class="text-slate-600">${zones}</span></div>
+        <div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Zone Count</span><span class="text-slate-600">${d.zone_count}</span></div>
       </div>`;
-  } catch (e) {
-    el.innerHTML = `<div style="color:#ef4444">Error: ${e.message}</div>`;
-  }
+  } catch (e) { el.innerHTML = `<div class="text-red-500 text-sm">Error: ${e.message}</div>`; }
 }
 </script>
 </body>

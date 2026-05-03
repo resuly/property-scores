@@ -3,121 +3,90 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Heat Island Score — Property Scores by DA Leads</title>
-<style>
-  :root { --bg: #0f172a; --surface: #1e293b; --border: #334155; --text: #e2e8f0; --muted: #94a3b8; --dim: #64748b; --accent: #ef4444; --green: #22c55e; }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
-  .container { max-width: 900px; margin: 0 auto; padding: 40px 24px; }
-  .hero { text-align: center; margin-bottom: 48px; }
-  .hero-badge { display: inline-block; padding: 4px 12px; border-radius: 99px; background: rgba(239,68,68,0.15); color: var(--accent); font-size: 13px; font-weight: 600; margin-bottom: 16px; }
-  h1 { font-size: 36px; font-weight: 700; margin-bottom: 12px; }
-  h1 span { color: var(--accent); }
-  .hero p { font-size: 18px; color: var(--muted); max-width: 600px; margin: 0 auto; }
-  .try-section { background: var(--surface); border-radius: 12px; padding: 24px; margin-bottom: 40px; }
-  .try-section h2 { font-size: 18px; margin-bottom: 16px; }
-  .try-form { display: flex; gap: 8px; flex-wrap: wrap; }
-  .try-form input { padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font-size: 15px; width: 160px; }
-  .try-form button { padding: 10px 20px; border: none; border-radius: 8px; background: var(--accent); color: #fff; font-weight: 600; cursor: pointer; font-size: 15px; }
-  .try-form button:hover { background: #dc2626; }
-  #result { margin-top: 16px; padding: 16px; border-radius: 8px; background: var(--bg); display: none; }
-  .result-score { font-size: 48px; font-weight: 700; }
-  .result-label { font-size: 16px; color: var(--muted); margin-bottom: 12px; }
-  .result-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  .result-item { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border); }
-  .result-key { color: var(--dim); }
-  h2 { font-size: 22px; margin-bottom: 16px; margin-top: 40px; }
-  h3 { font-size: 17px; color: var(--accent); margin-bottom: 8px; margin-top: 24px; }
-  p, li { color: var(--muted); }
-  ul { padding-left: 20px; margin-bottom: 12px; }
-  li { margin-bottom: 6px; }
-  table { width: 100%; border-collapse: collapse; margin: 16px 0; }
-  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); }
-  th { color: var(--dim); font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; }
-  td { color: var(--text); font-size: 14px; }
-  .scale { display: flex; margin: 16px 0; border-radius: 8px; overflow: hidden; }
-  .scale-item { flex: 1; padding: 12px 8px; text-align: center; font-size: 13px; }
-  .scale-item .num { font-size: 18px; font-weight: 700; display: block; }
-  code { background: var(--surface); padding: 2px 6px; border-radius: 4px; font-size: 13px; color: var(--accent); }
-  .footer { margin-top: 60px; text-align: center; color: var(--dim); font-size: 13px; }
-  .footer a { color: var(--accent); text-decoration: none; }
-</style>
+<title>Heat Island Score - Property Scores</title>
+<link rel="stylesheet" href="/css/styles.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 </head>
-<body>
-<div class="container">
-  <div class="hero">
-    <div class="hero-badge">Property Scores by DA Leads</div>
-    <h1><span>Heat Island</span> Score</h1>
-    <p>Measure urban heat exposure using 5-year climate data, building density, and green space coverage. Higher score means cooler location.</p>
+<body class="bg-slate-50 font-sans text-slate-900">
+<div class="max-w-3xl mx-auto px-6 py-10">
+  <a href="/" class="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-brand-600 mb-8">&larr; All Scores</a>
+
+  <div class="text-center mb-12">
+    <span class="inline-block px-3 py-1 rounded-full badge-heat text-xs font-semibold mb-4">Property Scores</span>
+    <h1 class="text-3xl font-bold mb-3"><span class="text-red-600">Heat Island</span> Score</h1>
+    <p class="text-slate-500 max-w-xl mx-auto text-sm">Measure urban heat exposure using 5-year climate data, building density, and green space coverage. Higher score means cooler location.</p>
   </div>
 
-  <div class="try-section">
-    <h2>Try It</h2>
-    <div class="try-form">
-      <input id="lat" type="number" step="any" placeholder="Latitude" value="-37.8136">
-      <input id="lng" type="number" step="any" placeholder="Longitude" value="144.9631">
-      <button onclick="compute()">Check Heat</button>
+  <div class="card p-6 mb-10">
+    <h2 class="text-lg font-semibold mb-4">Try It</h2>
+    <div class="flex gap-2 flex-wrap">
+      <input id="lat" type="number" step="any" placeholder="Latitude" value="-37.8136" class="input-field w-36">
+      <input id="lng" type="number" step="any" placeholder="Longitude" value="144.9631" class="input-field w-36">
+      <button onclick="compute()" class="btn-primary">Check Heat</button>
     </div>
-    <div id="result"></div>
+    <div id="result" class="hidden mt-4 p-4 bg-slate-50 rounded-lg"></div>
   </div>
 
-  <h2>What It Measures</h2>
-  <p>The Heat Island Score estimates how hot a location gets during summer relative to surrounding areas. Urban heat islands form where concrete and asphalt absorb and re-radiate heat, while parks and vegetation provide cooling. A higher score means a cooler, more comfortable location.</p>
+  <div class="prose-scores">
+    <h2>What It Measures</h2>
+    <p>The Heat Island Score estimates how hot a location gets during summer relative to surrounding areas. Urban heat islands form where concrete and asphalt absorb and re-radiate heat, while parks and vegetation provide cooling. A higher score means a cooler, more comfortable location.</p>
 
-  <div class="scale">
-    <div class="scale-item" style="background:#7f1d1d"><span class="num">0-20</span>Extreme Heat</div>
-    <div class="scale-item" style="background:#92400e"><span class="num">21-40</span>Hot</div>
-    <div class="scale-item" style="background:#78350f"><span class="num">41-60</span>Moderate</div>
-    <div class="scale-item" style="background:#365314"><span class="num">61-80</span>Cool</div>
-    <div class="scale-item" style="background:#14532d"><span class="num">81-100</span>Very Cool</div>
+    <div class="flex rounded-lg overflow-hidden text-xs text-center mb-6">
+      <div class="flex-1 py-3 bg-red-100 text-red-700"><span class="block text-sm font-bold">0-20</span>Extreme</div>
+      <div class="flex-1 py-3 bg-orange-100 text-orange-700"><span class="block text-sm font-bold">21-40</span>Hot</div>
+      <div class="flex-1 py-3 bg-amber-100 text-amber-700"><span class="block text-sm font-bold">41-60</span>Moderate</div>
+      <div class="flex-1 py-3 bg-emerald-100 text-emerald-700"><span class="block text-sm font-bold">61-80</span>Cool</div>
+      <div class="flex-1 py-3 bg-green-100 text-green-700"><span class="block text-sm font-bold">81-100</span>Very Cool</div>
+    </div>
+
+    <h2>Methodology</h2>
+
+    <h3>Data Sources</h3>
+    <table>
+      <tr><th>Dataset</th><th>Provider</th><th>Resolution</th><th>Period</th></tr>
+      <tr><td>Daily max temperature</td><td>Open-Meteo (ERA5)</td><td>~10 km</td><td>5 years (2019-2024)</td></tr>
+      <tr><td>Building density</td><td>Overture Maps Buildings</td><td>Building-level</td><td>Current</td></tr>
+      <tr><td>Green space</td><td>Overture Maps POIs</td><td>POI-level</td><td>Current</td></tr>
+    </table>
+
+    <h3>Calculation Steps</h3>
+    <ol>
+      <li><strong>Summer temperature</strong> -- Fetch 5-year historical daily max temps for summer months (Dec-Feb). Compute mean and P90.</li>
+      <li><strong>Effective temperature</strong> -- Blend: <code>effective = mean * 0.4 + P90 * 0.6</code> (extreme days weighted more).</li>
+      <li><strong>Temperature score</strong> -- Normalize against 22C (cool) to 35C (extreme).</li>
+      <li><strong>Building density penalty</strong> -- Dense areas (500+ buildings/500m) lose up to 15 points.</li>
+      <li><strong>Green space bonus</strong> -- Areas with 20+ green spaces within 1km gain up to 5 points.</li>
+    </ol>
+
+    <h3>Formula</h3>
+    <p><code>score = temp_score - density_penalty + green_bonus</code></p>
+
+    <h2>Reference Locations</h2>
+    <table>
+      <tr><th>Location</th><th>Score</th><th>Summer Mean Max</th><th>Notes</th></tr>
+      <tr><td>Mt Hotham, VIC</td><td>~100</td><td>~18C</td><td>Alpine, very cool</td></tr>
+      <tr><td>Dandenong Ranges</td><td>~69</td><td>~24C</td><td>Elevation + tree cover</td></tr>
+      <tr><td>Melbourne CBD</td><td>~48</td><td>~28C</td><td>Dense urban, heat island</td></tr>
+      <tr><td>Western suburbs, VIC</td><td>~30</td><td>~31C</td><td>Flat, less vegetation</td></tr>
+      <tr><td>Mildura, VIC</td><td>~0</td><td>~35C</td><td>Inland, extreme heat</td></tr>
+    </table>
+
+    <h2>Limitations</h2>
+    <ul>
+      <li>Temperature grid is ~10km -- cannot capture block-level variation</li>
+      <li>Building density requires local Overture data</li>
+      <li>No impervious surface data (asphalt coverage)</li>
+      <li>No wind corridor or sea breeze modeling</li>
+    </ul>
+
+    <h2>API</h2>
+    <p><code>GET /scores/heat-island?lat=-37.8136&amp;lng=144.9631</code></p>
   </div>
 
-  <h2>Methodology</h2>
-
-  <h3>Data Sources</h3>
-  <table>
-    <tr><th>Dataset</th><th>Provider</th><th>Resolution</th><th>Period</th></tr>
-    <tr><td>Daily max temperature</td><td>Open-Meteo (ERA5 reanalysis)</td><td>~10 km</td><td>5 years (2019-2024)</td></tr>
-    <tr><td>Building density</td><td>Overture Maps Buildings</td><td>Building-level</td><td>Current</td></tr>
-    <tr><td>Green space</td><td>Overture Maps POIs</td><td>POI-level</td><td>Current</td></tr>
-  </table>
-
-  <h3>Calculation Steps</h3>
-  <ol>
-    <li><strong>Summer temperature</strong> — Fetch 5-year historical daily max temperatures for summer months (Dec-Feb Southern Hemisphere). Compute mean and P90 (90th percentile).</li>
-    <li><strong>Effective temperature</strong> — Blend: <code>effective = mean * 0.4 + P90 * 0.6</code> (extreme days weighted more).</li>
-    <li><strong>Temperature score</strong> — Normalize against reference range: 22 C (cool) to 35 C (extreme).</li>
-    <li><strong>Building density penalty</strong> — Count buildings within 500m. Dense areas (500+ buildings) lose up to 15 points.</li>
-    <li><strong>Green space bonus</strong> — Count parks/gardens within 1km. Areas with 20+ green spaces gain up to 5 points.</li>
-  </ol>
-
-  <h3>Formula</h3>
-  <p><code>score = temp_score - density_penalty + green_bonus</code></p>
-  <p>Where <code>temp_score = (35 - effective_temp) / (35 - 22) * 100</code></p>
-
-  <h2>Reference Locations</h2>
-  <table>
-    <tr><th>Location</th><th>Score</th><th>Summer Mean Max</th><th>Notes</th></tr>
-    <tr><td>Mt Hotham, VIC</td><td>~100</td><td>~18 C</td><td>Alpine, very cool</td></tr>
-    <tr><td>Dandenong Ranges, VIC</td><td>~69</td><td>~24 C</td><td>Elevation + tree cover</td></tr>
-    <tr><td>Melbourne CBD</td><td>~48</td><td>~28 C</td><td>Dense urban, heat island</td></tr>
-    <tr><td>Western suburbs, VIC</td><td>~30</td><td>~31 C</td><td>Flat, less vegetation</td></tr>
-    <tr><td>Mildura, VIC</td><td>~0</td><td>~35 C</td><td>Inland, extreme summer heat</td></tr>
-  </table>
-
-  <h2>Limitations</h2>
-  <ul>
-    <li>Temperature grid is ~10km — cannot capture block-level variation</li>
-    <li>Building density requires local Overture data (currently Melbourne only)</li>
-    <li>No impervious surface data (asphalt coverage is a better UHI proxy)</li>
-    <li>No wind corridor or sea breeze modeling</li>
-  </ul>
-
-  <h2>API</h2>
-  <p><code>GET /scores/heat-island?lat=-37.8136&amp;lng=144.9631</code></p>
-
-  <div class="footer">
-    <p>Built by <a href="https://daleads.com.au">DA Leads</a> | Data: <a href="https://open-meteo.com">Open-Meteo</a> + <a href="https://overturemaps.org">Overture Maps</a></p>
+  <div class="mt-16 pt-6 border-t border-slate-100 text-center text-xs text-slate-400">
+    Built by <a href="https://daleads.com.au" class="text-brand-500 hover:text-brand-600 no-underline">DA Leads</a> | Data: <a href="https://open-meteo.com" class="text-brand-500 hover:text-brand-600 no-underline">Open-Meteo</a> + <a href="https://overturemaps.org" class="text-brand-500 hover:text-brand-600 no-underline">Overture Maps</a>
   </div>
 </div>
 
@@ -126,25 +95,23 @@ async function compute() {
   const lat = document.getElementById('lat').value;
   const lng = document.getElementById('lng').value;
   const el = document.getElementById('result');
-  el.style.display = 'block';
-  el.innerHTML = '<div style="color:#ef4444">Computing heat island score...</div>';
+  el.classList.remove('hidden');
+  el.innerHTML = '<div class="text-brand-500 text-sm">Computing heat island score...</div>';
   try {
     const resp = await fetch(`/scores/heat-island?lat=${lat}&lng=${lng}`);
     const d = await resp.json();
-    if (d.error) { el.innerHTML = `<div style="color:#ef4444">${d.error}</div>`; return; }
-    const color = d.score >= 70 ? '#22c55e' : d.score >= 40 ? '#f59e0b' : '#ef4444';
+    if (d.error) { el.innerHTML = `<div class="text-red-500 text-sm">${d.error}</div>`; return; }
+    const color = d.score >= 70 ? '#16a34a' : d.score >= 40 ? '#d97706' : '#dc2626';
     el.innerHTML = `
-      <div class="result-score" style="color:${color}">${d.score}<span style="font-size:20px;color:var(--dim)">/100</span></div>
-      <div class="result-label">${d.label}</div>
-      <div class="result-grid">
-        <div class="result-item"><span class="result-key">Summer Mean Max</span><span>${d.summer_mean_c} C</span></div>
-        <div class="result-item"><span class="result-key">Summer P90 Max</span><span>${d.summer_p90_c} C</span></div>
-        ${d.building_density != null ? `<div class="result-item"><span class="result-key">Building Density</span><span>${d.building_density}</span></div>` : ''}
-        ${d.greenspace_factor != null ? `<div class="result-item"><span class="result-key">Green Space Factor</span><span>${d.greenspace_factor}</span></div>` : ''}
+      <div class="text-5xl font-bold" style="color:${color}">${d.score}<span class="text-xl text-slate-400">/100</span></div>
+      <div class="text-sm text-slate-500 mb-3">${d.label}</div>
+      <div class="grid grid-cols-2 gap-2 text-sm">
+        <div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Summer Mean Max</span><span class="text-slate-600">${d.summer_mean_c}°C</span></div>
+        <div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Summer P90 Max</span><span class="text-slate-600">${d.summer_p90_c}°C</span></div>
+        ${d.building_density != null ? `<div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Building Density</span><span class="text-slate-600">${d.building_density}</span></div>` : ''}
+        ${d.greenspace_factor != null ? `<div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Green Space</span><span class="text-slate-600">${d.greenspace_factor}</span></div>` : ''}
       </div>`;
-  } catch (e) {
-    el.innerHTML = `<div style="color:#ef4444">Error: ${e.message}</div>`;
-  }
+  } catch (e) { el.innerHTML = `<div class="text-red-500 text-sm">Error: ${e.message}</div>`; }
 }
 </script>
 </body>

@@ -1,0 +1,79 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply antialiased;
+  }
+}
+
+@layer components {
+  /* Score bar fills — per-score accent gradients */
+  .bar-solar    { background: linear-gradient(90deg, #f59e0b, #eab308); }
+  .bar-noise    { background: linear-gradient(90deg, #ef4444, #22c55e); }
+  .bar-walk     { background: linear-gradient(90deg, #ef4444, #3b82f6); }
+  .bar-flood    { background: linear-gradient(90deg, #ef4444, #06b6d4); }
+  .bar-bushfire { background: linear-gradient(90deg, #ef4444, #f97316); }
+  .bar-heat     { background: linear-gradient(90deg, #ef4444, #22c55e); }
+  .bar-view     { background: linear-gradient(90deg, #6b7280, #8b5cf6); }
+  .bar-contam   { background: linear-gradient(90deg, #ef4444, #10b981); }
+
+  /* Score color badges */
+  .badge-solar  { @apply bg-amber-50 text-amber-600; }
+  .badge-noise  { @apply bg-violet-50 text-violet-600; }
+  .badge-walk   { @apply bg-blue-50 text-blue-600; }
+  .badge-flood  { @apply bg-cyan-50 text-cyan-600; }
+  .badge-fire   { @apply bg-orange-50 text-orange-600; }
+  .badge-heat   { @apply bg-red-50 text-red-600; }
+  .badge-view   { @apply bg-violet-50 text-violet-600; }
+  .badge-contam { @apply bg-emerald-50 text-emerald-600; }
+
+  /* Shared card */
+  .card {
+    @apply bg-white rounded-xl border border-slate-200 shadow-sm;
+  }
+
+  /* Try-it form input */
+  .input-field {
+    @apply px-3 py-2.5 border border-slate-200 rounded-lg bg-slate-50 text-slate-900 text-sm
+           focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 focus:outline-none
+           placeholder:text-slate-400;
+  }
+
+  /* Primary button */
+  .btn-primary {
+    @apply px-5 py-2.5 bg-brand-600 text-white text-sm font-semibold rounded-lg
+           hover:bg-brand-700 active:bg-brand-800 transition-colors
+           disabled:bg-slate-300 disabled:cursor-not-allowed;
+  }
+
+  /* Content prose (detail pages) */
+  .prose-scores h2 {
+    @apply text-xl font-bold text-slate-900 mb-4 mt-10;
+  }
+  .prose-scores h3 {
+    @apply text-base font-semibold text-brand-600 mb-2 mt-6;
+  }
+  .prose-scores p {
+    @apply text-sm text-slate-500 leading-relaxed mb-4;
+  }
+  .prose-scores li {
+    @apply text-sm text-slate-500 leading-relaxed mb-1.5;
+  }
+  .prose-scores ul, .prose-scores ol {
+    @apply pl-5 mb-4;
+  }
+  .prose-scores table {
+    @apply w-full text-sm border-collapse mb-6;
+  }
+  .prose-scores th {
+    @apply text-left text-[10px] font-bold uppercase tracking-widest text-slate-400 pb-3 border-b border-slate-100;
+  }
+  .prose-scores td {
+    @apply text-left text-sm text-slate-600 py-2.5 border-b border-slate-100;
+  }
+  .prose-scores code {
+    @apply bg-brand-50 text-brand-600 px-1.5 py-0.5 rounded text-xs font-mono;
+  }
+}

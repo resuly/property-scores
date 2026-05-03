@@ -11,19 +11,35 @@
 <link href="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.css" rel="stylesheet">
 <script src="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.js"></script>
 <style>
-  #map { position: absolute; top: 0; left: 0; right: 380px; bottom: 0; }
+  #map { position: absolute; top: 0; left: 0; right: 380px; bottom: 0; transition: right 0.3s ease; }
+  #sidebar { width: 380px; transition: width 0.3s ease; }
+  body.sidebar-collapsed #map { right: 36px; }
+  body.sidebar-collapsed #sidebar { width: 36px; }
+  body.sidebar-collapsed #sidebar > .sidebar-content { display: none; }
+  body.sidebar-collapsed .sidebar-toggle { transform: rotate(180deg); }
   .mapboxgl-ctrl-bottom-left, .mapboxgl-ctrl-bottom-right { display: none; }
   .toggle-row { display: flex; align-items: center; gap: 6px; padding: 4px 0; cursor: pointer; user-select: none; }
   .toggle-row input { cursor: pointer; }
   .toggle-row span { font-size: 12px; color: #475569; }
+  .sidebar-toggle { position: absolute; top: 50%; left: -14px; transform: translateY(-50%); width: 28px; height: 28px; border-radius: 9999px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 3px rgba(0,0,0,0.08); display: flex; align-items: center; justify-content: center; cursor: pointer; color: #64748b; z-index: 5; }
+  .sidebar-toggle:hover { color: #2563eb; border-color: #93c5fd; }
+  /* SVG facade overlay (anchored via mapbox Marker, never zoom-distorted) */
+  #facade-svg { pointer-events: none; }
+  #facade-svg .petal { transition: opacity 0.2s; cursor: pointer; pointer-events: auto; }
+  #facade-svg .petal:hover { opacity: 0.85; }
+  #facade-svg text { font: 600 11px Inter, system-ui, sans-serif; fill: #1e293b; pointer-events: none; }
+  #facade-svg .label-bg { fill: rgba(255,255,255,0.92); stroke: rgba(0,0,0,0.06); }
 </style>
 </head>
 <body class="bg-slate-50 font-sans text-slate-900">
 
 <div id="map"></div>
 
-<div class="absolute top-0 right-0 w-[380px] bottom-0 bg-white border-l border-slate-200 overflow-y-auto">
-  <div class="p-5">
+<div id="sidebar" class="absolute top-0 right-0 bottom-0 bg-white border-l border-slate-200 overflow-y-auto">
+  <button class="sidebar-toggle" onclick="document.body.classList.toggle('sidebar-collapsed'); setTimeout(() => map.resize(), 320)" title="Collapse sidebar">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 6 15 12 9 18"/></svg>
+  </button>
+  <div class="sidebar-content p-5">
     <div class="flex items-center gap-2 mb-1">
       <a href="/" class="text-slate-400 hover:text-brand-600 text-sm">&larr;</a>
       <h1 class="text-lg font-bold">Noise Source Debug</h1>
@@ -60,7 +76,11 @@
 </div>
 
 <!-- Legend -->
-<div class="absolute bottom-5 left-3 bg-white/95 backdrop-blur rounded-lg shadow-sm border border-slate-200 px-3 py-2 text-xs text-slate-600 z-10">
+<div class="absolute bottom-5 left-3 bg-white/95 backdrop-blur rounded-lg shadow-sm border border-slate-200 px-3 py-2 text-xs text-slate-600 z-10" style="min-width:180px">
+  <div class="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Noise dB scale</div>
+  <div class="h-2 rounded-full mb-1" style="background:linear-gradient(90deg,#22c55e 0%,#84cc16 22%,#f59e0b 44%,#ef4444 66%,#b91c1c 100%)"></div>
+  <div class="flex justify-between text-[9px] text-slate-400 mb-2"><span>35</span><span>55</span><span>65</span><span>75</span><span>80+</span></div>
+  <div class="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Sources</div>
   <div class="flex items-center gap-2 mb-1"><span class="w-2.5 h-2.5 rounded-full bg-red-500 inline-block"></span> VicRoads AADT</div>
   <div class="flex items-center gap-2 mb-1"><span class="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block"></span> NFDH Station</div>
   <div class="flex items-center gap-2 mb-1"><span class="w-5 h-0.5 bg-blue-500 inline-block rounded"></span> Train</div>
@@ -113,6 +133,8 @@ async function initMap() {
 }
 initMap();
 
+let facadeMarker = null;
+
 function clearLayers() {
   if (rippleRAF) { cancelAnimationFrame(rippleRAF); rippleRAF = null; }
   for (const id of sourceIds) {
@@ -120,6 +142,7 @@ function clearLayers() {
     if (map.getSource(id)) map.removeSource(id);
   }
   sourceIds.length = 0;
+  if (facadeMarker) { facadeMarker.remove(); facadeMarker = null; }
 }
 
 function addGeoJSON(id, geojson, layerDef) {
@@ -175,24 +198,29 @@ function renderResult(data, lat, lng) {
   const s = data.score;
   const color = scoreColor(s.score);
 
-  // ---- Score panel ----
+  // ---- Score panel (dB-centric) ----
   const box = document.getElementById('score-box');
   box.classList.remove('hidden');
   const sc = Math.max(0, Math.min(100, s.score));
-  const trackColor = sc >= 60 ? 'bg-emerald-100' : sc >= 40 ? 'bg-amber-100' : 'bg-red-100';
-  const fillColor = sc >= 60 ? 'bg-emerald-500' : sc >= 40 ? 'bg-amber-500' : 'bg-red-500';
-  // Compact stat helper. Hint is rendered as a separate dim chip to avoid digits running into the value.
+  const lden = s.lden_db || s.estimated_db;
+  const dbColor = dbToColor(lden);
+  // dB scale 35-80 → 0-100% on bar
+  const dbPct = Math.max(0, Math.min(100, (lden - 35) / (80 - 35) * 100));
   const stat = (k, v, hint) => `<div class="flex justify-between items-baseline py-0.5"><span class="text-slate-400">${k}</span><span><span class="text-slate-700 font-medium">${v}</span>${hint ? ` <span class="text-slate-400 text-[10px]" style="margin-left:6px">${hint}</span>` : ''}</span></div>`;
 
   box.innerHTML = `
-    <div class="flex items-end gap-3 mb-2">
-      <div class="text-4xl font-bold leading-none" style="color:${color}">${sc.toFixed(0)}</div>
-      <div class="flex-1 mb-1">
-        <div class="flex justify-between text-[10px] text-slate-400 mb-1"><span>${s.label}</span><span>Lden ${s.lden_db || s.estimated_db} dB</span></div>
-        <div class="relative h-2 ${trackColor} rounded-full overflow-hidden">
-          <div class="absolute inset-y-0 left-0 ${fillColor} rounded-full transition-all duration-500" style="width:${sc}%"></div>
-        </div>
-      </div>
+    <div class="flex items-baseline gap-2 mb-1">
+      <div class="text-4xl font-bold leading-none" style="color:${dbColor}">${lden.toFixed(0)}</div>
+      <div class="text-sm font-semibold text-slate-500">dB Lden</div>
+      <div class="ml-auto text-xs text-slate-400">score ${sc.toFixed(0)}/100</div>
+    </div>
+    <div class="text-[11px] font-semibold text-slate-600 mb-1">${s.label}</div>
+    <div class="relative h-2 rounded-full overflow-hidden mb-1" style="background:linear-gradient(90deg,#22c55e 0%,#84cc16 22%,#f59e0b 44%,#ef4444 66%,#b91c1c 100%);opacity:0.25"></div>
+    <div class="relative -mt-3 mb-2 h-2">
+      <div class="absolute h-2 w-1 bg-slate-900 rounded-full" style="left:${dbPct}%;transform:translateX(-50%)"></div>
+    </div>
+    <div class="flex justify-between text-[9px] text-slate-400">
+      <span>35 quiet</span><span>55</span><span>65</span><span>75</span><span>80+ loud</span>
     </div>
 
     <div class="text-[10px] text-slate-400 uppercase tracking-wide mt-3 mb-1">Time of day</div>
@@ -401,21 +429,24 @@ function startRippleAnimation(lat, lng, src) {
   });
 
   rippleStart = performance.now();
+  const WAVES_PER_SOURCE = 3;
   function tick(now) {
-    const elapsed = (now - rippleStart) / 1000; // seconds
+    const elapsed = (now - rippleStart) / 1000;
     const features = [];
     for (let i = 0; i < all.length; i++) {
       const s = all[i];
-      // Period scales inversely with dB: louder sources ripple faster (1.5s @ 75dB → 4s @ 35dB)
       const period = Math.max(1.5, 5 - (s.db - 35) / 10);
-      const phase = ((elapsed + i * 0.3) % period) / period;  // 0 → 1
-      const radiusM = phase * 250;  // expand to 250m
-      if (radiusM < 5) continue;
-      features.push({
-        type: 'Feature',
-        geometry: turf_circle([s.lng, s.lat], radiusM / 1000, 48).geometry,
-        properties: { db: s.db, age: phase },
-      });
+      for (let w = 0; w < WAVES_PER_SOURCE; w++) {
+        const phaseOffset = w / WAVES_PER_SOURCE;
+        const phase = ((elapsed / period + i * 0.07 + phaseOffset) % 1);
+        const radiusM = phase * 250;
+        if (radiusM < 4) continue;
+        features.push({
+          type: 'Feature',
+          geometry: turf_circle([s.lng, s.lat], radiusM / 1000, 32).geometry,
+          properties: { db: s.db, age: phase },
+        });
+      }
     }
     const source = map.getSource('ripple');
     if (source) source.setData({ type: 'FeatureCollection', features });
@@ -449,81 +480,57 @@ function dbToRadiusM(db) {
   return ROSE_MIN_R + t * (ROSE_MAX_R - ROSE_MIN_R);
 }
 
+// SVG overlay anchored via mapbox Marker — never zoom-distorted, fixed 240px
+const FACADE_SVG_SIZE = 240;
+const FACADE_MIN_PX = 22;
+const FACADE_MAX_PX = 96;
+
 function drawFacadePie(s, lat, lng) {
   const vals = ROSE_DIRS.map(d => s.facade_sectors[d] || 35);
-  const sectorFeatures = [];
-  const labelFeatures = [];
-  const cosLat = Math.cos(lat * Math.PI / 180);
+  const center = FACADE_SVG_SIZE / 2;
 
+  let svg = '';
   ROSE_DIRS.forEach((dir, i) => {
     const db = vals[i];
-    const radiusM = dbToRadiusM(db);
-    const startAngle = i * 45 - 22.5;
-    const endAngle = startAngle + 45;
+    const t = Math.max(0, Math.min(1, (db - ROSE_MIN_DB) / (ROSE_MAX_DB - ROSE_MIN_DB)));
+    const r = FACADE_MIN_PX + t * (FACADE_MAX_PX - FACADE_MIN_PX);
+    const startAng = (i * 45 - 22.5) * Math.PI / 180;
+    const endAng = (i * 45 + 22.5) * Math.PI / 180;
+    // SVG: angle 0 = North (up), measured clockwise. x = sin, y = -cos.
+    const x1 = center + r * Math.sin(startAng);
+    const y1 = center - r * Math.cos(startAng);
+    const x2 = center + r * Math.sin(endAng);
+    const y2 = center - r * Math.cos(endAng);
     const color = dbToColor(db);
-    const coords = [[lng, lat]];
-    for (let a = startAngle; a <= endAngle; a += 3) {
-      const rad = a * Math.PI / 180;
-      const dlat = radiusM * Math.cos(rad) / 111320;
-      const dlng = radiusM * Math.sin(rad) / (111320 * cosLat);
-      coords.push([lng + dlng, lat + dlat]);
-    }
-    coords.push([lng, lat]);
-    sectorFeatures.push({
-      type: 'Feature',
-      geometry: { type: 'Polygon', coordinates: [coords] },
-      properties: { color, db, dir, radiusM: Math.round(radiusM) }
-    });
+    svg += `<path class="petal" d="M ${center.toFixed(1)} ${center.toFixed(1)} L ${x1.toFixed(1)} ${y1.toFixed(1)} A ${r.toFixed(1)} ${r.toFixed(1)} 0 0 1 ${x2.toFixed(1)} ${y2.toFixed(1)} Z" fill="${color}" fill-opacity="0.5" stroke="${color}" stroke-width="1.5" data-info="${dir}: ${db.toFixed(1)} dB"/>`;
 
-    // Label point at sector center, just outside the petal
-    const labelAngle = i * 45;
-    const labelRad = labelAngle * Math.PI / 180;
-    const labelDist = radiusM + 18;
-    const lblLat = lat + labelDist * Math.cos(labelRad) / 111320;
-    const lblLng = lng + labelDist * Math.sin(labelRad) / (111320 * cosLat);
-    labelFeatures.push({
-      type: 'Feature',
-      geometry: { type: 'Point', coordinates: [lblLng, lblLat] },
-      properties: { dir, db: db.toFixed(0), label: `${dir}\n${db.toFixed(0)}dB` }
-    });
+    // Label outside the petal
+    const labelAng = i * 45 * Math.PI / 180;
+    const lblR = r + 14;
+    const lx = center + lblR * Math.sin(labelAng);
+    const ly = center - lblR * Math.cos(labelAng);
+    const labelText = `${dir} ${db.toFixed(0)}`;
+    const labelW = labelText.length * 6.2 + 8;
+    svg += `<rect class="label-bg" x="${(lx - labelW/2).toFixed(1)}" y="${(ly - 7).toFixed(1)}" width="${labelW.toFixed(1)}" height="14" rx="3"/>`;
+    svg += `<text x="${lx.toFixed(1)}" y="${(ly + 3).toFixed(1)}" text-anchor="middle">${labelText}</text>`;
   });
 
-  // Fill petals
-  addGeoJSON('facade', { type: 'FeatureCollection', features: sectorFeatures }, {
-    type: 'fill',
-    paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.45 }
-  });
-  // Crisp outline so petals stay distinguishable on busy basemaps
-  addGeoJSON('facade-border', { type: 'FeatureCollection', features: sectorFeatures }, {
-    type: 'line',
-    paint: { 'line-color': ['get', 'color'], 'line-width': 1.5, 'line-opacity': 0.9 }
-  });
-  // Direction + dB text labels just outside each petal
-  addGeoJSON('facade-labels', { type: 'FeatureCollection', features: labelFeatures }, {
-    type: 'symbol',
-    layout: {
-      'text-field': ['get', 'label'],
-      'text-size': 11,
-      'text-font': ['Open Sans Semibold', 'Arial Unicode MS Bold'],
-      'text-allow-overlap': true,
-      'text-anchor': 'center',
-      'text-line-height': 1.0,
-    },
-    paint: {
-      'text-color': '#1e293b',
-      'text-halo-color': 'rgba(255,255,255,0.95)',
-      'text-halo-width': 2,
-    }
+  const el = document.createElement('div');
+  el.style.width = `${FACADE_SVG_SIZE}px`;
+  el.style.height = `${FACADE_SVG_SIZE}px`;
+  el.innerHTML = `<svg id="facade-svg" viewBox="0 0 ${FACADE_SVG_SIZE} ${FACADE_SVG_SIZE}" width="${FACADE_SVG_SIZE}" height="${FACADE_SVG_SIZE}">${svg}</svg>`;
+
+  // Tooltip via title attr (no popup overlay needed)
+  el.querySelectorAll('.petal').forEach(p => {
+    const info = p.getAttribute('data-info');
+    const titleEl = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+    titleEl.textContent = info;
+    p.appendChild(titleEl);
   });
 
-  // Hover for finer detail
-  map.on('mousemove', 'facade', (e) => {
-    if (!e.features.length) return;
-    const p = e.features[0].properties;
-    popup.setLngLat(e.lngLat).setHTML(`<div style="font-size:12px"><b>${p.dir}</b>: ${p.db} dB · ${p.radiusM}m petal</div>`).addTo(map);
-    map.getCanvas().style.cursor = 'pointer';
-  });
-  map.on('mouseleave', 'facade', () => { popup.remove(); map.getCanvas().style.cursor = ''; });
+  facadeMarker = new mapboxgl.Marker({ element: el, anchor: 'center' })
+    .setLngLat([lng, lat])
+    .addTo(map);
 }
 
 // ---- Terrain elevation profile ---------------------------------------------

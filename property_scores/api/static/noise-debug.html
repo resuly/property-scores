@@ -381,15 +381,42 @@ function renderResult(data, lat, lng) {
     }
   }
 
-  // Rail track shapes
+  // Rail track shapes — Google-Maps-style: each route distinct color, parallel offset, white halo
   const railFeatures = [];
-  for (const shape of (src.rail_shapes || [])) {
-    if (shape.coords.length < 2) continue;
-    railFeatures.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: shape.coords.map(c => [c[1], c[0]]) }, properties: { type: shape.route_type } });
-  }
+  const shapes = (src.rail_shapes || []).filter(s => s.coords.length >= 2);
+  shapes.forEach((shape, i) => {
+    railFeatures.push({
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: shape.coords.map(c => [c[1], c[0]]) },
+      properties: {
+        type: shape.route_type,
+        color: hashColor(shape.shape_id, shape.route_type),
+        offset: ((i % 7) - 3) * 3,  // -9..+9 px parallel offset
+      }
+    });
+  });
   if (railFeatures.length) {
+    // White halo underneath
+    addGeoJSON('rail-halo', { type: 'FeatureCollection', features: railFeatures }, {
+      type: 'line',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: {
+        'line-color': '#ffffff',
+        'line-width': ['interpolate', ['linear'], ['zoom'], 12, 3, 18, 5],
+        'line-opacity': 0.9,
+        'line-offset': ['get', 'offset'],
+      }
+    });
+    // Colored line on top
     addGeoJSON('rail-lines', { type: 'FeatureCollection', features: railFeatures }, {
-      type: 'line', paint: { 'line-color': ['match', ['get', 'type'], 0, '#22c55e', '#3b82f6'], 'line-width': 3, 'line-opacity': 0.7 }
+      type: 'line',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: {
+        'line-color': ['get', 'color'],
+        'line-width': ['interpolate', ['linear'], ['zoom'], 12, 1.5, 18, 3],
+        'line-opacity': 0.95,
+        'line-offset': ['get', 'offset'],
+      }
     });
   }
 
@@ -613,6 +640,22 @@ const ROSE_MIN_DB = 35;
 const ROSE_MAX_DB = 80;
 const ROSE_MIN_R = 25;
 const ROSE_MAX_R = 110;
+
+// Stable per-route color: hash shape_id → distinct hue. Trams (route_type 0) get
+// warm/green hues (90-180°), trains (other) get cool hues (200-340°), so the two
+// modes are visually distinguishable while individual routes remain unique.
+const _hashColorCache = {};
+function hashColor(shapeId, routeType) {
+  if (_hashColorCache[shapeId]) return _hashColorCache[shapeId];
+  let h = 0;
+  for (let i = 0; i < shapeId.length; i++) h = (h * 31 + shapeId.charCodeAt(i)) | 0;
+  const hueBase = routeType === 0 ? 90 : 200;
+  const hueRange = routeType === 0 ? 90 : 140;
+  const hue = hueBase + (Math.abs(h) % hueRange);
+  const color = `hsl(${hue}, 75%, 42%)`;
+  _hashColorCache[shapeId] = color;
+  return color;
+}
 
 function dbToColor(db) {
   // 35 dB → emerald, 55 → amber, 75 → red

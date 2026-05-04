@@ -242,45 +242,6 @@ def get_noise_terrain(
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@app.get("/scores/noise/slope")
-def get_noise_slope(lat: float = Query(...), lng: float = Query(...)):
-    """Compute slope, aspect, and elevation at a point via open-meteo's
-    elevation API (single request, 5 sample points: centre + N/S/E/W 50m)."""
-    import math, requests
-    dlat = 50 / 111_320
-    dlng = 50 / (111_320 * math.cos(math.radians(lat)))
-    lats = [lat, lat + dlat, lat - dlat, lat, lat]
-    lngs = [lng, lng, lng, lng + dlng, lng - dlng]
-    try:
-        resp = requests.get(
-            "https://api.open-meteo.com/v1/elevation",
-            params={
-                "latitude": ",".join(f"{x:.6f}" for x in lats),
-                "longitude": ",".join(f"{x:.6f}" for x in lngs),
-            },
-            timeout=5,
-        )
-        if not resp.ok:
-            return JSONResponse({"error": "elevation API unavailable"}, status_code=502)
-        elev = resp.json().get("elevation", [])
-        if len(elev) < 5 or any(e is None for e in elev):
-            return JSONResponse({"error": "elevation API returned partial data"}, status_code=502)
-        center, north, south, east, west = elev
-        dz_y = (north - south) / 100  # rise per 100m
-        dz_x = (east - west) / 100
-        slope_pct = math.sqrt(dz_x ** 2 + dz_y ** 2) * 100
-        aspect_deg = (math.degrees(math.atan2(dz_x, dz_y)) + 360) % 360
-        return {
-            "elevation_m": round(center, 1),
-            "slope_pct": round(slope_pct, 1),
-            "slope_deg": round(math.degrees(math.atan(slope_pct / 100)), 1),
-            "aspect_deg": round(aspect_deg, 0),
-        }
-    except Exception as e:
-        logger.exception("noise slope failed")
-        return JSONResponse({"error": str(e)}, status_code=500)
-
-
 @app.get("/scores/aircraft-noise")
 def get_aircraft_noise(lat: float = Query(...), lng: float = Query(...)):
     """Query airport noise overlay (MAEO/AEO) for a coordinate."""

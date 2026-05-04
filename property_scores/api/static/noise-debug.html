@@ -83,7 +83,6 @@
       <label class="toggle-row"><input type="checkbox" id="t-parcels" checked> <span>Parcel boundaries (click to inspect)</span></label>
     </div>
 
-    <div id="slope-card" class="hidden card p-3 mb-4"></div>
     <div id="terrain-chart" class="hidden card p-3 mb-4"></div>
     <div id="loading" class="hidden text-brand-500 text-sm py-5 text-center">Querying noise sources...</div>
     <div id="score-box" class="hidden card p-4 mb-4"></div>
@@ -263,7 +262,6 @@ async function query() {
 
   document.getElementById('loading').classList.remove('hidden');
   document.getElementById('score-box').classList.add('hidden');
-  document.getElementById('slope-card').classList.add('hidden');
   document.getElementById('terrain-chart').classList.add('hidden');
   document.getElementById('sources').innerHTML = '';
   clearLayers();
@@ -461,9 +459,6 @@ function renderResult(data, lat, lng) {
   // ---- Facade pie ----
   if (t.facade && s.facade_sectors) drawFacadePie(s, lat, lng);
 
-  // ---- Slope & aspect (async — separate open-meteo call ~0.5-1s) ----
-  fetchAndDrawSlope(lat, lng);
-
   // ---- Terrain elevation profile (async — open-meteo API ~1-2s) ----
   const terrainChart = document.getElementById('terrain-chart');
   if (t.terrain && data.terrain_source) {
@@ -567,30 +562,6 @@ function showParcelInfo(props) {
     ${rows}
     <div class="text-[10px] text-slate-400 mt-1">Right-click another parcel to swap.</div>
   `;
-}
-
-let slopeFetchToken = 0;
-async function fetchAndDrawSlope(lat, lng) {
-  const myToken = ++slopeFetchToken;
-  const card = document.getElementById('slope-card');
-  card.classList.remove('hidden');
-  card.innerHTML = `<div class="text-xs text-slate-400 py-1 text-center">Loading slope &amp; aspect…</div>`;
-  try {
-    const r = await fetch(`/scores/noise/slope?lat=${lat}&lng=${lng}`).then(r => r.json());
-    if (myToken !== slopeFetchToken) return;
-    if (r.error) { card.innerHTML = `<div class="text-xs text-red-500 py-1 text-center">Slope unavailable</div>`; return; }
-    card.innerHTML = `
-      <div class="text-[10px] text-slate-400 uppercase tracking-wide mb-1">Slope &amp; aspect</div>
-      <div class="text-xs">
-        <div class="flex justify-between py-0.5"><span class="text-slate-400">Elevation</span><span class="text-slate-700 font-medium">${r.elevation_m} m</span></div>
-        <div class="flex justify-between py-0.5"><span class="text-slate-400">Slope</span><span class="text-slate-700 font-medium">${r.slope_pct}%</span></div>
-        <div class="flex justify-between py-0.5"><span class="text-slate-400">Aspect</span><span class="text-slate-700 font-medium">${Math.round(r.aspect_deg)}° <svg width="12" height="12" viewBox="0 0 14 14" style="display:inline-block;vertical-align:middle;margin-left:2px;transform:rotate(${r.aspect_deg}deg)"><path d="M7 1 L7 12 M7 1 L4 5 M7 1 L10 5" stroke="#475569" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></span></div>
-      </div>
-    `;
-  } catch (e) {
-    if (myToken !== slopeFetchToken) return;
-    card.innerHTML = `<div class="text-xs text-red-500 py-1 text-center">Slope fetch failed: ${e.message}</div>`;
-  }
 }
 
 let terrainFetchToken = 0;

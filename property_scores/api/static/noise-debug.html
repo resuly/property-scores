@@ -110,6 +110,9 @@
   <div class="flex items-center gap-2 mb-1"><span class="w-5 h-0.5 bg-green-500 inline-block rounded"></span> Tram</div>
   <div class="flex items-center gap-2 mb-1"><span class="w-3.5 h-3.5 rounded-full bg-violet-500 inline-block"></span> Query Point</div>
   <div class="flex items-center gap-2 pt-1 mt-1 border-t border-slate-200"><span class="w-5 h-0.5 inline-block rounded" style="background:linear-gradient(to right,#ef4444,#22c55e)"></span> Direct → Screened</div>
+  <div class="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mt-2 mb-1">Parcels</div>
+  <div class="flex items-center gap-2 mb-1"><span style="width:14px;height:10px;background:rgba(167,139,250,0.18);border:1px solid #7c3aed;display:inline-block;border-radius:1px"></span> Owned lot</div>
+  <div class="flex items-center gap-2"><span style="width:14px;height:10px;background:transparent;border:1px solid #a78bfa;display:inline-block;border-radius:1px"></span> Public / road</div>
 </div>
 
 <script>
@@ -515,7 +518,7 @@ function addCadastreTiles(state) {
     map.addLayer({
       id: 'cadastre-hit', type: 'fill', source: 'cadastre', 'source-layer': 'parcels',
       minzoom: 14,
-      paint: { 'fill-color': '#a78bfa', 'fill-opacity': 0.05 },
+      paint: { 'fill-color': '#a78bfa', 'fill-opacity': 0.18 },
     });
     sourceIds.push('cadastre-hit');
   }

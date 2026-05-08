@@ -211,10 +211,37 @@ async function initMap() {
     style: 'mapbox://styles/mapbox/light-v11',
     center: [144.9631, -37.8136],
     zoom: 16,
+    pitch: 45,
+    bearing: -15,
+    antialias: true,
   });
   map.addControl(new mapboxgl.NavigationControl(), 'top-right');
   popup = new mapboxgl.Popup({ closeButton: false, closeOnClick: false });
-  map.on('load', ensureHighlightLayer);
+  map.on('load', () => {
+    const layers = map.getStyle().layers;
+    let labelLayerId;
+    for (const layer of layers) {
+      if (layer.type === 'symbol' && layer.layout['text-field']) {
+        labelLayerId = layer.id;
+        break;
+      }
+    }
+    map.addLayer({
+      id: '3d-buildings',
+      source: 'composite',
+      'source-layer': 'building',
+      filter: ['==', 'extrude', 'true'],
+      type: 'fill-extrusion',
+      minzoom: 14,
+      paint: {
+        'fill-extrusion-color': '#c8d0db',
+        'fill-extrusion-height': ['get', 'height'],
+        'fill-extrusion-base': ['get', 'min_height'],
+        'fill-extrusion-opacity': 0.5,
+      },
+    }, labelLayerId);
+    ensureHighlightLayer();
+  });
   map.on('click', (e) => {
     // 1. FIRST highlight parcel — must happen before query() runs clearLayers()
     //    and removes cadastre-hit, otherwise queryRenderedFeatures returns nothing.

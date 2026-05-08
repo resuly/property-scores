@@ -31,9 +31,9 @@
   .switch input:checked + .switch-slider { background: #0891b2; }
   .switch input:checked + .switch-slider:before { transform: translateX(14px); }
   .zone-chip { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
-  .zone-floodway { background: #fee2e2; color: #991b1b; }
-  .zone-flood { background: #ffedd5; color: #9a3412; }
-  .zone-moderate { background: #fef9c3; color: #854d0e; }
+  .zone-floodway { background: #dbeafe; color: #1e3a8a; }
+  .zone-flood { background: #e0f2fe; color: #075985; }
+  .zone-moderate { background: #f0f9ff; color: #0369a1; }
 </style>
 </head>
 <body class="bg-slate-50 font-sans text-slate-900">
@@ -67,7 +67,6 @@
     <div class="card p-3 mb-4">
       <div class="text-xs font-semibold text-slate-500 mb-2 uppercase tracking-wide">Layers</div>
       <label class="toggle-row"><input type="checkbox" id="t-overlay" checked onchange="toggleOverlay()"> <span>VIC Flood Overlays (FO/LSIO/SBO)</span></label>
-      <label class="toggle-row"><input type="checkbox" id="t-3d" checked onchange="toggle3D()"> <span>3D Buildings</span></label>
     </div>
 
     <div id="loading" class="hidden text-cyan-600 text-sm py-5 text-center">Querying flood risk...</div>
@@ -116,9 +115,9 @@
 <!-- Legend -->
 <div class="absolute bottom-5 left-3 bg-white/95 backdrop-blur rounded-lg shadow-sm border border-slate-200 px-3 py-2 text-xs text-slate-600 z-10" style="min-width:170px">
   <div class="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Flood Overlays</div>
-  <div class="flex items-center gap-2 mb-1"><span class="w-3 h-3 rounded-sm inline-block" style="background:rgba(220,38,38,0.4);border:1px solid rgba(220,38,38,0.6)"></span> Floodway (FO/RFO)</div>
-  <div class="flex items-center gap-2 mb-1"><span class="w-3 h-3 rounded-sm inline-block" style="background:rgba(249,115,22,0.35);border:1px solid rgba(249,115,22,0.5)"></span> LSIO (1% AEP)</div>
-  <div class="flex items-center gap-2 mb-1"><span class="w-3 h-3 rounded-sm inline-block" style="background:rgba(234,179,8,0.3);border:1px solid rgba(234,179,8,0.5)"></span> SBO</div>
+  <div class="flex items-center gap-2 mb-1"><span class="w-3 h-3 rounded-sm inline-block" style="background:rgba(30,64,175,0.4);border:1px solid rgba(30,64,175,0.7)"></span> Floodway (FO/RFO)</div>
+  <div class="flex items-center gap-2 mb-1"><span class="w-3 h-3 rounded-sm inline-block" style="background:rgba(59,130,246,0.3);border:1px solid rgba(59,130,246,0.5)"></span> LSIO (1% AEP)</div>
+  <div class="flex items-center gap-2 mb-1"><span class="w-3 h-3 rounded-sm inline-block" style="background:rgba(96,165,250,0.25);border:1px solid rgba(96,165,250,0.45)"></span> SBO</div>
   <div class="flex items-center gap-2 pt-1 mt-1 border-t border-slate-200"><span class="w-3.5 h-3.5 rounded-full bg-cyan-500 inline-block"></span> Query Point</div>
 </div>
 
@@ -126,10 +125,10 @@
 let map;
 const VIC_PLAN_BASE = 'https://plan-gis.mapshare.vic.gov.au/arcgis/rest/services/Planning/Vicplan_PlanningSchemeOverlays/MapServer';
 const OVERLAY_LAYERS = [
-  { id: 'flood-fo',   layer: 14, color: 'rgba(220,38,38,0.35)', outline: 'rgba(220,38,38,0.6)', label: 'Floodway (FO)' },
-  { id: 'flood-rfo',  layer: 32, color: 'rgba(220,38,38,0.3)',  outline: 'rgba(220,38,38,0.5)', label: 'Rural Floodway (RFO)' },
-  { id: 'flood-lsio', layer: 15, color: 'rgba(249,115,22,0.3)', outline: 'rgba(249,115,22,0.5)', label: 'LSIO' },
-  { id: 'flood-sbo',  layer: 16, color: 'rgba(234,179,8,0.25)', outline: 'rgba(234,179,8,0.45)', label: 'SBO' },
+  { id: 'flood-fo',   layer: 14, color: 'rgba(30,64,175,0.4)',  outline: 'rgba(30,64,175,0.7)',  label: 'Floodway (FO)' },
+  { id: 'flood-rfo',  layer: 32, color: 'rgba(37,99,235,0.35)', outline: 'rgba(37,99,235,0.6)',  label: 'Rural Floodway (RFO)' },
+  { id: 'flood-lsio', layer: 15, color: 'rgba(59,130,246,0.3)', outline: 'rgba(59,130,246,0.5)', label: 'LSIO' },
+  { id: 'flood-sbo',  layer: 16, color: 'rgba(96,165,250,0.25)',outline: 'rgba(96,165,250,0.45)',label: 'SBO' },
 ];
 
 function setPoint(lat, lng, label) {
@@ -207,10 +206,6 @@ async function loadOverlays() {
   _overlayLoaded = true;
 }
 
-function toggle3D() {
-  const vis = document.getElementById('t-3d').checked ? 'visible' : 'none';
-  if (map.getLayer('3d-buildings')) map.setLayoutProperty('3d-buildings', 'visibility', vis);
-}
 
 async function initMap() {
   const cfg = await fetch('/api/config').then(r => r.json());
@@ -220,9 +215,6 @@ async function initMap() {
     style: 'mapbox://styles/mapbox/light-v11',
     center: [144.9631, -37.8136],
     zoom: 14,
-    pitch: 40,
-    bearing: -10,
-    antialias: true,
   });
   map.addControl(new mapboxgl.NavigationControl(), 'top-right');
 

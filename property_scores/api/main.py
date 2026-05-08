@@ -174,9 +174,10 @@ def get_flood(lat: float = Query(...), lng: float = Query(...),
 
 
 @app.get("/scores/bushfire")
-def get_bushfire(lat: float = Query(...), lng: float = Query(...)):
+def get_bushfire(lat: float = Query(...), lng: float = Query(...),
+                 quick: bool = Query(False)):
     try:
-        return bushfire_score(lat, lng)
+        return bushfire_score(lat, lng, quick=quick)
     except Exception as e:
         logger.exception("bushfire score failed")
         return JSONResponse({"error": str(e)}, status_code=500)

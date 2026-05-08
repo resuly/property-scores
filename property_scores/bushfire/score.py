@@ -353,8 +353,8 @@ def _fire_history(lat: float, lng: float) -> dict | None:
         checked_seasons = 0
         t_start = _time.time()
 
-        for year in range(2024, 2021, -1):  # 3 seasons max (was 5)
-            if _time.time() - t_start > 15:  # hard timeout
+        for year in range(2024, 2022, -1):  # 2 seasons max
+            if _time.time() - t_start > 8:  # hard timeout
                 break
             try:
                 resp = requests.post(f"{PC_STAC}/search", json={
@@ -458,7 +458,7 @@ def _satellite_to_score(veg: dict | None, slope: dict | None,
 # Main scoring function
 # ---------------------------------------------------------------------------
 
-def bushfire_score(lat: float, lng: float) -> dict:
+def bushfire_score(lat: float, lng: float, *, quick: bool = False) -> dict:
     """Compute bushfire risk score for an Australian coordinate.
 
     Combines official planning overlays with satellite-derived vegetation
@@ -474,8 +474,31 @@ def bushfire_score(lat: float, lng: float) -> dict:
             "category": None,
         }
 
-    # --- Phase 1: ArcGIS overlays ---
-    worst_severity, hits, worst_category = _overlay_check(state, lat, lng)
+    # --- Phase 1+2: Overlay + satellite in parallel ---
+    from concurrent.futures import ThreadPoolExecutor
+    worst_severity, hits, worst_category = None, [], None
+    veg = None
+    slope = None
+
+    if quick:
+        worst_severity, hits, worst_category = _overlay_check(state, lat, lng)
+    else:
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            overlay_fut = pool.submit(_overlay_check, state, lat, lng)
+            veg_fut = pool.submit(_vegetation_fuel, lat, lng)
+            slope_fut = pool.submit(_terrain_slope, lat, lng)
+            try:
+                worst_severity, hits, worst_category = overlay_fut.result(timeout=12)
+            except Exception:
+                pass
+            try:
+                veg = veg_fut.result(timeout=12)
+            except Exception:
+                pass
+            try:
+                slope = slope_fut.result(timeout=12)
+            except Exception:
+                pass
 
     overlay_score: int | None = None
     if worst_severity:
@@ -484,13 +507,9 @@ def bushfire_score(lat: float, lng: float) -> dict:
     elif ENDPOINTS.get(state):
         overlay_score = 90
 
-    # --- Phase 2: Satellite (vegetation + slope + conditional fire history) ---
-    veg = _vegetation_fuel(lat, lng)
-    slope = _terrain_slope(lat, lng)
-
-    # Skip expensive fire history for low-fuel areas (urban, water, cropland)
+    # Skip expensive fire history in quick mode or for low-fuel areas
     fire = None
-    if veg and veg["fuel_risk"] >= 0.4:
+    if not quick and veg and veg["fuel_risk"] >= 0.4:
         fire = _fire_history(lat, lng)
 
     sat_score = _satellite_to_score(veg, slope, fire)

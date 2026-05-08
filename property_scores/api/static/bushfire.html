@@ -208,6 +208,110 @@ async function initMap() {
   });
 }
 
+function renderResult(d) {
+  const scoreBox = document.getElementById('score-box');
+  const sc = d.score;
+  const color = scoreColor(sc);
+  const stat = (k, v, hint) => `<div class="flex justify-between items-baseline py-0.5"><span class="text-slate-400">${k}</span><span><span class="text-slate-700 font-medium">${v}</span>${hint ? ` <span class="text-slate-400 text-[10px]" style="margin-left:6px">${hint}</span>` : ''}</span></div>`;
+
+  let html = `
+    <div class="flex items-baseline gap-2 mb-1">
+      <div class="text-4xl font-bold leading-none" style="color:${color}">${sc}</div>
+      <div class="text-sm font-semibold text-slate-500">/100</div>
+      <div class="ml-auto text-xs text-slate-400">${d.state || 'N/A'}</div>
+    </div>
+    <div class="text-[11px] font-semibold text-slate-600 mb-2">${d.label}</div>
+    <div class="relative h-2 rounded-full overflow-hidden mb-1" style="background:linear-gradient(90deg,#dc2626 0%,#ea580c 25%,#d97706 50%,#65a30d 75%,#16a34a 100%);opacity:0.25"></div>
+    <div class="relative -mt-3 mb-2 h-2">
+      <div class="absolute h-2 w-1 bg-slate-900 rounded-full" style="left:${sc}%;transform:translateX(-50%)"></div>
+    </div>
+    <div class="flex justify-between text-[9px] text-slate-400 mb-3">
+      <span>0 extreme</span><span>50</span><span>100 safe</span>
+    </div>`;
+
+  const parts = [];
+  if (d.bushfire_zones && d.bushfire_zones.length > 0) parts.push('inside a bushfire planning overlay');
+  if (d.vegetation) {
+    if (d.vegetation.fuel_risk >= 0.8) parts.push('dense vegetation with high fuel load');
+    else if (d.vegetation.fuel_risk >= 0.5) parts.push('moderate vegetation fuel');
+    else if (d.vegetation.fuel_risk <= 0.15) parts.push('low-fuel built-up area');
+  }
+  if (d.slope && d.slope.mean_slope_deg >= 15) parts.push('steep terrain amplifies fire spread');
+  else if (d.slope && d.slope.mean_slope_deg >= 8) parts.push('moderate slope terrain');
+  if (d.fire_history && d.fire_history.seasons_with_fire > 0) parts.push('recent fire history detected');
+  if (parts.length > 0) {
+    html += `<div class="text-xs text-slate-600 mb-3 leading-relaxed">${parts.join(', ').replace(/^./, c => c.toUpperCase())}.</div>`;
+  } else if (sc >= 80) {
+    html += `<div class="text-xs text-slate-600 mb-3">No significant bushfire indicators at this location.</div>`;
+  }
+
+  html += `<div class="text-[10px] text-slate-400 uppercase tracking-wide mt-2 mb-1">Planning Overlays</div>`;
+  if (d.bushfire_zones && d.bushfire_zones.length > 0) {
+    const zoneExplain = {
+      'Bushfire Management Overlay (BMO)': 'Properties must meet BAL construction standards. Vegetation management plans required.',
+      'Bushfire Prone Land': 'NSW designated bushfire prone area. Building standards AS 3959 apply.',
+      'Bush Fire Prone Area (OBRM-023)': 'WA mapped bushfire prone area. BAL assessment required for new builds.',
+    };
+    d.bushfire_zones.forEach(z => {
+      const cls = d.category === 'Vegetation Category 1' ? 'zone-extreme' : z.includes('BMO') || z.includes('Prone Land') ? 'zone-high' : 'zone-moderate';
+      html += `<div class="mb-1.5"><span class="zone-chip ${cls}">${z}</span>`;
+      if (d.category) html += ` <span class="text-[10px] text-slate-400">${d.category}</span>`;
+      if (zoneExplain[z]) html += `<div class="text-[11px] text-slate-500 mt-0.5 ml-0.5">${zoneExplain[z]}</div>`;
+      html += `</div>`;
+    });
+  } else {
+    html += `<div class="text-xs text-slate-500">Not within any bushfire planning overlay</div>`;
+  }
+
+  if (d.vegetation) {
+    const v = d.vegetation;
+    const fuelPct = Math.round(v.fuel_risk * 100);
+    const fuelColor = fuelPct >= 80 ? '#dc2626' : fuelPct >= 50 ? '#ea580c' : fuelPct >= 30 ? '#d97706' : '#16a34a';
+    const fuelDesc = fuelPct >= 80 ? 'Very high fuel load, dense vegetation'
+      : fuelPct >= 60 ? 'High fuel load from surrounding vegetation'
+      : fuelPct >= 30 ? 'Moderate fuel, mixed land cover'
+      : 'Low fuel load, minimal vegetation risk';
+    html += `<div class="text-[10px] text-slate-400 uppercase tracking-wide mt-3 mb-1">Vegetation (ESA WorldCover)</div>`;
+    html += `<div class="text-xs">`;
+    html += stat('Land cover', v.land_cover_label, '10m resolution');
+    html += `<div class="flex items-center gap-2 mt-1 mb-0.5"><span class="text-slate-400">Fuel risk</span><div class="fuel-bar flex-1"><div class="fuel-bar-fill" style="width:${fuelPct}%;background:${fuelColor}"></div></div><span class="text-slate-700 font-medium text-[11px]">${fuelPct}%</span></div>`;
+    html += `<div class="text-[11px] text-slate-500">${fuelDesc}</div>`;
+    if (v.has_nearby_trees) html += `<div class="text-[11px] text-amber-600 mt-0.5">Tree cover detected within 100m</div>`;
+    html += `</div>`;
+  }
+
+  if (d.slope) {
+    const s = d.slope;
+    const slopeLabel = s.mean_slope_deg >= 25 ? 'extreme' : s.mean_slope_deg >= 15 ? 'steep' : s.mean_slope_deg >= 8 ? 'moderate' : s.mean_slope_deg >= 3 ? 'gentle' : 'flat';
+    const slopeDesc = s.mean_slope_deg >= 15 ? 'Steep terrain significantly accelerates fire spread uphill'
+      : s.mean_slope_deg >= 8 ? 'Moderate slope increases fire spread rate'
+      : 'Relatively flat terrain, slope has minimal effect on fire spread';
+    html += `<div class="text-[10px] text-slate-400 uppercase tracking-wide mt-3 mb-1">Terrain (Copernicus DEM)</div>`;
+    html += `<div class="text-xs">`;
+    html += stat('Mean slope', s.mean_slope_deg + '°', slopeLabel);
+    html += stat('Max slope', s.max_slope_deg + '°');
+    html += stat('Elevation', s.elevation_m + ' m');
+    html += `<div class="text-[11px] text-slate-500 mt-0.5">${slopeDesc}</div>`;
+    html += `</div>`;
+  }
+
+  if (d.fire_history) {
+    const f = d.fire_history;
+    html += `<div class="text-[10px] text-slate-400 uppercase tracking-wide mt-3 mb-1">Fire History (MODIS)</div>`;
+    html += `<div class="text-xs">`;
+    if (f.seasons_with_fire > 0) {
+      html += stat('Seasons with fire', `${f.seasons_with_fire}/${f.total_seasons_checked}`, 'recent years');
+      html += `<div class="text-[11px] text-red-600 mt-0.5">Area has burned in recent fire seasons, indicating proven bushfire risk</div>`;
+    } else {
+      html += `<div class="text-slate-500">No burns detected in ${f.total_seasons_checked} fire seasons checked</div>`;
+    }
+    html += `</div>`;
+  }
+
+  html += `<div class="text-[10px] text-slate-400 mt-3 pt-2 border-t border-slate-100">${d.disclaimer || ''}</div>`;
+  scoreBox.innerHTML = html;
+}
+
 async function query() {
   const lat = parseFloat(document.getElementById('lat').value);
   const lng = parseFloat(document.getElementById('lng').value);
@@ -225,9 +329,20 @@ async function query() {
   const loading = document.getElementById('loading');
   const scoreBox = document.getElementById('score-box');
   loading.classList.remove('hidden');
+  loading.textContent = 'Checking planning overlays...';
   scoreBox.classList.add('hidden');
 
   try {
+    // Phase 1: quick overlay check (~1-2s)
+    const quickResp = await fetch(`/scores/bushfire?lat=${lat}&lng=${lng}&quick=true`);
+    const quickData = await quickResp.json();
+    if (!quickData.error) {
+      loading.textContent = 'Analysing vegetation and terrain...';
+      renderResult(quickData);
+      scoreBox.classList.remove('hidden');
+    }
+
+    // Phase 2: full satellite analysis (parallel, may take 5-15s)
     const resp = await fetch(`/scores/bushfire?lat=${lat}&lng=${lng}`);
     const d = await resp.json();
     loading.classList.add('hidden');
@@ -238,114 +353,8 @@ async function query() {
       return;
     }
 
-    const sc = d.score;
-    const color = scoreColor(sc);
-    const stat = (k, v, hint) => `<div class="flex justify-between items-baseline py-0.5"><span class="text-slate-400">${k}</span><span><span class="text-slate-700 font-medium">${v}</span>${hint ? ` <span class="text-slate-400 text-[10px]" style="margin-left:6px">${hint}</span>` : ''}</span></div>`;
-
+    renderResult(d);
     scoreBox.classList.remove('hidden');
-    let html = `
-      <div class="flex items-baseline gap-2 mb-1">
-        <div class="text-4xl font-bold leading-none" style="color:${color}">${sc}</div>
-        <div class="text-sm font-semibold text-slate-500">/100</div>
-        <div class="ml-auto text-xs text-slate-400">${d.state || 'N/A'}</div>
-      </div>
-      <div class="text-[11px] font-semibold text-slate-600 mb-2">${d.label}</div>
-      <div class="relative h-2 rounded-full overflow-hidden mb-1" style="background:linear-gradient(90deg,#dc2626 0%,#ea580c 25%,#d97706 50%,#65a30d 75%,#16a34a 100%);opacity:0.25"></div>
-      <div class="relative -mt-3 mb-2 h-2">
-        <div class="absolute h-2 w-1 bg-slate-900 rounded-full" style="left:${sc}%;transform:translateX(-50%)"></div>
-      </div>
-      <div class="flex justify-between text-[9px] text-slate-400 mb-3">
-        <span>0 extreme</span><span>50</span><span>100 safe</span>
-      </div>`;
-
-    // Risk summary
-    const parts = [];
-    if (d.bushfire_zones && d.bushfire_zones.length > 0) parts.push('inside a bushfire planning overlay');
-    if (d.vegetation) {
-      if (d.vegetation.fuel_risk >= 0.8) parts.push('dense vegetation with high fuel load');
-      else if (d.vegetation.fuel_risk >= 0.5) parts.push('moderate vegetation fuel');
-      else if (d.vegetation.fuel_risk <= 0.15) parts.push('low-fuel built-up area');
-    }
-    if (d.slope && d.slope.mean_slope_deg >= 15) parts.push('steep terrain amplifies fire spread');
-    else if (d.slope && d.slope.mean_slope_deg >= 8) parts.push('moderate slope terrain');
-    if (d.fire_history && d.fire_history.seasons_with_fire > 0) parts.push('recent fire history detected');
-    if (parts.length > 0) {
-      html += `<div class="text-xs text-slate-600 mb-3 leading-relaxed">${parts.join(', ').replace(/^./, c => c.toUpperCase())}.</div>`;
-    } else if (sc >= 80) {
-      html += `<div class="text-xs text-slate-600 mb-3">No significant bushfire indicators at this location.</div>`;
-    }
-
-    // Planning overlays
-    html += `<div class="text-[10px] text-slate-400 uppercase tracking-wide mt-2 mb-1">Planning Overlays</div>`;
-    if (d.bushfire_zones && d.bushfire_zones.length > 0) {
-      const zoneExplain = {
-        'Bushfire Management Overlay (BMO)': 'Properties must meet BAL construction standards. Vegetation management plans required.',
-        'Bushfire Prone Land': 'NSW designated bushfire prone area. Building standards AS 3959 apply.',
-        'Bush Fire Prone Area (OBRM-023)': 'WA mapped bushfire prone area. BAL assessment required for new builds.',
-      };
-      d.bushfire_zones.forEach(z => {
-        const cls = d.category === 'Vegetation Category 1' ? 'zone-extreme' : z.includes('BMO') || z.includes('Prone Land') ? 'zone-high' : 'zone-moderate';
-        html += `<div class="mb-1.5"><span class="zone-chip ${cls}">${z}</span>`;
-        if (d.category) html += ` <span class="text-[10px] text-slate-400">${d.category}</span>`;
-        if (zoneExplain[z]) html += `<div class="text-[11px] text-slate-500 mt-0.5 ml-0.5">${zoneExplain[z]}</div>`;
-        html += `</div>`;
-      });
-    } else {
-      html += `<div class="text-xs text-slate-500">Not within any bushfire planning overlay</div>`;
-    }
-
-    // Vegetation
-    if (d.vegetation) {
-      const v = d.vegetation;
-      const fuelPct = Math.round(v.fuel_risk * 100);
-      const fuelColor = fuelPct >= 80 ? '#dc2626' : fuelPct >= 50 ? '#ea580c' : fuelPct >= 30 ? '#d97706' : '#16a34a';
-      const fuelDesc = fuelPct >= 80 ? 'Very high fuel load, dense vegetation'
-        : fuelPct >= 60 ? 'High fuel load from surrounding vegetation'
-        : fuelPct >= 30 ? 'Moderate fuel, mixed land cover'
-        : 'Low fuel load, minimal vegetation risk';
-      html += `<div class="text-[10px] text-slate-400 uppercase tracking-wide mt-3 mb-1">Vegetation (ESA WorldCover)</div>`;
-      html += `<div class="text-xs">`;
-      html += stat('Land cover', v.land_cover_label, '10m resolution');
-      html += `<div class="flex items-center gap-2 mt-1 mb-0.5"><span class="text-slate-400">Fuel risk</span><div class="fuel-bar flex-1"><div class="fuel-bar-fill" style="width:${fuelPct}%;background:${fuelColor}"></div></div><span class="text-slate-700 font-medium text-[11px]">${fuelPct}%</span></div>`;
-      html += `<div class="text-[11px] text-slate-500">${fuelDesc}</div>`;
-      if (v.has_nearby_trees) html += `<div class="text-[11px] text-amber-600 mt-0.5">Tree cover detected within 100m</div>`;
-      html += `</div>`;
-    }
-
-    // Slope
-    if (d.slope) {
-      const s = d.slope;
-      const slopeLabel = s.mean_slope_deg >= 25 ? 'extreme' : s.mean_slope_deg >= 15 ? 'steep' : s.mean_slope_deg >= 8 ? 'moderate' : s.mean_slope_deg >= 3 ? 'gentle' : 'flat';
-      const slopeDesc = s.mean_slope_deg >= 15 ? 'Steep terrain significantly accelerates fire spread uphill'
-        : s.mean_slope_deg >= 8 ? 'Moderate slope increases fire spread rate'
-        : 'Relatively flat terrain, slope has minimal effect on fire spread';
-      html += `<div class="text-[10px] text-slate-400 uppercase tracking-wide mt-3 mb-1">Terrain (Copernicus DEM)</div>`;
-      html += `<div class="text-xs">`;
-      html += stat('Mean slope', s.mean_slope_deg + '°', slopeLabel);
-      html += stat('Max slope', s.max_slope_deg + '°');
-      html += stat('Elevation', s.elevation_m + ' m');
-      html += `<div class="text-[11px] text-slate-500 mt-0.5">${slopeDesc}</div>`;
-      html += `</div>`;
-    }
-
-    // Fire history
-    if (d.fire_history) {
-      const f = d.fire_history;
-      html += `<div class="text-[10px] text-slate-400 uppercase tracking-wide mt-3 mb-1">Fire History (MODIS)</div>`;
-      html += `<div class="text-xs">`;
-      if (f.seasons_with_fire > 0) {
-        html += stat('Seasons with fire', `${f.seasons_with_fire}/${f.total_seasons_checked}`, 'recent years');
-        html += `<div class="text-[11px] text-red-600 mt-0.5">Area has burned in recent fire seasons, indicating proven bushfire risk</div>`;
-      } else {
-        html += `<div class="text-slate-500">No burns detected in ${f.total_seasons_checked} fire seasons checked</div>`;
-      }
-      html += `</div>`;
-    }
-
-    // Disclaimer
-    html += `<div class="text-[10px] text-slate-400 mt-3 pt-2 border-t border-slate-100">${d.disclaimer || ''}</div>`;
-
-    scoreBox.innerHTML = html;
 
   } catch (e) {
     loading.classList.add('hidden');

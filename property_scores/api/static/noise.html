@@ -4,135 +4,897 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Noise Score - Property Scores</title>
-<link rel="stylesheet" href="/css/styles.css">
+<link rel="stylesheet" href="/css/styles.css?v=2">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.css" rel="stylesheet">
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.js"></script>
+<style>
+  #map { position: absolute; top: 0; left: 0; right: 380px; bottom: 0; transition: right 0.3s ease; }
+  #sidebar { width: 380px; transition: width 0.3s ease; }
+  body.sidebar-collapsed #map { right: 36px; }
+  body.sidebar-collapsed #sidebar { width: 36px; }
+  body.sidebar-collapsed #sidebar > .sidebar-content { display: none; }
+  body.sidebar-collapsed .sidebar-toggle svg { transform: rotate(180deg); }
+  .mapboxgl-ctrl-bottom-left, .mapboxgl-ctrl-bottom-right { display: none; }
+  .toggle-row { display: flex; align-items: center; gap: 6px; padding: 4px 0; cursor: pointer; user-select: none; }
+  .toggle-row input { cursor: pointer; }
+  .toggle-row span { font-size: 12px; color: #475569; }
+  .sidebar-toggle { position: fixed; top: 50%; right: 380px; transform: translate(50%, -50%); width: 28px; height: 28px; border-radius: 9999px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 3px rgba(0,0,0,0.12); display: flex; align-items: center; justify-content: center; cursor: pointer; color: #64748b; z-index: 50; transition: right 0.3s ease, color 0.15s, border-color 0.15s; }
+  .sidebar-toggle:hover { color: #2563eb; border-color: #93c5fd; }
+  body.sidebar-collapsed .sidebar-toggle { right: 36px; }
+  /* SVG facade overlay (anchored via mapbox Marker, never zoom-distorted) */
+  #facade-svg { pointer-events: none; }
+  #facade-svg .petal { transition: opacity 0.2s; cursor: pointer; pointer-events: auto; }
+  #facade-svg .petal:hover { opacity: 0.85; }
+  #facade-svg text { font: 600 11px Inter, system-ui, sans-serif; fill: #1e293b; pointer-events: none; }
+  #facade-svg .label-bg { fill: rgba(255,255,255,0.92); stroke: rgba(0,0,0,0.06); }
+  /* iOS-style toggle switch */
+  .switch { position: relative; display: inline-block; width: 30px; height: 16px; flex-shrink: 0; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch-slider { position: absolute; cursor: pointer; inset: 0; background: #cbd5e1; border-radius: 999px; transition: background 0.2s; }
+  .switch-slider:before { content: ''; position: absolute; height: 12px; width: 12px; left: 2px; top: 2px; background: white; border-radius: 50%; transition: transform 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.15); }
+  .switch input:checked + .switch-slider { background: #2563eb; }
+  .switch input:checked + .switch-slider:before { transform: translateX(14px); }
+  /* Embed mode (e.g. iframe inside DA Leads /scores/noise) — hide debug-only chrome */
+  body.embed .embed-hide { display: none; }
+  body.embed .sidebar-content { padding: 16px; }
+  body.embed #sidebar { width: 320px; }
+  body.embed #map { right: 320px; }
+  body.embed .sidebar-toggle { display: none; }
+</style>
 </head>
 <body class="bg-slate-50 font-sans text-slate-900">
-<div class="max-w-3xl mx-auto px-6 py-10">
-  <a href="/" class="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-brand-600 mb-8">&larr; All Scores</a>
 
-  <div class="text-center mb-12">
-    <span class="inline-block px-3 py-1 rounded-full badge-noise text-xs font-semibold mb-4">Property Scores</span>
-    <h1 class="text-3xl font-bold mb-3"><span class="text-violet-600">Noise</span> Score</h1>
-    <p class="text-slate-500 max-w-xl mx-auto text-sm">Multi-source noise estimation combining real traffic counts, train/tram timetables, aircraft flight paths, and building screening. Higher score means quieter.</p>
-  </div>
+<div id="map"></div>
 
-  <div class="card p-6 mb-10">
-    <h2 class="text-lg font-semibold mb-4">Try It</h2>
-    <div class="flex gap-2 flex-wrap">
-      <input id="lat" type="number" step="any" placeholder="Latitude" value="-37.8136" class="input-field w-36">
-      <input id="lng" type="number" step="any" placeholder="Longitude" value="144.9631" class="input-field w-36">
-      <button onclick="compute()" class="btn-primary">Calculate</button>
+<div id="sidebar" class="absolute top-0 right-0 bottom-0 bg-white border-l border-slate-200 overflow-y-auto">
+  <button class="sidebar-toggle" onclick="document.body.classList.toggle('sidebar-collapsed'); setTimeout(() => map.resize(), 320)" title="Collapse sidebar">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 6 15 12 9 18"/></svg>
+  </button>
+  <div class="sidebar-content p-5">
+    <div class="flex items-center gap-2 mb-1 embed-hide">
+      <a href="/" class="text-slate-400 hover:text-brand-600 text-sm">&larr;</a>
+      <h1 class="text-lg font-bold">Noise Score</h1>
     </div>
-    <div id="result" class="hidden mt-4 p-4 bg-slate-50 rounded-lg"></div>
-  </div>
-
-  <div class="prose-scores">
-    <h2>What It Measures</h2>
-    <p>The Noise Score rates how quiet a location is on a scale of 0 to 100, where 100 is the quietest. It combines three noise sources (road traffic, rail/tram, aircraft) using physics-based acoustic models and real government data.</p>
-
-    <div class="flex rounded-lg overflow-hidden text-xs text-center mb-6">
-      <div class="flex-1 py-3 bg-green-100 text-green-700"><span class="block text-sm font-bold">80-100</span>Very Quiet</div>
-      <div class="flex-1 py-3 bg-emerald-100 text-emerald-700"><span class="block text-sm font-bold">60-79</span>Quiet</div>
-      <div class="flex-1 py-3 bg-amber-100 text-amber-700"><span class="block text-sm font-bold">40-59</span>Moderate</div>
-      <div class="flex-1 py-3 bg-orange-100 text-orange-700"><span class="block text-sm font-bold">20-39</span>Loud</div>
-      <div class="flex-1 py-3 bg-red-100 text-red-700"><span class="block text-sm font-bold">0-19</span>Very Loud</div>
+    <p class="text-xs text-slate-400 mb-4 embed-hide">Click a parcel to inspect, or click empty space to query noise.</p>
+    <div class="flex gap-2 mb-2 embed-hide">
+      <input id="lat" type="number" step="any" placeholder="Lat" value="-37.8136" class="input-field flex-1 min-w-0">
+      <input id="lng" type="number" step="any" placeholder="Lng" value="144.9631" class="input-field flex-1 min-w-0">
+      <button onclick="query()" class="btn-primary">Go</button>
+    </div>
+    <div class="flex flex-wrap gap-1 mb-4 text-[11px] embed-hide">
+      <button onclick="setPoint(-37.8136,144.9631,'CBD')" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">CBD</button>
+      <button onclick="setPoint(-37.7950,144.9500,'Royal Park')" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">Royal Park</button>
+      <button onclick="setPoint(-37.7125,144.8443,'Tullamarine Fwy')" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">Tullamarine Fwy</button>
+      <button onclick="setPoint(-37.8670,144.9760,'St Kilda')" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">St Kilda</button>
+      <button onclick="setPoint(-37.7650,145.3367,'Olinda Hills')" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">Olinda Hills</button>
+      <button onclick="setPoint(-37.6675,144.7860,'Tullamarine Apt')" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">Airport</button>
     </div>
 
-    <h2>Noise Sources</h2>
+    <!-- Layer toggles -->
+    <div class="card p-3 mb-4">
+      <div class="text-xs font-semibold text-slate-500 mb-2 uppercase tracking-wide">Layers</div>
+      <label class="toggle-row"><input type="checkbox" id="t-screening" checked> <span>Building screening (color sources by attenuation)</span></label>
+      <label class="toggle-row"><input type="checkbox" id="t-ripple" checked> <span>Sound wave ripple animation</span></label>
+      <label class="toggle-row"><input type="checkbox" id="t-terrain" checked> <span>Terrain profile to dominant source</span></label>
+      <label class="toggle-row"><input type="checkbox" id="t-facade" checked> <span>Facade direction pie</span></label>
+      <label class="toggle-row"><input type="checkbox" id="t-parcels" checked> <span>Parcel boundaries (click to inspect)</span></label>
+    </div>
 
-    <h3>1. Road Traffic</h3>
-    <p>Uses VicRoads AADT (Annual Average Daily Traffic) ground truth for 14,600+ monitored road segments in Victoria. For unmonitored streets, falls back to conservative estimates based on Overture Maps road classification.</p>
+    <div id="terrain-chart" class="hidden card p-3 mb-4"></div>
+    <div id="loading" class="hidden text-brand-500 text-sm py-5 text-center">Querying noise sources...</div>
+    <div id="score-box" class="hidden card p-4 mb-4"></div>
+    <div id="parcel-info" class="hidden card p-3 mb-4 border-violet-200" style="background:#faf5ff"></div>
+    <div id="sources"></div>
 
-    <h3>2. Train &amp; Tram</h3>
-    <p>Uses PTV GTFS timetable data with actual service frequencies per route. SEL-based noise model accounts for peak vs off-peak service rates, pass-by duration, and distance attenuation.</p>
-
-    <h3>3. Aircraft</h3>
-    <p>Queries VicPlan planning overlays for MAEO (Melbourne Airport) and AEO (regional airports) zones. Maps ANEF contours to noise penalties based on AS2021-2015.</p>
-
-    <h2>Methodology</h2>
-
-    <h3>Data Sources</h3>
-    <table>
-      <tr><th>Dataset</th><th>Provider</th><th>Resolution</th><th>Records</th></tr>
-      <tr><td>Road traffic volumes (AADT)</td><td>VicRoads 2019</td><td>Segment-level</td><td>14,662</td></tr>
-      <tr><td>Road network + classification</td><td>Overture Maps</td><td>Segment-level</td><td>592,748</td></tr>
-      <tr><td>Train/tram timetables</td><td>PTV GTFS</td><td>Route-level</td><td>52 routes</td></tr>
-      <tr><td>Building footprints + heights</td><td>Overture Maps</td><td>~1m</td><td>1,720,000</td></tr>
-      <tr><td>Airport noise overlays</td><td>VicPlan (DELWP)</td><td>Polygon</td><td>Real-time API</td></tr>
-    </table>
-
-    <h3>Propagation Model</h3>
-    <ol>
-      <li><strong>Road emission</strong> -- CRTN L10: <code>42.2 + 10 log10(AADT)</code> with duty-cycle correction for low-traffic roads</li>
-      <li><strong>Rail emission</strong> -- SEL-based: <code>L_peak + 10 log10(duration) + 10 log10(N/3600)</code> using actual PTV service counts</li>
-      <li><strong>Distance attenuation</strong> -- <code>10 log10(d / d_ref)</code> + 3 dB ground absorption + 0.06 dB/m excess above 50m</li>
-      <li><strong>Building screening</strong> -- Maekawa barrier formula using Overture building heights, up to 20 dB reduction</li>
-      <li><strong>Energy summation</strong> -- Top-3 road + top-2 rail sources combined: <code>L_total = 10 log10(sum 10^(Li/10))</code></li>
-      <li><strong>Aircraft penalty</strong> -- ANEF zone adds ambient noise from flight path exposure</li>
-    </ol>
-
-    <h3>Deduplication</h3>
-    <p>Roads appearing in both VicRoads AADT and Overture Maps are deduplicated by distance proximity (80m threshold) to prevent double-counting the same physical road.</p>
-
-    <h2>Reference Benchmarks (Melbourne)</h2>
-    <table>
-      <tr><th>Location</th><th>Score</th><th>dB</th><th>Dominant Source</th><th>Label</th></tr>
-      <tr><td>CBD Flinders St</td><td>0</td><td>80</td><td>Flinders St (AADT 20,520) + Traralgon line</td><td>Very Loud</td></tr>
-      <tr><td>South Yarra Station</td><td>0</td><td>78</td><td>Frankston line (22 svc/hr peak)</td><td>Very Loud</td></tr>
-      <tr><td>Toorak Rd</td><td>29</td><td>65</td><td>Frankston line @494m</td><td>Loud</td></tr>
-      <tr><td>Bentleigh residential</td><td>23</td><td>67</td><td>Frankston line @195m</td><td>Loud</td></tr>
-      <tr><td>Keilor (MAEO1)</td><td>79</td><td>47</td><td>Aircraft ANEF 25+ zone</td><td>Quiet</td></tr>
-    </table>
-
-    <h2>Limitations</h2>
-    <ul>
-      <li>VicRoads AADT only covers VIC state-monitored roads (arterials/highways)</li>
-      <li>PTV GTFS covers Melbourne metro only; no interstate rail</li>
-      <li>Aircraft overlays currently VIC only (MAEO + AEO); no NSW/QLD ANEF</li>
-      <li>Building screening only effective for secondary noise sources</li>
-      <li>No industrial or construction noise sources</li>
-    </ul>
-
-    <h2>API</h2>
-    <p><code>GET /scores/noise?lat=-37.8136&amp;lng=144.9631</code></p>
-  </div>
-
-  <div class="mt-16 pt-6 border-t border-slate-100 text-center text-xs text-slate-400">
-    Built by <a href="https://daleads.com.au" class="text-brand-500 hover:text-brand-600 no-underline">DA Leads</a> | Data: <a href="https://overturemaps.org" class="text-brand-500 hover:text-brand-600 no-underline">Overture Maps</a> + VicRoads + PTV GTFS + VicPlan
+    <details class="mt-6 text-xs text-slate-600">
+      <summary class="cursor-pointer text-[11px] font-semibold text-slate-400 uppercase tracking-wide hover:text-slate-600 select-none">Methodology</summary>
+      <div class="mt-3 space-y-4">
+        <div>
+          <h4 class="font-semibold text-slate-700 mb-1">What It Measures</h4>
+          <p>Rates how quiet a location is on a 0-100 scale (100 = quietest). Combines road traffic, rail/tram, and aircraft noise using physics-based acoustic models and real government data.</p>
+        </div>
+        <div>
+          <h4 class="font-semibold text-slate-700 mb-1">Data Sources</h4>
+          <ul class="list-disc ml-4 space-y-0.5">
+            <li>VicRoads AADT &mdash; 14,662 segments</li>
+            <li>NFDH Harmonised National &mdash; 8,000+ stations</li>
+            <li>Overture Maps road network &mdash; 592,748 segments</li>
+            <li>PTV/TransLink/Transperth GTFS &mdash; 184 routes</li>
+            <li>Overture building footprints &mdash; 13.6M</li>
+            <li>ANEF aviation contours &mdash; VIC + NSW + QLD + WA + Defence</li>
+          </ul>
+        </div>
+        <div>
+          <h4 class="font-semibold text-slate-700 mb-1">Propagation Model</h4>
+          <ol class="list-decimal ml-4 space-y-0.5">
+            <li>Road: CRTN L10 formula with duty-cycle correction</li>
+            <li>Rail: SEL-based with actual service counts</li>
+            <li>Distance: geometric spreading + ground absorption</li>
+            <li>Building screening: Maekawa barrier (up to 20 dB)</li>
+            <li>Energy sum: top-3 road + top-2 rail sources</li>
+            <li>Aircraft: ANEF zone ambient penalty</li>
+          </ol>
+        </div>
+        <div>
+          <h4 class="font-semibold text-slate-700 mb-1">Limitations</h4>
+          <ul class="list-disc ml-4 space-y-0.5">
+            <li>AADT coverage varies by state (VicRoads strongest)</li>
+            <li>No industrial or construction noise</li>
+            <li>Ocean surf detected but not scored (natural ambient)</li>
+            <li>Building screening effective for secondary sources only</li>
+          </ul>
+        </div>
+      </div>
+    </details>
   </div>
 </div>
 
+<!-- Legend -->
+<div class="absolute bottom-5 left-3 bg-white/95 backdrop-blur rounded-lg shadow-sm border border-slate-200 px-3 py-2 text-xs text-slate-600 z-10" style="min-width:180px">
+  <div class="flex items-center gap-2 border-b border-slate-200" style="padding-bottom:10px;margin-bottom:10px">
+    <label class="switch">
+      <input type="checkbox" id="ripple-switch" checked onchange="onRippleSwitch()">
+      <span class="switch-slider"></span>
+    </label>
+    <span class="text-slate-700 font-medium">Wave animation</span>
+  </div>
+  <div class="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Noise dB scale</div>
+  <div class="h-2 rounded-full mb-1" style="background:linear-gradient(90deg,#22c55e 0%,#84cc16 22%,#f59e0b 44%,#ef4444 66%,#b91c1c 100%)"></div>
+  <div class="flex justify-between text-[9px] text-slate-400 mb-2"><span>35</span><span>55</span><span>65</span><span>75</span><span>80+</span></div>
+  <div class="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Sources</div>
+  <div class="flex items-center gap-2 mb-1"><span class="w-2.5 h-2.5 rounded-full bg-red-500 inline-block"></span> VicRoads AADT</div>
+  <div class="flex items-center gap-2 mb-1"><span class="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block"></span> NFDH Station</div>
+  <div class="flex items-center gap-2 mb-1"><span class="w-5 h-0.5 bg-blue-500 inline-block rounded"></span> Train</div>
+  <div class="flex items-center gap-2 mb-1"><span class="w-5 h-0.5 bg-green-500 inline-block rounded"></span> Tram</div>
+  <div class="flex items-center gap-2 mb-1"><span class="w-3.5 h-3.5 rounded-full bg-violet-500 inline-block"></span> Query Point</div>
+  <div class="flex items-center gap-2 pt-1 mt-1 border-t border-slate-200"><span class="w-5 h-0.5 inline-block rounded" style="background:linear-gradient(to right,#ef4444,#22c55e)"></span> Direct → Screened</div>
+  <div class="flex items-center gap-2 pt-1 mt-1 border-t border-slate-200"><span style="width:14px;height:10px;background:transparent;border:1px solid #a78bfa;display:inline-block;border-radius:1px"></span> Parcel boundary</div>
+</div>
+
 <script>
-async function compute() {
-  const lat = document.getElementById('lat').value;
-  const lng = document.getElementById('lng').value;
-  const el = document.getElementById('result');
-  el.classList.remove('hidden');
-  el.innerHTML = '<div class="text-brand-500 text-sm">Computing multi-source noise...</div>';
+let map, popup;
+const sourceIds = [];
+let lastData = null;        // cache of last debug response
+let rippleRAF = null;       // animation frame id
+let rippleStart = 0;        // animation start time
+const TOGGLE_IDS = ['t-screening', 't-ripple', 't-terrain', 't-facade', 't-parcels'];
+
+// Australia parcel tile URL via DA Leads tile server (Cloudflare-cached, CORS OK)
+const PARCEL_TILE_BASE = 'https://daleads.com.au/tiles';
+// Coarse AU state lookup for picking the right tile source
+function detectState(lat, lng) {
+  if (lat > -10.7 || lat < -44) return null;
+  if (lng < 129) return 'wa';
+  if (lat > -26 && lng < 138) return 'nt';
+  if (lng < 141) return 'sa';
+  if (lat > -29) return 'qld';
+  if (lat < -39 && lng > 143.5) return 'tas';
+  // ACT bbox
+  if (lat > -35.92 && lat < -35.12 && lng > 148.76 && lng < 149.40) return 'act';
+  if (lat < -34) return 'vic';
+  return 'nsw';
+}
+
+function getToggles() {
+  return Object.fromEntries(TOGGLE_IDS.map(id => [id.slice(2), document.getElementById(id).checked]));
+}
+
+function setPoint(lat, lng, label) {
+  document.getElementById('lat').value = lat.toFixed(4);
+  document.getElementById('lng').value = lng.toFixed(4);
+  query();
+}
+
+// Legend switch ↔ sidebar checkbox two-way binding
+function onRippleSwitch() {
+  const cb = document.getElementById('t-ripple');
+  cb.checked = document.getElementById('ripple-switch').checked;
+  cb.dispatchEvent(new Event('change'));
+}
+
+function syncRippleSwitch() {
+  document.getElementById('ripple-switch').checked = document.getElementById('t-ripple').checked;
+}
+
+// Embed mode (loaded inside an iframe on /scores/noise/) — strip dev chrome
+const EMBED = new URLSearchParams(location.search).has('embed');
+if (EMBED) document.body.classList.add('embed');
+
+async function initMap() {
+  const cfg = await fetch('/api/config').then(r => r.json());
+  mapboxgl.accessToken = cfg.mapbox_token;
+  map = new mapboxgl.Map({
+    container: 'map',
+    style: 'mapbox://styles/mapbox/light-v11',
+    center: [144.9631, -37.8136],
+    zoom: 16,
+  });
+  map.addControl(new mapboxgl.NavigationControl(), 'top-right');
+  popup = new mapboxgl.Popup({ closeButton: false, closeOnClick: false });
+  map.on('load', ensureHighlightLayer);
+  map.on('click', (e) => {
+    // 1. FIRST highlight parcel — must happen before query() runs clearLayers()
+    //    and removes cadastre-hit, otherwise queryRenderedFeatures returns nothing.
+    if (document.getElementById('t-parcels')?.checked && map.getLayer('cadastre-hit')) {
+      const feats = map.queryRenderedFeatures(e.point, { layers: ['cadastre-hit'] });
+      const src = map.getSource('cadastre-highlight-src');
+      if (src) {
+        if (feats.length) {
+          src.setData({ type: 'FeatureCollection', features: [feats[0]] });
+          showParcelInfo(feats[0].properties);
+        } else {
+          src.setData({ type: 'FeatureCollection', features: [] });
+          document.getElementById('parcel-info').classList.add('hidden');
+        }
+      }
+    }
+
+    // 2. THEN re-query noise. clearLayers() wipes cadastre-hit but the highlight
+    //    layer survives (it's not in sourceIds), so the selection stays visible
+    //    while the new cadastre tiles re-attach.
+    document.getElementById('lat').value = e.lngLat.lat.toFixed(6);
+    document.getElementById('lng').value = e.lngLat.lng.toFixed(6);
+    query();
+  });
+
+  // Wire toggle change handlers — re-render existing data without re-fetching
+  for (const id of TOGGLE_IDS) {
+    document.getElementById(id).addEventListener('change', () => {
+      if (id === 't-ripple') syncRippleSwitch();
+      if (lastData) renderResult(lastData, lastData.query.lat, lastData.query.lng);
+    });
+  }
+  syncRippleSwitch();
+
+  attachParcelInspector();
+
+  // Auto-query a default point on first load (helpful for embed/landing-page demos)
+  // so visitors immediately see the visualization without having to click first.
+  map.once('idle', () => {
+    const params = new URLSearchParams(location.search);
+    const lat = parseFloat(params.get('lat')) || -37.8136;
+    const lng = parseFloat(params.get('lng')) || 144.9631;
+    document.getElementById('lat').value = lat;
+    document.getElementById('lng').value = lng;
+    query();
+  });
+}
+initMap();
+
+let facadeMarker = null;
+
+function clearLayers() {
+  if (rippleRAF) { cancelAnimationFrame(rippleRAF); rippleRAF = null; }
+  for (const id of sourceIds) {
+    if (map.getLayer(id)) map.removeLayer(id);
+    if (map.getSource(id)) map.removeSource(id);
+  }
+  sourceIds.length = 0;
+  if (facadeMarker) { facadeMarker.remove(); facadeMarker = null; }
+}
+
+function addGeoJSON(id, geojson, layerDef) {
+  map.addSource(id, { type: 'geojson', data: geojson });
+  map.addLayer({ id, source: id, ...layerDef });
+  sourceIds.push(id);
+}
+
+function scoreColor(score) {
+  return score >= 60 ? '#16a34a' : score >= 40 ? '#d97706' : '#dc2626';
+}
+
+// Color a source line by screening dB:
+//   0 dB screening = direct line of sight = red
+//   25 dB screening = fully blocked = green
+function screeningColor(screeningDb) {
+  const t = Math.min(Math.max(screeningDb / 25, 0), 1);
+  const r = Math.round(239 + (34 - 239) * t);   // 239→34
+  const g = Math.round(68 + (197 - 68) * t);    // 68→197
+  const b = Math.round(68 + (94 - 68) * t);     // 68→94
+  return `rgb(${r},${g},${b})`;
+}
+
+async function query() {
+  const lat = parseFloat(document.getElementById('lat').value);
+  const lng = parseFloat(document.getElementById('lng').value);
+  if (isNaN(lat) || isNaN(lng)) return;
+
+  document.getElementById('loading').classList.remove('hidden');
+  document.getElementById('score-box').classList.add('hidden');
+  document.getElementById('terrain-chart').classList.add('hidden');
+  document.getElementById('sources').innerHTML = '';
+  clearLayers();
+
+  map.flyTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), 16) });
+
   try {
-    const resp = await fetch(`/scores/noise?lat=${lat}&lng=${lng}`);
-    const d = await resp.json();
-    if (d.error) { el.innerHTML = `<div class="text-red-500 text-sm">${d.error}</div>`; return; }
-    const color = d.score >= 60 ? '#16a34a' : d.score >= 40 ? '#d97706' : '#dc2626';
-    let grid = `
-      <div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Total Noise</span><span class="text-slate-600">${d.estimated_db} dB</span></div>
-      <div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Road Noise</span><span class="text-slate-600">${d.road_db} dB</span></div>`;
-    if (d.rail_db) grid += `<div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Rail Noise</span><span class="text-slate-600">${d.rail_db} dB</span></div>`;
-    if (d.aircraft_db) grid += `<div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Aircraft</span><span class="text-slate-600">${d.aircraft_db} dB</span></div>`;
-    if (d.dominant_source) grid += `<div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Dominant</span><span class="text-slate-600">${d.dominant_source}</span></div>`;
-    if (d.nearest_tram_m != null) grid += `<div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Nearest Tram</span><span class="text-slate-600">${d.nearest_tram_m}m</span></div>`;
-    if (d.nearest_train_m != null) grid += `<div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Nearest Train</span><span class="text-slate-600">${d.nearest_train_m}m</span></div>`;
-    if (d.max_building_screening_db) grid += `<div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Building Screen</span><span class="text-slate-600">-${d.max_building_screening_db} dB</span></div>`;
-    if (d.aircraft) grid += `<div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Aircraft Zone</span><span class="text-slate-600">${d.aircraft.zone_code} (ANEF ${d.aircraft.anef_min}+)</span></div>`;
-    grid += `<div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">AADT Segments</span><span class="text-slate-600">${d.aadt_segments}</span></div>`;
-    el.innerHTML = `
-      <div class="text-5xl font-bold" style="color:${color}">${d.score}<span class="text-xl text-slate-400">/100</span></div>
-      <div class="text-sm text-slate-500 mb-3">${d.label}</div>
-      <div class="grid grid-cols-2 gap-2 text-sm">${grid}</div>`;
-  } catch (e) { el.innerHTML = `<div class="text-red-500 text-sm">Error: ${e.message}</div>`; }
+    const resp = await fetch(`/scores/noise/debug?lat=${lat}&lng=${lng}&radius=500`);
+    const data = await resp.json();
+    document.getElementById('loading').classList.add('hidden');
+    if (data.error) { document.getElementById('sources').innerHTML = `<p class="text-red-500 text-sm">${data.error}</p>`; return; }
+    lastData = data;
+    renderResult(data, lat, lng);
+  } catch(e) {
+    document.getElementById('loading').classList.add('hidden');
+    document.getElementById('sources').innerHTML = `<p class="text-red-500 text-sm">Error: ${e.message}</p>`;
+  }
+}
+
+function renderResult(data, lat, lng) {
+  clearLayers();
+  const t = getToggles();
+  const s = data.score;
+  const color = scoreColor(s.score);
+
+  // ---- Score panel (dB-centric) ----
+  const box = document.getElementById('score-box');
+  box.classList.remove('hidden');
+  const sc = Math.max(0, Math.min(100, s.score));
+  const lden = s.lden_db || s.estimated_db;
+  const dbColor = dbToColor(lden);
+  // dB scale 35-80 → 0-100% on bar
+  const dbPct = Math.max(0, Math.min(100, (lden - 35) / (80 - 35) * 100));
+  const stat = (k, v, hint) => `<div class="flex justify-between items-baseline py-0.5"><span class="text-slate-400">${k}</span><span><span class="text-slate-700 font-medium">${v}</span>${hint ? ` <span class="text-slate-400 text-[10px]" style="margin-left:6px">${hint}</span>` : ''}</span></div>`;
+
+  box.innerHTML = `
+    <div class="flex items-baseline gap-2 mb-1">
+      <div class="text-4xl font-bold leading-none" style="color:${dbColor}">${lden.toFixed(0)}</div>
+      <div class="text-sm font-semibold text-slate-500">dB Lden</div>
+      <div class="ml-auto text-xs text-slate-400">score ${sc.toFixed(0)}/100</div>
+    </div>
+    <div class="text-[11px] font-semibold text-slate-600 mb-1">${s.label}</div>
+    <div class="relative h-2 rounded-full overflow-hidden mb-1" style="background:linear-gradient(90deg,#22c55e 0%,#84cc16 22%,#f59e0b 44%,#ef4444 66%,#b91c1c 100%);opacity:0.25"></div>
+    <div class="relative -mt-3 mb-2 h-2">
+      <div class="absolute h-2 w-1 bg-slate-900 rounded-full" style="left:${dbPct}%;transform:translateX(-50%)"></div>
+    </div>
+    <div class="flex justify-between text-[9px] text-slate-400">
+      <span>35 quiet</span><span>55</span><span>65</span><span>75</span><span>80+ loud</span>
+    </div>
+
+    <div class="text-[10px] text-slate-400 uppercase tracking-wide mt-3 mb-1">Time of day</div>
+    <div class="text-xs">
+      ${stat('Leq 24h', (s.leq_db || '?') + ' dB')}
+      ${stat('Lden (penalised)', (s.lden_db || s.estimated_db) + ' dB')}
+      ${stat('Day 7-19', (s.leq_day_db || '?') + ' dB')}
+      ${stat('Night 23-7', (s.leq_night_db || '?') + ' dB')}
+    </div>
+
+    <div class="text-[10px] text-slate-400 uppercase tracking-wide mt-3 mb-1">By source</div>
+    <div class="text-xs">
+      ${stat('Road (L10)', s.road_db + ' dB', `${s.road_count || 0} segs`)}
+      ${stat('Rail', (s.rail_db || 0) + ' dB', s.nearest_tram_m != null ? `tram ${s.nearest_tram_m}m` : (s.nearest_train_m != null ? `train ${s.nearest_train_m}m` : ''))}
+      ${stat('AADT counts', `${s.aadt_segments || 0} VicRoads · ${s.nfdh_stations || 0} NFDH`)}
+      ${s.max_building_screening_db ? stat('Building screening', `-${s.max_building_screening_db} dB`) : ''}
+    </div>
+
+    ${s.lden_max_facade ? `
+    <div class="text-[10px] text-slate-400 uppercase tracking-wide mt-3 mb-1">Facade asymmetry</div>
+    <div class="text-xs">
+      ${stat('Max', s.lden_max_facade + ' dB', s.max_facade_dir)}
+      ${stat('Min', s.lden_min_facade + ' dB', s.min_facade_dir)}
+      ${stat('Range', s.facade_range_db + ' dB')}
+    </div>` : ''}
+
+    ${s.ocean_proximity_m ? (() => {
+      const dist = s.ocean_proximity_m;
+      const level = s.ocean_noise || '';
+      const isDom = level.includes('dominant');
+      const isAud = level.includes('audible');
+      const desc = isDom
+        ? `Only ${dist}m from the coastline, waves are likely the dominant sound here`
+        : isAud
+        ? `${dist}m from coast, surf may be noticeable on calm days`
+        : `${dist}m from coast, faint ocean ambience in quiet conditions`;
+      return `<div class="text-[10px] text-slate-400 uppercase tracking-wide mt-3 mb-1">\u{1F30A} Ocean proximity</div>
+        <div class="text-xs text-slate-500">${desc}</div>`;
+    })() : ''}`;
+
+  // Always-on basics: query point + radius
+  addGeoJSON('query-pt', { type: 'Feature', geometry: { type: 'Point', coordinates: [lng, lat] } }, {
+    type: 'circle', paint: { 'circle-radius': 8, 'circle-color': '#8b5cf6', 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' }
+  });
+  const circle = turf_circle([lng, lat], 0.5);
+  addGeoJSON('radius', circle, {
+    type: 'line', paint: { 'line-color': '#8b5cf6', 'line-width': 1, 'line-dasharray': [4, 4], 'line-opacity': 0.5 }
+  });
+
+  // ---- Source list (sidebar) + map markers ----
+  const src = data.sources;
+  let html = '';
+
+  // AADT
+  if (src.aadt.length) {
+    html += `<h3 class="text-sm font-semibold text-brand-600 mt-4 mb-2">VicRoads AADT (${src.aadt.length})</h3>`;
+    src.aadt.sort((a,b) => b.db - a.db);
+    const features = [], lines = [];
+    for (const a of src.aadt.slice(0, 10)) {
+      html += `<div class="pl-3 border-l-2 border-red-400 py-1.5 mb-1 cursor-pointer hover:bg-slate-50 rounded-r text-xs" onclick="map.flyTo({center:[${a.lng},${a.lat}],zoom:18})">
+        <div class="font-semibold text-slate-700">${a.road_name || 'Unknown'}</div>
+        <div class="text-slate-400">AADT ${a.aadt.toLocaleString()} | ${a.distance_m}m | ${a.db} dB${a.screening_db ? ` <span class="text-emerald-600">(-${a.screening_db})</span>` : ''}</div>
+      </div>`;
+      features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [a.lng, a.lat] }, properties: { aadt: a.aadt, name: a.road_name, db: a.db, dist: a.distance_m, screening: a.screening_db || 0 } });
+      lines.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: [[lng, lat], [a.lng, a.lat]] }, properties: { screening: a.screening_db || 0, db: a.db, name: a.road_name } });
+    }
+    if (features.length) {
+      addGeoJSON('aadt-pts', { type: 'FeatureCollection', features }, {
+        type: 'circle', paint: { 'circle-radius': ['interpolate', ['linear'], ['get', 'aadt'], 0, 3, 50000, 12], 'circle-color': '#ef4444', 'circle-opacity': 0.7 }
+      });
+      addGeoJSON('aadt-lines', { type: 'FeatureCollection', features: lines }, sourceLineLayerDef(t.screening));
+      attachLineHover('aadt-lines');
+    }
+  }
+
+  // NFDH
+  if (src.nfdh.length) {
+    html += `<h3 class="text-sm font-semibold text-amber-600 mt-4 mb-2">NFDH Stations (${src.nfdh.length})</h3>`;
+    src.nfdh.sort((a,b) => b.db - a.db);
+    const features = [], nLines = [];
+    for (const n of src.nfdh.slice(0, 10)) {
+      html += `<div class="pl-3 border-l-2 border-amber-400 py-1.5 mb-1 cursor-pointer hover:bg-slate-50 rounded-r text-xs" onclick="map.flyTo({center:[${n.lng},${n.lat}],zoom:18})">
+        <div class="font-semibold text-slate-700">${n.road_name || 'Station'}</div>
+        <div class="text-slate-400">AADT ${n.aadt.toLocaleString()} | ${n.distance_m}m | ${n.db} dB${n.screening_db ? ` <span class="text-emerald-600">(-${n.screening_db})</span>` : ''}</div>
+      </div>`;
+      features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [n.lng, n.lat] }, properties: { aadt: n.aadt, name: n.road_name, db: n.db, dist: n.distance_m, screening: n.screening_db || 0 } });
+      nLines.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: [[lng, lat], [n.lng, n.lat]] }, properties: { screening: n.screening_db || 0, db: n.db, name: n.road_name } });
+    }
+    if (features.length) {
+      addGeoJSON('nfdh-pts', { type: 'FeatureCollection', features }, {
+        type: 'circle', paint: { 'circle-radius': ['interpolate', ['linear'], ['get', 'aadt'], 0, 3, 50000, 12], 'circle-color': '#f59e0b', 'circle-opacity': 0.7 }
+      });
+      addGeoJSON('nfdh-lines', { type: 'FeatureCollection', features: nLines }, sourceLineLayerDef(t.screening));
+      attachLineHover('nfdh-lines');
+    }
+  }
+
+  // Rail (sidebar list + screening lines if rail source has lat/lng)
+  if (src.rail.length) {
+    html += `<h3 class="text-sm font-semibold text-blue-600 mt-4 mb-2">Rail/Tram (${src.rail.length})</h3>`;
+    src.rail.sort((a,b) => b.db - a.db);
+    const railLineFeats = [];
+    for (const r of src.rail) {
+      const icon = r.type === 'tram' ? 'Tram' : 'Train';
+      html += `<div class="pl-3 border-l-2 border-blue-400 py-1.5 mb-1 text-xs">
+        <div class="font-semibold text-slate-700">${icon}: ${r.route}</div>
+        <div class="text-slate-400">${r.distance_m}m | ${r.db} dB${r.screening_db ? ` <span class="text-emerald-600">(-${r.screening_db})</span>` : ''} | ${r.peak_svc_hr || '?'}/hr peak</div>
+      </div>`;
+      if (r.lat != null && r.lng != null) {
+        railLineFeats.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: [[lng, lat], [r.lng, r.lat]] }, properties: { screening: r.screening_db || 0, db: r.db, name: `${icon}: ${r.route}` } });
+      }
+    }
+    if (railLineFeats.length) {
+      addGeoJSON('rail-screening-lines', { type: 'FeatureCollection', features: railLineFeats }, sourceLineLayerDef(t.screening));
+      attachLineHover('rail-screening-lines');
+    }
+  }
+
+  // Rail track shapes — Google-Maps-style: each route distinct color, parallel offset, white halo
+  const railFeatures = [];
+  const shapes = (src.rail_shapes || []).filter(s => s.coords.length >= 2);
+  shapes.forEach((shape, i) => {
+    railFeatures.push({
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: shape.coords.map(c => [c[1], c[0]]) },
+      properties: {
+        type: shape.route_type,
+        color: hashColor(shape.shape_id, shape.route_type),
+        offset: ((i % 7) - 3) * 3,  // -9..+9 px parallel offset
+      }
+    });
+  });
+  if (railFeatures.length) {
+    // White halo underneath
+    addGeoJSON('rail-halo', { type: 'FeatureCollection', features: railFeatures }, {
+      type: 'line',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: {
+        'line-color': '#ffffff',
+        'line-width': ['interpolate', ['linear'], ['zoom'], 12, 3, 18, 5],
+        'line-opacity': 0.9,
+        'line-offset': ['get', 'offset'],
+      }
+    });
+    // Colored line on top
+    addGeoJSON('rail-lines', { type: 'FeatureCollection', features: railFeatures }, {
+      type: 'line',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: {
+        'line-color': ['get', 'color'],
+        'line-width': ['interpolate', ['linear'], ['zoom'], 12, 1.5, 18, 3],
+        'line-opacity': 0.95,
+        'line-offset': ['get', 'offset'],
+      }
+    });
+  }
+
+  // ---- Wave ripple animation (real road/rail sources emit toward receiver) ----
+  if (t.ripple) startRippleAnimation(lat, lng, src);
+
+  // ---- Facade pie ----
+  if (t.facade && s.facade_sectors) drawFacadePie(s, lat, lng);
+
+  // ---- Terrain elevation profile (async — open-meteo API ~1-2s) ----
+  const terrainChart = document.getElementById('terrain-chart');
+  if (t.terrain && data.terrain_source) {
+    fetchAndDrawTerrain(data.terrain_source, lat, lng);
+  } else {
+    terrainChart.classList.add('hidden');
+  }
+
+  // ---- Parcel cadastre overlay ----
+  if (t.parcels) {
+    const state = detectState(lat, lng);
+    if (state) addCadastreTiles(state);
+  }
+
+  document.getElementById('sources').innerHTML = html;
+}
+
+// ---- Parcel cadastre vector tiles ----
+function addCadastreTiles(state) {
+  const sourceUrl = `${PARCEL_TILE_BASE}/${state}_parcels/{z}/{x}/{y}`;
+  if (!map.getSource('cadastre')) {
+    map.addSource('cadastre', {
+      type: 'vector',
+      tiles: [sourceUrl],
+      minzoom: 14,
+      maxzoom: 16,
+    });
+  } else {
+    // State changed → swap tiles
+    const src = map.getSource('cadastre');
+    if (src.tiles?.[0] !== sourceUrl) {
+      map.removeLayer('cadastre-line');
+      if (map.getLayer('cadastre-hit')) map.removeLayer('cadastre-hit');
+      map.removeSource('cadastre');
+      sourceIds.splice(sourceIds.indexOf('cadastre-line'), 1);
+      sourceIds.splice(sourceIds.indexOf('cadastre-hit'), 1);
+      addCadastreTiles(state);
+      return;
+    }
+  }
+  if (!map.getLayer('cadastre-line')) {
+    map.addLayer({
+      id: 'cadastre-line', type: 'line', source: 'cadastre', 'source-layer': 'parcel_lines',
+      minzoom: 14,
+      paint: {
+        'line-color': ['interpolate', ['linear'], ['zoom'], 14, '#a78bfa', 19, '#6d28d9'],
+        'line-width': ['interpolate', ['linear'], ['zoom'], 14, 0.5, 19, 1.2],
+        'line-opacity': 0.8,
+      },
+    });
+    sourceIds.push('cadastre-line');
+  }
+  if (!map.getLayer('cadastre-hit')) {
+    map.addLayer({
+      id: 'cadastre-hit', type: 'fill', source: 'cadastre', 'source-layer': 'parcels',
+      minzoom: 14,
+      paint: { 'fill-color': '#a78bfa', 'fill-opacity': 0 },
+    });
+    sourceIds.push('cadastre-hit');
+  }
+  ensureHighlightLayer();
+}
+
+// Highlight source + layers live for the lifetime of the map (NOT cleared on
+// each query) so a parcel selection persists across re-queries.
+function ensureHighlightLayer() {
+  if (map.getSource('cadastre-highlight-src')) return;
+  map.addSource('cadastre-highlight-src', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addLayer({
+    id: 'cadastre-highlight', type: 'fill', source: 'cadastre-highlight-src',
+    paint: { 'fill-color': '#7c3aed', 'fill-opacity': 0.25 },
+  });
+  map.addLayer({
+    id: 'cadastre-highlight-line', type: 'line', source: 'cadastre-highlight-src',
+    paint: { 'line-color': '#5b21b6', 'line-width': 2 },
+  });
+}
+
+// Cursor hint when hovering over a clickable parcel
+function attachParcelInspector() {
+  map.on('mousemove', (e) => {
+    if (!document.getElementById('t-parcels')?.checked) return;
+    if (!map.getLayer('cadastre-hit')) return;
+    const feats = map.queryRenderedFeatures(e.point, { layers: ['cadastre-hit'] });
+    map.getCanvas().style.cursor = feats.length ? 'pointer' : '';
+  });
+}
+
+function showParcelInfo(props) {
+  const box = document.getElementById('parcel-info');
+  box.classList.remove('hidden');
+  const rows = Object.entries(props)
+    .filter(([k, v]) => v != null && v !== '' && k !== 'state')
+    .map(([k, v]) => `<div class="flex justify-between py-0.5 text-xs"><span class="text-slate-400">${k}</span><span class="text-slate-700 font-medium">${v}</span></div>`)
+    .join('');
+  box.innerHTML = `
+    <div class="flex items-center justify-between mb-1">
+      <div class="text-xs font-semibold text-violet-700">Parcel</div>
+      <button onclick="document.getElementById('parcel-info').classList.add('hidden'); map.getSource('cadastre-highlight-src').setData({type:'FeatureCollection',features:[]})" class="text-slate-400 hover:text-slate-700 text-xs">✕</button>
+    </div>
+    ${rows}
+    <div class="text-[10px] text-slate-400 mt-1">Right-click another parcel to swap.</div>
+  `;
+}
+
+let terrainFetchToken = 0;
+async function fetchAndDrawTerrain(src, lat, lng) {
+  const myToken = ++terrainFetchToken;
+  const chart = document.getElementById('terrain-chart');
+  chart.classList.remove('hidden');
+  chart.innerHTML = `<div class="text-xs text-slate-400 py-2 text-center">Loading terrain profile to ${src.name || 'source'} (${src.distance_m}m)...</div>`;
+  try {
+    const url = `/scores/noise/terrain?src_lat=${src.lat}&src_lng=${src.lng}&lat=${lat}&lng=${lng}`;
+    const profile = await fetch(url).then(r => r.json());
+    if (myToken !== terrainFetchToken) return;  // a newer query started
+    if (profile.error) { chart.innerHTML = `<div class="text-xs text-red-500 py-2 text-center">Terrain unavailable</div>`; return; }
+    profile.source_name = src.name;
+    profile.source_lat = src.lat;
+    profile.source_lng = src.lng;
+    profile.source_db = src.db;
+    drawTerrainProfile(profile, lat, lng);
+  } catch (e) {
+    if (myToken !== terrainFetchToken) return;
+    chart.innerHTML = `<div class="text-xs text-red-500 py-2 text-center">Terrain fetch failed: ${e.message}</div>`;
+  }
+}
+
+// Layer definition for source-to-receiver line, optionally colored by screening
+function sourceLineLayerDef(showScreening) {
+  if (showScreening) {
+    return {
+      type: 'line',
+      paint: {
+        // 0 dB screening (direct) → red, 25 dB → green
+        'line-color': ['interpolate', ['linear'], ['get', 'screening'], 0, '#ef4444', 12, '#f59e0b', 25, '#22c55e'],
+        'line-width': ['interpolate', ['linear'], ['get', 'screening'], 0, 2, 25, 1],
+        'line-opacity': 0.7,
+      }
+    };
+  }
+  return { type: 'line', paint: { 'line-color': '#94a3b8', 'line-width': 1, 'line-opacity': 0.4, 'line-dasharray': [3, 3] } };
+}
+
+function attachLineHover(layerId) {
+  map.on('mousemove', layerId, (e) => {
+    if (!e.features.length) return;
+    const p = e.features[0].properties;
+    popup.setLngLat(e.lngLat).setHTML(
+      `<div style="font-size:12px"><b>${p.name || ''}</b><br>${p.db} dB · screening -${p.screening || 0} dB</div>`
+    ).addTo(map);
+    map.getCanvas().style.cursor = 'pointer';
+  });
+  map.on('mouseleave', layerId, () => { popup.remove(); map.getCanvas().style.cursor = ''; });
+}
+
+// ---- Sound wave ripple animation -------------------------------------------
+// Real sources (road segments, rail, AADT/NFDH) emit concentric rings outward.
+// Multiple sources around the receiver naturally converge, visualising
+// "noise reaches you from every direction" without faking the physics.
+function startRippleAnimation(lat, lng, src) {
+  if (rippleRAF) cancelAnimationFrame(rippleRAF);
+
+  // Collect emitters: lat/lng + db. Cap to top 25 by dB to avoid >150 frame features.
+  const emitters = [];
+  for (const r of (src.overture_roads || [])) emitters.push({lat: r.lat, lng: r.lng, db: r.db});
+  for (const a of (src.aadt || [])) emitters.push({lat: a.lat, lng: a.lng, db: a.db});
+  for (const n of (src.nfdh || [])) emitters.push({lat: n.lat, lng: n.lng, db: n.db});
+  for (const rl of (src.rail || [])) {
+    if (rl.lat != null) emitters.push({lat: rl.lat, lng: rl.lng, db: rl.db});
+  }
+  emitters.sort((a, b) => b.db - a.db);
+  const top = emitters.slice(0, 12);  // fewer simultaneous emitters reduces visual noise
+  if (!top.length) return;
+
+  addGeoJSON('ripple', { type: 'FeatureCollection', features: [] }, {
+    type: 'line',
+    layout: { 'line-cap': 'round' },
+    paint: {
+      'line-color': ['interpolate', ['linear'], ['get', 'db'], 35, '#22c55e', 55, '#f59e0b', 75, '#ef4444'],
+      'line-width': ['interpolate', ['linear'], ['get', 'db'], 35, 0.8, 80, 1.8],
+      'line-opacity': ['interpolate', ['linear'], ['get', 'age'], 0, 0.55, 1, 0],
+    }
+  });
+
+  rippleStart = performance.now();
+  const WAVES_PER_SOURCE = 2;  // was 3 — halve overlap
+
+  function tick(now) {
+    const elapsed = (now - rippleStart) / 1000;
+    const features = [];
+    for (let i = 0; i < top.length; i++) {
+      const s = top[i];
+      // Slower than before: 3s @ 80dB → 8s @ 35dB
+      const period = Math.max(3, 8 - (s.db - 35) / 9);
+      // Louder = farther reach (35dB → 80m, 80dB → 360m)
+      const maxR = 80 + Math.max(0, s.db - 35) * 6;
+      for (let w = 0; w < WAVES_PER_SOURCE; w++) {
+        const phase = ((elapsed / period + w / WAVES_PER_SOURCE + i * 0.04) % 1);
+        const radiusM = phase * maxR;
+        if (radiusM < 6) continue;
+        features.push({
+          type: 'Feature',
+          geometry: turf_circle([s.lng, s.lat], radiusM / 1000, 32).geometry,
+          properties: { db: s.db, age: phase },
+        });
+      }
+    }
+    const source = map.getSource('ripple');
+    if (source) source.setData({ type: 'FeatureCollection', features });
+    rippleRAF = requestAnimationFrame(tick);
+  }
+  rippleRAF = requestAnimationFrame(tick);
+}
+
+// ---- Facade direction rose chart ------------------------------------------
+// Petal radius scales with dB on an absolute scale (35→0px, 80→100px),
+// so quiet directions visibly shrink and loud directions stretch out.
+// Color uses an absolute dB scale (green→amber→red) — same scale across
+// all queries so two points are comparable.
+const ROSE_DIRS = ['N','NE','E','SE','S','SW','W','NW'];
+const ROSE_MIN_DB = 35;
+const ROSE_MAX_DB = 80;
+const ROSE_MIN_R = 25;
+const ROSE_MAX_R = 110;
+
+// Stable per-route color: hash shape_id → distinct hue. Trams (route_type 0) get
+// warm/green hues (90-180°), trains (other) get cool hues (200-340°), so the two
+// modes are visually distinguishable while individual routes remain unique.
+const _hashColorCache = {};
+function hashColor(shapeId, routeType) {
+  if (_hashColorCache[shapeId]) return _hashColorCache[shapeId];
+  let h = 0;
+  for (let i = 0; i < shapeId.length; i++) h = (h * 31 + shapeId.charCodeAt(i)) | 0;
+  const hueBase = routeType === 0 ? 90 : 200;
+  const hueRange = routeType === 0 ? 90 : 140;
+  const hue = hueBase + (Math.abs(h) % hueRange);
+  const color = `hsl(${hue}, 75%, 42%)`;
+  _hashColorCache[shapeId] = color;
+  return color;
+}
+
+function dbToColor(db) {
+  // 35 dB → emerald, 55 → amber, 75 → red
+  if (db <= 45) return '#22c55e';
+  if (db <= 55) return '#84cc16';
+  if (db <= 65) return '#f59e0b';
+  if (db <= 72) return '#ef4444';
+  return '#b91c1c';
+}
+
+function dbToRadiusM(db) {
+  const t = Math.max(0, Math.min(1, (db - ROSE_MIN_DB) / (ROSE_MAX_DB - ROSE_MIN_DB)));
+  return ROSE_MIN_R + t * (ROSE_MAX_R - ROSE_MIN_R);
+}
+
+// SVG overlay anchored via mapbox Marker — never zoom-distorted, fixed 240px
+const FACADE_SVG_SIZE = 240;
+const FACADE_MIN_PX = 22;
+const FACADE_MAX_PX = 96;
+
+function drawFacadePie(s, lat, lng) {
+  const vals = ROSE_DIRS.map(d => s.facade_sectors[d] || 35);
+  const center = FACADE_SVG_SIZE / 2;
+
+  let svg = '';
+  ROSE_DIRS.forEach((dir, i) => {
+    const db = vals[i];
+    const t = Math.max(0, Math.min(1, (db - ROSE_MIN_DB) / (ROSE_MAX_DB - ROSE_MIN_DB)));
+    const r = FACADE_MIN_PX + t * (FACADE_MAX_PX - FACADE_MIN_PX);
+    const startAng = (i * 45 - 22.5) * Math.PI / 180;
+    const endAng = (i * 45 + 22.5) * Math.PI / 180;
+    // SVG: angle 0 = North (up), measured clockwise. x = sin, y = -cos.
+    const x1 = center + r * Math.sin(startAng);
+    const y1 = center - r * Math.cos(startAng);
+    const x2 = center + r * Math.sin(endAng);
+    const y2 = center - r * Math.cos(endAng);
+    const color = dbToColor(db);
+    svg += `<path class="petal" d="M ${center.toFixed(1)} ${center.toFixed(1)} L ${x1.toFixed(1)} ${y1.toFixed(1)} A ${r.toFixed(1)} ${r.toFixed(1)} 0 0 1 ${x2.toFixed(1)} ${y2.toFixed(1)} Z" fill="${color}" fill-opacity="0.5" stroke="${color}" stroke-width="1.5" data-info="${dir}: ${db.toFixed(1)} dB"/>`;
+
+    // Label outside the petal
+    const labelAng = i * 45 * Math.PI / 180;
+    const lblR = r + 14;
+    const lx = center + lblR * Math.sin(labelAng);
+    const ly = center - lblR * Math.cos(labelAng);
+    const labelText = `${dir} ${db.toFixed(0)} dB`;
+    const labelW = labelText.length * 6.2 + 8;
+    svg += `<rect class="label-bg" x="${(lx - labelW/2).toFixed(1)}" y="${(ly - 7).toFixed(1)}" width="${labelW.toFixed(1)}" height="14" rx="3"/>`;
+    svg += `<text x="${lx.toFixed(1)}" y="${(ly + 3).toFixed(1)}" text-anchor="middle">${labelText}</text>`;
+  });
+
+  const el = document.createElement('div');
+  el.style.width = `${FACADE_SVG_SIZE}px`;
+  el.style.height = `${FACADE_SVG_SIZE}px`;
+  el.innerHTML = `<svg id="facade-svg" viewBox="0 0 ${FACADE_SVG_SIZE} ${FACADE_SVG_SIZE}" width="${FACADE_SVG_SIZE}" height="${FACADE_SVG_SIZE}">${svg}</svg>`;
+
+  // Tooltip via title attr (no popup overlay needed)
+  el.querySelectorAll('.petal').forEach(p => {
+    const info = p.getAttribute('data-info');
+    const titleEl = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+    titleEl.textContent = info;
+    p.appendChild(titleEl);
+  });
+
+  facadeMarker = new mapboxgl.Marker({ element: el, anchor: 'center' })
+    .setLngLat([lng, lat])
+    .addTo(map);
+}
+
+// ---- Terrain elevation profile ---------------------------------------------
+function drawTerrainProfile(terrain, lat, lng) {
+  const samples = terrain.samples || [];
+  if (samples.length < 2) {
+    document.getElementById('terrain-chart').classList.add('hidden');
+    return;
+  }
+
+  const W = 320, H = 120, padL = 32, padR = 8, padT = 8, padB = 22;
+  const xs = samples.map(s => s.dist_m);
+  const ys = samples.flatMap(s => [s.elev_m, s.sight_line_m]).filter(v => v != null);
+  const xMin = Math.min(...xs), xMax = Math.max(...xs);
+  const yMin = Math.min(...ys) - 1;
+  const yMax = Math.max(...ys) + 1;
+
+  const sx = d => padL + (d - xMin) / (xMax - xMin) * (W - padL - padR);
+  const sy = e => H - padB - (e - yMin) / (yMax - yMin) * (H - padT - padB);
+
+  // Ground polygon (terrain elevation, filled)
+  let ground = `M ${sx(samples[0].dist_m)} ${H - padB}`;
+  for (const s of samples) ground += ` L ${sx(s.dist_m)} ${sy(s.elev_m)}`;
+  ground += ` L ${sx(samples[samples.length-1].dist_m)} ${H - padB} Z`;
+
+  // Sight line (source ear height → receiver ear height)
+  const sightLine = samples.map((s, i) => `${i === 0 ? 'M' : 'L'} ${sx(s.dist_m)} ${sy(s.sight_line_m)}`).join(' ');
+
+  // Detect any blocking ridges (ground above sight line by ≥ 3m)
+  const blockedSamples = samples.filter(s => (s.elev_m || 0) - (s.sight_line_m || 0) >= 3);
+  const blockedHTML = blockedSamples.length
+    ? `<div class="text-xs text-amber-700 mt-1">Ridge blocks sight line at ${blockedSamples.length} sample point${blockedSamples.length>1?'s':''}.</div>`
+    : `<div class="text-xs text-emerald-700 mt-1">Direct line of sight (no terrain blocking).</div>`;
+
+  const chart = document.getElementById('terrain-chart');
+  chart.classList.remove('hidden');
+  chart.innerHTML = `
+    <div class="flex items-center justify-between mb-1">
+      <div class="text-xs font-semibold text-slate-600">Terrain → ${terrain.source_name || 'Source'}</div>
+      <div class="text-[11px] text-slate-400">${terrain.total_dist_m}m · ${terrain.source_db} dB raw</div>
+    </div>
+    <svg viewBox="0 0 ${W} ${H}" class="w-full">
+      <path d="${ground}" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1"/>
+      <path d="${sightLine}" fill="none" stroke="#ef4444" stroke-width="1.5" stroke-dasharray="3,2"/>
+      <text x="2" y="${sy(yMax)+4}" font-size="9" fill="#64748b">${yMax.toFixed(0)}m</text>
+      <text x="2" y="${sy(yMin)+4}" font-size="9" fill="#64748b">${yMin.toFixed(0)}m</text>
+      <text x="${padL}" y="${H-6}" font-size="9" fill="#64748b">source</text>
+      <text x="${W-padR-30}" y="${H-6}" font-size="9" fill="#64748b">you</text>
+    </svg>
+    ${blockedHTML}
+  `;
+
+  // Also draw source-to-receiver line on map highlighted (so user can see which source profile is for)
+  if (terrain.source_lat != null && terrain.source_lng != null) {
+    addGeoJSON('terrain-line', {
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: [[terrain.source_lng, terrain.source_lat], [lng, lat]] },
+      properties: {},
+    }, {
+      type: 'line',
+      paint: { 'line-color': '#7c3aed', 'line-width': 2, 'line-dasharray': [2, 2], 'line-opacity': 0.8 },
+    });
+  }
+}
+
+function turf_circle(center, radiusKm, steps = 64) {
+  const coords = [];
+  for (let i = 0; i <= steps; i++) {
+    const angle = (i / steps) * 2 * Math.PI;
+    const dx = radiusKm * Math.cos(angle) / (111.32 * Math.cos(center[1] * Math.PI / 180));
+    const dy = radiusKm * Math.sin(angle) / 110.574;
+    coords.push([center[0] + dx, center[1] + dy]);
+  }
+  return { type: 'Feature', geometry: { type: 'LineString', coordinates: coords } };
 }
 </script>
 </body>

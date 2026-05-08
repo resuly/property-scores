@@ -578,17 +578,18 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
 
     # Ocean proximity (informational, does not affect score)
     try:
-        from property_scores.common.overture import pois_near
-        beach_pois = [p for p in pois_near(db, lat, lng, radius_m=2000)
-                      if p[0] and "beach" in p[0].lower()]
-        if beach_pois:
-            nearest_beach = min(p[1] for p in beach_pois)
-            result["ocean_proximity_m"] = round(nearest_beach)
-            if nearest_beach < 200:
+        from property_scores.common.overture import water_near
+        ocean_classes = {"ocean", "sea", "bay"}
+        ocean_hits = [w for w in water_near(db, lat, lng, radius_m=2000)
+                      if w[0] in ocean_classes]
+        if ocean_hits:
+            nearest_ocean = ocean_hits[0][2]
+            result["ocean_proximity_m"] = round(nearest_ocean)
+            if nearest_ocean < 200:
                 result["ocean_noise"] = "Surf noise likely dominant"
-            elif nearest_beach < 500:
+            elif nearest_ocean < 500:
                 result["ocean_noise"] = "Surf noise audible"
-            elif nearest_beach < 1000:
+            elif nearest_ocean < 1000:
                 result["ocean_noise"] = "Surf noise faint"
     except Exception:
         pass

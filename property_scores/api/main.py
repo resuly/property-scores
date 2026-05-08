@@ -64,10 +64,6 @@ def noise_page():
     return FileResponse(STATIC_DIR / "noise.html")
 
 
-@app.get("/noise/debug")
-def noise_debug_page():
-    return FileResponse(STATIC_DIR / "noise-debug.html")
-
 
 @app.get("/walkability")
 def walkability_page():

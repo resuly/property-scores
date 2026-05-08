@@ -4,100 +4,321 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Flood Risk Score - Property Scores</title>
-<link rel="stylesheet" href="/css/styles.css">
+<link rel="stylesheet" href="/css/styles.css?v=2">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.css" rel="stylesheet">
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.js"></script>
+<style>
+  #map { position: absolute; top: 0; left: 0; right: 380px; bottom: 0; transition: right 0.3s ease; }
+  #sidebar { width: 380px; transition: width 0.3s ease; }
+  body.sidebar-collapsed #map { right: 36px; }
+  body.sidebar-collapsed #sidebar { width: 36px; }
+  body.sidebar-collapsed #sidebar > .sidebar-content { display: none; }
+  body.sidebar-collapsed .sidebar-toggle svg { transform: rotate(180deg); }
+  .mapboxgl-ctrl-bottom-left, .mapboxgl-ctrl-bottom-right { display: none; }
+  .toggle-row { display: flex; align-items: center; gap: 6px; padding: 4px 0; cursor: pointer; user-select: none; }
+  .toggle-row input { cursor: pointer; }
+  .toggle-row span { font-size: 12px; color: #475569; }
+  .sidebar-toggle { position: fixed; top: 50%; right: 380px; transform: translate(50%, -50%); width: 28px; height: 28px; border-radius: 9999px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 3px rgba(0,0,0,0.12); display: flex; align-items: center; justify-content: center; cursor: pointer; color: #64748b; z-index: 50; transition: right 0.3s ease, color 0.15s, border-color 0.15s; }
+  .sidebar-toggle:hover { color: #2563eb; border-color: #93c5fd; }
+  body.sidebar-collapsed .sidebar-toggle { right: 36px; }
+  .switch { position: relative; display: inline-block; width: 30px; height: 16px; flex-shrink: 0; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch-slider { position: absolute; cursor: pointer; inset: 0; background: #cbd5e1; border-radius: 999px; transition: background 0.2s; }
+  .switch-slider:before { content: ''; position: absolute; height: 12px; width: 12px; left: 2px; top: 2px; background: white; border-radius: 50%; transition: transform 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.15); }
+  .switch input:checked + .switch-slider { background: #0891b2; }
+  .switch input:checked + .switch-slider:before { transform: translateX(14px); }
+  .zone-chip { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+  .zone-floodway { background: #fee2e2; color: #991b1b; }
+  .zone-flood { background: #ffedd5; color: #9a3412; }
+  .zone-moderate { background: #fef9c3; color: #854d0e; }
+</style>
 </head>
 <body class="bg-slate-50 font-sans text-slate-900">
-<div class="max-w-3xl mx-auto px-6 py-10">
-  <a href="/" class="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-brand-600 mb-8">&larr; All Scores</a>
 
-  <div class="text-center mb-12">
-    <span class="inline-block px-3 py-1 rounded-full badge-flood text-xs font-semibold mb-4">Property Scores</span>
-    <h1 class="text-3xl font-bold mb-3"><span class="text-cyan-600">Flood Risk</span> Score</h1>
-    <p class="text-slate-500 max-w-xl mx-auto text-sm">Check if a property sits within a government-designated flood overlay using official state planning data across Australia.</p>
-  </div>
+<div id="map"></div>
 
-  <div class="card p-6 mb-10">
-    <h2 class="text-lg font-semibold mb-4">Try It</h2>
-    <div class="flex gap-2 flex-wrap">
-      <input id="lat" type="number" step="any" placeholder="Latitude" value="-37.8136" class="input-field w-36">
-      <input id="lng" type="number" step="any" placeholder="Longitude" value="144.9631" class="input-field w-36">
-      <button onclick="compute()" class="btn-primary">Check Flood Risk</button>
+<div id="sidebar" class="absolute top-0 right-0 bottom-0 bg-white border-l border-slate-200 overflow-y-auto">
+  <button class="sidebar-toggle" onclick="document.body.classList.toggle('sidebar-collapsed'); setTimeout(() => map.resize(), 320)" title="Collapse sidebar">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 6 15 12 9 18"/></svg>
+  </button>
+  <div class="sidebar-content p-5">
+    <div class="flex items-center gap-2 mb-1">
+      <a href="/" class="text-slate-400 hover:text-brand-600 text-sm">&larr;</a>
+      <h1 class="text-lg font-bold">Flood Risk Score</h1>
     </div>
-    <div id="result" class="hidden mt-4 p-4 bg-slate-50 rounded-lg"></div>
-  </div>
-
-  <div class="prose-scores">
-    <h2>What It Measures</h2>
-    <p>The Flood Risk Score checks whether a property falls within officially designated flood overlays in state government planning schemes. A higher score means lower flood risk.</p>
-
-    <div class="flex rounded-lg overflow-hidden text-xs text-center mb-6">
-      <div class="flex-1 py-3 bg-red-100 text-red-700"><span class="block text-sm font-bold">0-20</span>Very High</div>
-      <div class="flex-1 py-3 bg-orange-100 text-orange-700"><span class="block text-sm font-bold">21-40</span>High</div>
-      <div class="flex-1 py-3 bg-amber-100 text-amber-700"><span class="block text-sm font-bold">41-60</span>Moderate</div>
-      <div class="flex-1 py-3 bg-emerald-100 text-emerald-700"><span class="block text-sm font-bold">61-80</span>Low</div>
-      <div class="flex-1 py-3 bg-green-100 text-green-700"><span class="block text-sm font-bold">81-100</span>Very Low</div>
+    <p class="text-xs text-slate-400 mb-4">Click the map or enter coordinates to assess flood risk.</p>
+    <div class="flex gap-2 mb-2">
+      <input id="lat" type="number" step="any" placeholder="Lat" value="-37.8136" class="input-field flex-1 min-w-0">
+      <input id="lng" type="number" step="any" placeholder="Lng" value="144.9631" class="input-field flex-1 min-w-0">
+      <button onclick="query()" class="btn-primary">Go</button>
+    </div>
+    <div class="flex flex-wrap gap-1 mb-4 text-[11px]">
+      <button onclick="setPoint(-37.8136,144.9631,'CBD')" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">CBD</button>
+      <button onclick="setPoint(-37.7476,144.9940,'Alphington')" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">Alphington</button>
+      <button onclick="setPoint(-37.7985,144.9080,'Maribyrnong')" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">Maribyrnong</button>
+      <button onclick="setPoint(-37.7580,145.0200,'Kew')" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">Kew</button>
+      <button onclick="setPoint(-37.8300,145.0560,'Tooronga')" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">Tooronga</button>
+      <button onclick="setPoint(-37.9000,145.1130,'Clayton')" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">Clayton</button>
     </div>
 
-    <h2>Methodology</h2>
+    <div class="card p-3 mb-4">
+      <div class="text-xs font-semibold text-slate-500 mb-2 uppercase tracking-wide">Layers</div>
+      <label class="toggle-row"><input type="checkbox" id="t-overlay" checked onchange="toggleOverlay()"> <span>VIC Flood Overlays (FO/LSIO/SBO)</span></label>
+      <label class="toggle-row"><input type="checkbox" id="t-3d" checked onchange="toggle3D()"> <span>3D Buildings</span></label>
+    </div>
 
-    <h3>Data Sources</h3>
-    <table>
-      <tr><th>State</th><th>Source</th><th>Overlays</th></tr>
-      <tr><td>VIC</td><td>DELWP Planning Schemes API</td><td>FO (Floodway), LSIO, SBO, RFO</td></tr>
-      <tr><td>NSW</td><td>Environment NSW GeoServer</td><td>Flood Prone Land (Layer 230)</td></tr>
-      <tr><td>SA</td><td>Location SA</td><td>Flood Hazard (Layers 16, 17, 51)</td></tr>
-      <tr><td>TAS</td><td>TheList Tasmania</td><td>Flood-prone areas (Layer 3)</td></tr>
-      <tr><td>ACT</td><td>ACTmapi</td><td>Flood Planning Control Area</td></tr>
-    </table>
+    <div id="loading" class="hidden text-cyan-600 text-sm py-5 text-center">Querying flood risk...</div>
+    <div id="score-box" class="hidden card p-4 mb-4"></div>
+    <div id="details" class="hidden"></div>
 
-    <h3>Severity Mapping</h3>
-    <table>
-      <tr><th>Overlay</th><th>Severity</th><th>Score Range</th></tr>
-      <tr><td>Floodway Overlay (FO)</td><td>Very High</td><td>10-20</td></tr>
-      <tr><td>Rural Floodway Overlay (RFO)</td><td>High</td><td>15-25</td></tr>
-      <tr><td>General Flood Overlay</td><td>High</td><td>20-40</td></tr>
-      <tr><td>Land Subject to Inundation (LSIO)</td><td>Moderate</td><td>30-50</td></tr>
-      <tr><td>Special Building Overlay (SBO)</td><td>Low-Moderate</td><td>40-55</td></tr>
-      <tr><td>No overlay</td><td>Very Low</td><td>85-90</td></tr>
-    </table>
-
-    <h2>Coverage</h2>
-    <p>Currently covers VIC, NSW, SA, TAS and ACT. QLD, WA and NT planning overlay data is not yet available via public ArcGIS services.</p>
-
-    <h2>API</h2>
-    <p><code>GET /scores/flood?lat=-37.8136&amp;lng=144.9631</code></p>
-  </div>
-
-  <div class="mt-16 pt-6 border-t border-slate-100 text-center text-xs text-slate-400">
-    Built by <a href="https://daleads.com.au" class="text-brand-500 hover:text-brand-600 no-underline">DA Leads</a> | Data: State Government Planning Schemes (Open Data)
+    <details class="mt-6 text-xs text-slate-600">
+      <summary class="cursor-pointer text-[11px] font-semibold text-slate-400 uppercase tracking-wide hover:text-slate-600 select-none">Methodology</summary>
+      <div class="mt-3 space-y-4">
+        <div>
+          <h4 class="font-semibold text-slate-700 mb-1">What It Measures</h4>
+          <p>Rates flood risk on a 0-100 scale (100 = safest). Combines four independent data layers for comprehensive coverage across all Australian states.</p>
+        </div>
+        <div>
+          <h4 class="font-semibold text-slate-700 mb-1">Data Sources</h4>
+          <ul class="list-disc ml-4 space-y-0.5">
+            <li>ArcGIS Planning Overlays (VIC/NSW/SA/TAS/ACT)</li>
+            <li>JRC Global Surface Water, 38-year satellite record</li>
+            <li>HAND (Height Above Nearest Drainage), Copernicus 30m</li>
+            <li>ERA5 P95 extreme rainfall climatology</li>
+          </ul>
+        </div>
+        <div>
+          <h4 class="font-semibold text-slate-700 mb-1">Scoring</h4>
+          <ol class="list-decimal ml-4 space-y-0.5">
+            <li>Official overlay check (Floodway/LSIO/SBO zones)</li>
+            <li>JRC satellite flood occurrence in 500m radius</li>
+            <li>HAND elevation modifier (physical vulnerability)</li>
+            <li>ERA5 extreme rainfall compound risk</li>
+            <li>Final score = min(overlay, JRC) adjusted by HAND</li>
+          </ol>
+        </div>
+        <div>
+          <h4 class="font-semibold text-slate-700 mb-1">Limitations</h4>
+          <ul class="list-disc ml-4 space-y-0.5">
+            <li>QLD, WA, NT lack public ArcGIS overlay data</li>
+            <li>JRC 30m resolution may miss localized drainage</li>
+            <li>Not a substitute for professional flood assessment</li>
+          </ul>
+        </div>
+      </div>
+    </details>
   </div>
 </div>
 
+<!-- Legend -->
+<div class="absolute bottom-5 left-3 bg-white/95 backdrop-blur rounded-lg shadow-sm border border-slate-200 px-3 py-2 text-xs text-slate-600 z-10" style="min-width:170px">
+  <div class="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Flood Overlays</div>
+  <div class="flex items-center gap-2 mb-1"><span class="w-3 h-3 rounded-sm inline-block" style="background:rgba(220,38,38,0.4);border:1px solid rgba(220,38,38,0.6)"></span> Floodway (FO/RFO)</div>
+  <div class="flex items-center gap-2 mb-1"><span class="w-3 h-3 rounded-sm inline-block" style="background:rgba(249,115,22,0.35);border:1px solid rgba(249,115,22,0.5)"></span> LSIO (1% AEP)</div>
+  <div class="flex items-center gap-2 mb-1"><span class="w-3 h-3 rounded-sm inline-block" style="background:rgba(234,179,8,0.3);border:1px solid rgba(234,179,8,0.5)"></span> SBO</div>
+  <div class="flex items-center gap-2 pt-1 mt-1 border-t border-slate-200"><span class="w-3.5 h-3.5 rounded-full bg-cyan-500 inline-block"></span> Query Point</div>
+</div>
+
 <script>
-async function compute() {
-  const lat = document.getElementById('lat').value;
-  const lng = document.getElementById('lng').value;
-  const el = document.getElementById('result');
-  el.classList.remove('hidden');
-  el.innerHTML = '<div class="text-brand-500 text-sm">Checking flood overlays...</div>';
+let map;
+const VIC_PLAN_BASE = 'https://plan-gis.mapshare.vic.gov.au/arcgis/rest/services/Planning/Vicplan_PlanningSchemeOverlays/MapServer';
+const OVERLAY_LAYERS = [
+  { id: 'flood-fo',   layer: 14, color: 'rgba(220,38,38,0.35)', outline: 'rgba(220,38,38,0.6)', label: 'Floodway (FO)' },
+  { id: 'flood-rfo',  layer: 32, color: 'rgba(220,38,38,0.3)',  outline: 'rgba(220,38,38,0.5)', label: 'Rural Floodway (RFO)' },
+  { id: 'flood-lsio', layer: 15, color: 'rgba(249,115,22,0.3)', outline: 'rgba(249,115,22,0.5)', label: 'LSIO' },
+  { id: 'flood-sbo',  layer: 16, color: 'rgba(234,179,8,0.25)', outline: 'rgba(234,179,8,0.45)', label: 'SBO' },
+];
+
+function setPoint(lat, lng, label) {
+  document.getElementById('lat').value = lat.toFixed(4);
+  document.getElementById('lng').value = lng.toFixed(4);
+  query();
+}
+
+function scoreColor(score) {
+  if (score >= 80) return '#16a34a';
+  if (score >= 60) return '#65a30d';
+  if (score >= 40) return '#d97706';
+  if (score >= 20) return '#ea580c';
+  return '#dc2626';
+}
+
+function toggleOverlay() {
+  const vis = document.getElementById('t-overlay').checked ? 'visible' : 'none';
+  OVERLAY_LAYERS.forEach(ol => {
+    if (map.getLayer(ol.id + '-fill')) map.setLayoutProperty(ol.id + '-fill', 'visibility', vis);
+    if (map.getLayer(ol.id + '-line')) map.setLayoutProperty(ol.id + '-line', 'visibility', vis);
+  });
+}
+
+function toggle3D() {
+  const vis = document.getElementById('t-3d').checked ? 'visible' : 'none';
+  if (map.getLayer('3d-buildings')) map.setLayoutProperty('3d-buildings', 'visibility', vis);
+}
+
+async function initMap() {
+  const cfg = await fetch('/api/config').then(r => r.json());
+  mapboxgl.accessToken = cfg.mapbox_token;
+  map = new mapboxgl.Map({
+    container: 'map',
+    style: 'mapbox://styles/mapbox/light-v11',
+    center: [144.9631, -37.8136],
+    zoom: 14,
+    pitch: 40,
+    bearing: -10,
+    antialias: true,
+  });
+  map.addControl(new mapboxgl.NavigationControl(), 'top-right');
+
+  map.on('load', () => {
+    // 3D buildings
+    const layers = map.getStyle().layers;
+    let labelLayerId;
+    for (const layer of layers) {
+      if (layer.type === 'symbol' && layer.layout['text-field']) { labelLayerId = layer.id; break; }
+    }
+    map.addLayer({
+      id: '3d-buildings', source: 'composite', 'source-layer': 'building',
+      filter: ['==', 'extrude', 'true'], type: 'fill-extrusion', minzoom: 14,
+      paint: {
+        'fill-extrusion-color': '#c8d0db',
+        'fill-extrusion-height': ['get', 'height'],
+        'fill-extrusion-base': ['get', 'min_height'],
+        'fill-extrusion-opacity': 0.5,
+      },
+    }, labelLayerId);
+
+    // VIC flood overlay WMS tiles
+    OVERLAY_LAYERS.forEach(ol => {
+      const tileUrl = `${VIC_PLAN_BASE}/export?dpi=96&transparent=true&format=png32`
+        + `&layers=show:${ol.layer}&bbox={bbox-epsg-3857}`
+        + `&bboxSR=3857&imageSR=3857&size=512,512&f=image`;
+      map.addSource(ol.id, { type: 'raster', tiles: [tileUrl], tileSize: 512 });
+      map.addLayer({ id: ol.id + '-fill', type: 'raster', source: ol.id, paint: { 'raster-opacity': 0.6 } });
+    });
+  });
+
+  map.on('click', (e) => {
+    document.getElementById('lat').value = e.lngLat.lat.toFixed(6);
+    document.getElementById('lng').value = e.lngLat.lng.toFixed(6);
+    query();
+  });
+}
+
+async function query() {
+  const lat = parseFloat(document.getElementById('lat').value);
+  const lng = parseFloat(document.getElementById('lng').value);
+  if (isNaN(lat) || isNaN(lng)) return;
+
+  // Move map + show query point
+  map.flyTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), 14), duration: 800 });
+
+  if (map.getSource('query-pt')) {
+    map.getSource('query-pt').setData({ type: 'Feature', geometry: { type: 'Point', coordinates: [lng, lat] } });
+  } else {
+    map.addSource('query-pt', { type: 'geojson', data: { type: 'Feature', geometry: { type: 'Point', coordinates: [lng, lat] } } });
+    map.addLayer({ id: 'query-pt-circle', type: 'circle', source: 'query-pt', paint: { 'circle-radius': 10, 'circle-color': '#06b6d4', 'circle-stroke-width': 3, 'circle-stroke-color': '#fff' } });
+  }
+
+  const loading = document.getElementById('loading');
+  const scoreBox = document.getElementById('score-box');
+  const details = document.getElementById('details');
+  loading.classList.remove('hidden');
+  scoreBox.classList.add('hidden');
+  details.classList.add('hidden');
+
   try {
     const resp = await fetch(`/scores/flood?lat=${lat}&lng=${lng}`);
     const d = await resp.json();
-    if (d.error) { el.innerHTML = `<div class="text-red-500 text-sm">${d.error}</div>`; return; }
-    const color = d.score >= 70 ? '#16a34a' : d.score >= 40 ? '#d97706' : '#dc2626';
-    const zones = d.flood_zones?.length ? d.flood_zones.join(', ') : 'None detected';
-    el.innerHTML = `
-      <div class="text-5xl font-bold" style="color:${color}">${d.score}<span class="text-xl text-slate-400">/100</span></div>
-      <div class="text-sm text-slate-500 mb-3">${d.label} (${d.state || 'Unknown state'})</div>
-      <div class="grid grid-cols-2 gap-2 text-sm">
-        <div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Flood Zones</span><span class="text-slate-600">${zones}</span></div>
-        <div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Zone Count</span><span class="text-slate-600">${d.zone_count}</span></div>
+    loading.classList.add('hidden');
+
+    if (d.error) {
+      scoreBox.classList.remove('hidden');
+      scoreBox.innerHTML = `<div class="text-red-500 text-sm">${d.error}</div>`;
+      return;
+    }
+
+    const sc = d.score;
+    const color = scoreColor(sc);
+    const stat = (k, v, hint) => `<div class="flex justify-between items-baseline py-0.5"><span class="text-slate-400">${k}</span><span><span class="text-slate-700 font-medium">${v}</span>${hint ? ` <span class="text-slate-400 text-[10px]" style="margin-left:6px">${hint}</span>` : ''}</span></div>`;
+
+    // Score panel
+    scoreBox.classList.remove('hidden');
+    let html = `
+      <div class="flex items-baseline gap-2 mb-1">
+        <div class="text-4xl font-bold leading-none" style="color:${color}">${sc}</div>
+        <div class="text-sm font-semibold text-slate-500">/100</div>
+        <div class="ml-auto text-xs text-slate-400">${d.state || 'N/A'}</div>
+      </div>
+      <div class="text-[11px] font-semibold text-slate-600 mb-2">${d.label}</div>
+      <div class="relative h-2 rounded-full overflow-hidden mb-1" style="background:linear-gradient(90deg,#dc2626 0%,#ea580c 25%,#d97706 50%,#65a30d 75%,#16a34a 100%);opacity:0.25"></div>
+      <div class="relative -mt-3 mb-2 h-2">
+        <div class="absolute h-2 w-1 bg-slate-900 rounded-full" style="left:${sc}%;transform:translateX(-50%)"></div>
+      </div>
+      <div class="flex justify-between text-[9px] text-slate-400 mb-3">
+        <span>0 high risk</span><span>50</span><span>100 safe</span>
       </div>`;
-  } catch (e) { el.innerHTML = `<div class="text-red-500 text-sm">Error: ${e.message}</div>`; }
+
+    // Overlay zones
+    html += `<div class="text-[10px] text-slate-400 uppercase tracking-wide mt-2 mb-1">Planning Overlays</div>`;
+    if (d.flood_zones && d.flood_zones.length > 0) {
+      html += `<div class="flex flex-wrap gap-1 mb-1">`;
+      d.flood_zones.forEach(z => {
+        const cls = z.includes('Floodway') ? 'zone-floodway' : z.includes('LSIO') ? 'zone-flood' : 'zone-moderate';
+        html += `<span class="zone-chip ${cls}">${z}</span>`;
+      });
+      html += `</div>`;
+    } else {
+      html += `<div class="text-xs text-slate-500">No flood overlay zones detected</div>`;
+    }
+
+    // HAND
+    if (d.hand) {
+      html += `<div class="text-[10px] text-slate-400 uppercase tracking-wide mt-3 mb-1">Elevation (HAND)</div>`;
+      html += `<div class="text-xs">${stat('Height above drainage', d.hand.hand_m + ' m', d.hand.hand_m < 3 ? 'low' : d.hand.hand_m < 10 ? 'moderate' : 'high')}</div>`;
+    }
+
+    // JRC
+    if (d.jrc) {
+      html += `<div class="text-[10px] text-slate-400 uppercase tracking-wide mt-3 mb-1">Satellite Water (JRC)</div>`;
+      html += `<div class="text-xs">`;
+      html += stat('Max occurrence', d.jrc.max_occurrence_pct + '%', '38yr record');
+      html += stat('Wet cells', `${d.jrc.wet_cells}/${d.jrc.total_cells}`, '500m grid');
+      html += stat('Flood cells', d.jrc.flood_cells.toString(), '1-90% occ');
+      if (d.jrc.nearest_water_m != null) html += stat('Nearest water', d.jrc.nearest_water_m + ' m');
+      html += `</div>`;
+    }
+
+    // P95 rainfall
+    if (d.p95) {
+      html += `<div class="text-[10px] text-slate-400 uppercase tracking-wide mt-3 mb-1">Extreme Rainfall (ERA5)</div>`;
+      html += `<div class="text-xs">`;
+      html += stat('P95 daily', d.p95.p95_mm.toFixed(1) + ' mm');
+      html += stat('P99 daily', d.p95.p99_mm.toFixed(1) + ' mm');
+      html += `</div>`;
+    }
+
+    // Warnings
+    if (d.warnings && d.warnings.length > 0) {
+      html += `<div class="text-[10px] text-amber-600 mt-3">${d.warnings.join('; ')}</div>`;
+    }
+
+    // Disclaimer
+    html += `<div class="text-[10px] text-slate-400 mt-3 pt-2 border-t border-slate-100">${d.disclaimer || ''}</div>`;
+
+    scoreBox.innerHTML = html;
+
+  } catch (e) {
+    loading.classList.add('hidden');
+    scoreBox.classList.remove('hidden');
+    scoreBox.innerHTML = `<div class="text-red-500 text-sm">Error: ${e.message}</div>`;
+  }
 }
+
+initMap();
 </script>
 </body>
 </html>

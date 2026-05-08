@@ -146,12 +146,65 @@ function scoreColor(score) {
   return '#dc2626';
 }
 
+let _overlayAbort = null;
+let _overlayLoaded = false;
+
 function toggleOverlay() {
   const vis = document.getElementById('t-overlay').checked ? 'visible' : 'none';
   OVERLAY_LAYERS.forEach(ol => {
     if (map.getLayer(ol.id + '-fill')) map.setLayoutProperty(ol.id + '-fill', 'visibility', vis);
     if (map.getLayer(ol.id + '-line')) map.setLayoutProperty(ol.id + '-line', 'visibility', vis);
   });
+}
+
+function esriToGeoJSON(esriData) {
+  const features = (esriData.features || []).map(f => {
+    const rings = f.geometry && f.geometry.rings;
+    if (!rings) return null;
+    return {
+      type: 'Feature',
+      properties: f.attributes || {},
+      geometry: { type: 'Polygon', coordinates: rings },
+    };
+  }).filter(Boolean);
+  return { type: 'FeatureCollection', features };
+}
+
+async function loadOverlays() {
+  if (!document.getElementById('t-overlay').checked) return;
+  if (_overlayAbort) _overlayAbort.abort();
+  _overlayAbort = new AbortController();
+  const sig = _overlayAbort.signal;
+
+  const bounds = map.getBounds();
+  const env = `${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}`;
+
+  for (const ol of OVERLAY_LAYERS) {
+    if (sig.aborted) return;
+    try {
+      const url = `${VIC_PLAN_BASE}/${ol.layer}/query?geometry=${env}`
+        + `&geometryType=esriGeometryEnvelope&inSR=4326&outSR=4326`
+        + `&outFields=ZONE_CODE&returnGeometry=true&f=json`;
+      const resp = await fetch(url, { signal: sig });
+      if (!resp.ok) continue;
+      const esri = await resp.json();
+      if (sig.aborted || esri.error) continue;
+      const geojson = esriToGeoJSON(esri);
+      const src = map.getSource(ol.id);
+      if (src) {
+        src.setData(geojson);
+      } else {
+        map.addSource(ol.id, { type: 'geojson', data: geojson });
+        map.addLayer({ id: ol.id + '-fill', type: 'fill', source: ol.id,
+          paint: { 'fill-color': ol.color, 'fill-opacity': 0.45 } });
+        map.addLayer({ id: ol.id + '-line', type: 'line', source: ol.id,
+          paint: { 'line-color': ol.outline, 'line-width': 1.5 } });
+      }
+    } catch (e) {
+      if (e.name !== 'AbortError') console.warn('overlay fetch failed:', ol.id, e);
+    }
+  }
+  _overlayLoaded = true;
 }
 
 function toggle3D() {
@@ -191,15 +244,10 @@ async function initMap() {
       },
     }, labelLayerId);
 
-    // VIC flood overlay WMS tiles
-    OVERLAY_LAYERS.forEach(ol => {
-      const tileUrl = `${VIC_PLAN_BASE}/export?dpi=96&transparent=true&format=png32`
-        + `&layers=show:${ol.layer}&bbox={bbox-epsg-3857}`
-        + `&bboxSR=3857&imageSR=3857&size=512,512&f=image`;
-      map.addSource(ol.id, { type: 'raster', tiles: [tileUrl], tileSize: 512 });
-      map.addLayer({ id: ol.id + '-fill', type: 'raster', source: ol.id, paint: { 'raster-opacity': 0.6 } });
-    });
+    loadOverlays();
   });
+
+  map.on('moveend', () => { loadOverlays(); });
 
   map.on('click', (e) => {
     document.getElementById('lat').value = e.lngLat.lat.toFixed(6);

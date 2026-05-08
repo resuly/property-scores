@@ -4,104 +4,357 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Bushfire Risk Score - Property Scores</title>
-<link rel="stylesheet" href="/css/styles.css">
+<link rel="stylesheet" href="/css/styles.css?v=2">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.css" rel="stylesheet">
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.js"></script>
+<style>
+  #map { position: absolute; top: 0; left: 0; right: 380px; bottom: 0; transition: right 0.3s ease; }
+  #sidebar { width: 380px; transition: width 0.3s ease; }
+  body.sidebar-collapsed #map { right: 36px; }
+  body.sidebar-collapsed #sidebar { width: 36px; }
+  body.sidebar-collapsed #sidebar > .sidebar-content { display: none; }
+  body.sidebar-collapsed .sidebar-toggle svg { transform: rotate(180deg); }
+  .mapboxgl-ctrl-bottom-left, .mapboxgl-ctrl-bottom-right { display: none; }
+  .toggle-row { display: flex; align-items: center; gap: 6px; padding: 4px 0; cursor: pointer; user-select: none; }
+  .toggle-row input { cursor: pointer; }
+  .toggle-row span { font-size: 12px; color: #475569; }
+  .sidebar-toggle { position: fixed; top: 50%; right: 380px; transform: translate(50%, -50%); width: 28px; height: 28px; border-radius: 9999px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 3px rgba(0,0,0,0.12); display: flex; align-items: center; justify-content: center; cursor: pointer; color: #64748b; z-index: 50; transition: right 0.3s ease, color 0.15s, border-color 0.15s; }
+  .sidebar-toggle:hover { color: #ea580c; border-color: #fdba74; }
+  body.sidebar-collapsed .sidebar-toggle { right: 36px; }
+  .zone-chip { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+  .zone-extreme { background: #fef2f2; color: #991b1b; }
+  .zone-high { background: #fff7ed; color: #9a3412; }
+  .zone-moderate { background: #fffbeb; color: #854d0e; }
+  .zone-low { background: #f0fdf4; color: #166534; }
+  .fuel-bar { height: 6px; border-radius: 3px; background: #e2e8f0; overflow: hidden; }
+  .fuel-bar-fill { height: 100%; border-radius: 3px; transition: width 0.3s; }
+</style>
 </head>
 <body class="bg-slate-50 font-sans text-slate-900">
-<div class="max-w-3xl mx-auto px-6 py-10">
-  <a href="/" class="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-brand-600 mb-8">&larr; All Scores</a>
 
-  <div class="text-center mb-12">
-    <span class="inline-block px-3 py-1 rounded-full badge-fire text-xs font-semibold mb-4">Property Scores</span>
-    <h1 class="text-3xl font-bold mb-3"><span class="text-orange-600">Bushfire Risk</span> Score</h1>
-    <p class="text-slate-500 max-w-xl mx-auto text-sm">Determine if a property falls within official bushfire planning overlays using state government data across Australia.</p>
-  </div>
+<div id="map"></div>
 
-  <div class="card p-6 mb-10">
-    <h2 class="text-lg font-semibold mb-4">Try It</h2>
-    <div class="flex gap-2 flex-wrap">
-      <input id="lat" type="number" step="any" placeholder="Latitude" value="-37.7530" class="input-field w-36">
-      <input id="lng" type="number" step="any" placeholder="Longitude" value="145.2200" class="input-field w-36">
-      <button onclick="compute()" class="btn-primary">Check Bushfire Risk</button>
+<div id="sidebar" class="absolute top-0 right-0 bottom-0 bg-white border-l border-slate-200 overflow-y-auto">
+  <button class="sidebar-toggle" onclick="document.body.classList.toggle('sidebar-collapsed'); setTimeout(() => map.resize(), 320)" title="Collapse sidebar">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 6 15 12 9 18"/></svg>
+  </button>
+  <div class="sidebar-content p-5">
+    <div class="flex items-center gap-2 mb-1">
+      <a href="/" class="text-slate-400 hover:text-brand-600 text-sm">&larr;</a>
+      <h1 class="text-lg font-bold">Bushfire Risk Score</h1>
     </div>
-    <div id="result" class="hidden mt-4 p-4 bg-slate-50 rounded-lg"></div>
-  </div>
-
-  <div class="prose-scores">
-    <h2>What It Measures</h2>
-    <p>The Bushfire Risk Score checks whether a property is inside a government-designated bushfire planning overlay. These overlays control building requirements (BAL ratings) and vegetation clearing rules. A higher score means lower bushfire risk.</p>
-
-    <div class="flex rounded-lg overflow-hidden text-xs text-center mb-6">
-      <div class="flex-1 py-3 bg-red-100 text-red-700"><span class="block text-sm font-bold">0-15</span>Extreme</div>
-      <div class="flex-1 py-3 bg-orange-100 text-orange-700"><span class="block text-sm font-bold">16-30</span>High</div>
-      <div class="flex-1 py-3 bg-amber-100 text-amber-700"><span class="block text-sm font-bold">31-50</span>Moderate</div>
-      <div class="flex-1 py-3 bg-emerald-100 text-emerald-700"><span class="block text-sm font-bold">51-65</span>Low</div>
-      <div class="flex-1 py-3 bg-green-100 text-green-700"><span class="block text-sm font-bold">66-100</span>Very Low</div>
+    <p class="text-xs text-slate-400 mb-4">Click the map or enter coordinates to assess bushfire risk.</p>
+    <div class="flex gap-2 mb-2">
+      <input id="lat" type="number" step="any" placeholder="Lat" value="-37.7530" class="input-field flex-1 min-w-0">
+      <input id="lng" type="number" step="any" placeholder="Lng" value="145.2200" class="input-field flex-1 min-w-0">
+      <button onclick="query()" class="btn-primary">Go</button>
+    </div>
+    <div class="flex flex-wrap gap-1 mb-4 text-[11px]">
+      <button onclick="setPoint(-37.7530,145.2200,'Dandenong')" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">Dandenong Ranges</button>
+      <button onclick="setPoint(-37.8136,144.9631,'CBD')" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">CBD</button>
+      <button onclick="setPoint(-37.7340,145.1100,'Eltham')" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">Eltham</button>
+      <button onclick="setPoint(-37.6950,145.3600,'Warrandyte')" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">Warrandyte</button>
+      <button onclick="setPoint(-37.9000,145.1130,'Clayton')" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">Clayton</button>
+      <button onclick="setPoint(-38.1500,145.1400,'Cranbourne')" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">Cranbourne</button>
     </div>
 
-    <h2>Methodology</h2>
+    <div class="card p-3 mb-4">
+      <div class="text-xs font-semibold text-slate-500 mb-2 uppercase tracking-wide">Layers</div>
+      <label class="toggle-row"><input type="checkbox" id="t-overlay" checked onchange="toggleOverlay()"> <span>VIC Bushfire Overlay (BMO)</span></label>
+    </div>
 
-    <h3>Data Sources</h3>
-    <table>
-      <tr><th>State</th><th>Source</th><th>Overlay</th></tr>
-      <tr><td>VIC</td><td>DELWP Planning Schemes</td><td>BMO (Bushfire Management Overlay)</td></tr>
-      <tr><td>NSW</td><td>Environment NSW</td><td>BPL + Vegetation Categories 1-3</td></tr>
-      <tr><td>WA</td><td>SLIP WA</td><td>OBRM-023 (Bushfire Prone Areas)</td></tr>
-      <tr><td>SA</td><td>Location SA</td><td>6 Bushfire Hazard Bands</td></tr>
-      <tr><td>TAS</td><td>TheList Tasmania</td><td>Bushfire-prone areas</td></tr>
-    </table>
+    <div id="loading" class="hidden text-orange-600 text-sm py-5 text-center">Querying bushfire risk...</div>
+    <div id="score-box" class="hidden card p-4 mb-4"></div>
 
-    <h3>Severity Classification</h3>
-    <table>
-      <tr><th>Category</th><th>Examples</th><th>Score Range</th><th>BAL Equivalent</th></tr>
-      <tr><td>Extreme</td><td>NSW Vegetation Cat 1</td><td>5-15</td><td>BAL-FZ / BAL-40</td></tr>
-      <tr><td>High</td><td>NSW Vegetation Cat 2, VIC BMO</td><td>15-30</td><td>BAL-29 / BAL-19</td></tr>
-      <tr><td>Moderate</td><td>NSW Vegetation Cat 3</td><td>30-50</td><td>BAL-12.5</td></tr>
-      <tr><td>Low</td><td>NSW Vegetation Buffer</td><td>50-65</td><td>BAL-LOW</td></tr>
-      <tr><td>Very Low</td><td>No overlay</td><td>85-90</td><td>N/A</td></tr>
-    </table>
-
-    <h2>Reference Locations</h2>
-    <table>
-      <tr><th>Location</th><th>Expected</th><th>Overlay</th></tr>
-      <tr><td>Melbourne CBD</td><td>90 (Very Low)</td><td>None</td></tr>
-      <tr><td>Warrandyte, VIC</td><td>22 (High)</td><td>BMO</td></tr>
-      <tr><td>Belgrave, VIC</td><td>22 (High)</td><td>BMO</td></tr>
-      <tr><td>Blue Mountains, NSW</td><td>5-15 (Extreme)</td><td>Vegetation Cat 1</td></tr>
-    </table>
-
-    <h2>API</h2>
-    <p><code>GET /scores/bushfire?lat=-37.7530&amp;lng=145.2200</code></p>
-  </div>
-
-  <div class="mt-16 pt-6 border-t border-slate-100 text-center text-xs text-slate-400">
-    Built by <a href="https://daleads.com.au" class="text-brand-500 hover:text-brand-600 no-underline">DA Leads</a> | Data: State Government Planning Schemes (Open Data)
+    <details class="mt-6 text-xs text-slate-600">
+      <summary class="cursor-pointer text-[11px] font-semibold text-slate-400 uppercase tracking-wide hover:text-slate-600 select-none">Methodology</summary>
+      <div class="mt-3 space-y-4">
+        <div>
+          <h4 class="font-semibold text-slate-700 mb-1">What It Measures</h4>
+          <p>Rates bushfire risk on a 0-100 scale (100 = safest). Combines official planning overlays with satellite vegetation analysis, terrain slope, and fire history.</p>
+        </div>
+        <div>
+          <h4 class="font-semibold text-slate-700 mb-1">Data Sources</h4>
+          <ul class="list-disc ml-4 space-y-0.5">
+            <li>Planning overlays (VIC BMO, NSW BPL, WA OBRM, SA zones, TAS)</li>
+            <li>ESA WorldCover 10m land cover (vegetation fuel load)</li>
+            <li>Copernicus DEM 30m (terrain slope)</li>
+            <li>MODIS Burned Area (fire history, 3 seasons)</li>
+          </ul>
+        </div>
+        <div>
+          <h4 class="font-semibold text-slate-700 mb-1">Scoring</h4>
+          <ol class="list-decimal ml-4 space-y-0.5">
+            <li>Official overlay severity (extreme/high/moderate/low)</li>
+            <li>Vegetation fuel risk (tree cover > shrub > grass > built-up)</li>
+            <li>Terrain slope amplifier (steep = faster fire spread)</li>
+            <li>Fire history penalty (recent burns = proven risk)</li>
+            <li>Final score = min(overlay, satellite) with fire adjustment</li>
+          </ol>
+        </div>
+        <div>
+          <h4 class="font-semibold text-slate-700 mb-1">Limitations</h4>
+          <ul class="list-disc ml-4 space-y-0.5">
+            <li>Not a BAL (Bushfire Attack Level) assessment</li>
+            <li>QLD, NT lack public overlay data</li>
+            <li>MODIS 500m resolution misses small fires</li>
+          </ul>
+        </div>
+      </div>
+    </details>
   </div>
 </div>
 
+<!-- Legend -->
+<div class="absolute bottom-5 left-3 bg-white/95 backdrop-blur rounded-lg shadow-sm border border-slate-200 px-3 py-2 text-xs text-slate-600 z-10" style="min-width:170px">
+  <div class="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Bushfire Overlays</div>
+  <div class="flex items-center gap-2 mb-1"><span class="w-3 h-3 rounded-sm inline-block" style="background:rgba(220,38,38,0.35);border:1px solid rgba(220,38,38,0.6)"></span> BMO (VIC)</div>
+  <div class="flex items-center gap-2 pt-1 mt-1 border-t border-slate-200"><span class="w-3.5 h-3.5 rounded-full bg-orange-500 inline-block"></span> Query Point</div>
+</div>
+
 <script>
-async function compute() {
-  const lat = document.getElementById('lat').value;
-  const lng = document.getElementById('lng').value;
-  const el = document.getElementById('result');
-  el.classList.remove('hidden');
-  el.innerHTML = '<div class="text-brand-500 text-sm">Checking bushfire overlays...</div>';
+let map;
+const VIC_PLAN_BASE = 'https://plan-gis.mapshare.vic.gov.au/arcgis/rest/services/Planning/Vicplan_PlanningSchemeOverlays/MapServer';
+const BMO_LAYER = { id: 'bmo', layer: 19, color: 'rgba(220,38,38,0.3)', outline: 'rgba(220,38,38,0.55)' };
+
+let _overlayAbort = null;
+
+function setPoint(lat, lng) {
+  document.getElementById('lat').value = lat.toFixed(4);
+  document.getElementById('lng').value = lng.toFixed(4);
+  query();
+}
+
+function scoreColor(s) {
+  if (s >= 80) return '#16a34a';
+  if (s >= 60) return '#65a30d';
+  if (s >= 40) return '#d97706';
+  if (s >= 20) return '#ea580c';
+  return '#dc2626';
+}
+
+function esriToGeoJSON(esri) {
+  return {
+    type: 'FeatureCollection',
+    features: (esri.features || []).map(f => {
+      if (!f.geometry || !f.geometry.rings) return null;
+      return { type: 'Feature', properties: f.attributes || {}, geometry: { type: 'Polygon', coordinates: f.geometry.rings } };
+    }).filter(Boolean),
+  };
+}
+
+function toggleOverlay() {
+  const vis = document.getElementById('t-overlay').checked ? 'visible' : 'none';
+  if (map.getLayer('bmo-fill')) map.setLayoutProperty('bmo-fill', 'visibility', vis);
+  if (map.getLayer('bmo-line')) map.setLayoutProperty('bmo-line', 'visibility', vis);
+}
+
+async function loadOverlays() {
+  if (!document.getElementById('t-overlay').checked) return;
+  if (_overlayAbort) _overlayAbort.abort();
+  _overlayAbort = new AbortController();
+  const sig = _overlayAbort.signal;
+
+  const bounds = map.getBounds();
+  const env = `${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}`;
+  try {
+    const url = `${VIC_PLAN_BASE}/${BMO_LAYER.layer}/query?geometry=${env}`
+      + `&geometryType=esriGeometryEnvelope&inSR=4326&outSR=4326`
+      + `&outFields=ZONE_CODE&returnGeometry=true&f=json`;
+    const resp = await fetch(url, { signal: sig });
+    if (!resp.ok) return;
+    const esri = await resp.json();
+    if (sig.aborted || esri.error) return;
+    const geojson = esriToGeoJSON(esri);
+    const src = map.getSource('bmo');
+    if (src) {
+      src.setData(geojson);
+    } else {
+      map.addSource('bmo', { type: 'geojson', data: geojson });
+      map.addLayer({ id: 'bmo-fill', type: 'fill', source: 'bmo',
+        paint: { 'fill-color': BMO_LAYER.color, 'fill-opacity': 0.45 } });
+      map.addLayer({ id: 'bmo-line', type: 'line', source: 'bmo',
+        paint: { 'line-color': BMO_LAYER.outline, 'line-width': 1.5 } });
+    }
+  } catch (e) {
+    if (e.name !== 'AbortError') console.warn('BMO fetch failed:', e);
+  }
+}
+
+async function initMap() {
+  const cfg = await fetch('/api/config').then(r => r.json());
+  mapboxgl.accessToken = cfg.mapbox_token;
+  map = new mapboxgl.Map({
+    container: 'map',
+    style: 'mapbox://styles/mapbox/outdoors-v12',
+    center: [145.2200, -37.7530],
+    zoom: 13,
+  });
+  map.addControl(new mapboxgl.NavigationControl(), 'top-right');
+
+  map.on('load', () => {
+    loadOverlays();
+  });
+
+  map.on('moveend', () => { loadOverlays(); });
+
+  map.on('click', (e) => {
+    document.getElementById('lat').value = e.lngLat.lat.toFixed(6);
+    document.getElementById('lng').value = e.lngLat.lng.toFixed(6);
+    query();
+  });
+}
+
+async function query() {
+  const lat = parseFloat(document.getElementById('lat').value);
+  const lng = parseFloat(document.getElementById('lng').value);
+  if (isNaN(lat) || isNaN(lng)) return;
+
+  map.flyTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), 13), duration: 800 });
+
+  if (map.getSource('query-pt')) {
+    map.getSource('query-pt').setData({ type: 'Feature', geometry: { type: 'Point', coordinates: [lng, lat] } });
+  } else {
+    map.addSource('query-pt', { type: 'geojson', data: { type: 'Feature', geometry: { type: 'Point', coordinates: [lng, lat] } } });
+    map.addLayer({ id: 'query-pt-circle', type: 'circle', source: 'query-pt', paint: { 'circle-radius': 10, 'circle-color': '#ea580c', 'circle-stroke-width': 3, 'circle-stroke-color': '#fff' } });
+  }
+
+  const loading = document.getElementById('loading');
+  const scoreBox = document.getElementById('score-box');
+  loading.classList.remove('hidden');
+  scoreBox.classList.add('hidden');
+
   try {
     const resp = await fetch(`/scores/bushfire?lat=${lat}&lng=${lng}`);
     const d = await resp.json();
-    if (d.error) { el.innerHTML = `<div class="text-red-500 text-sm">${d.error}</div>`; return; }
-    const color = d.score >= 70 ? '#16a34a' : d.score >= 40 ? '#d97706' : '#dc2626';
-    const zones = d.bushfire_zones?.length ? d.bushfire_zones.join(', ') : 'None detected';
-    el.innerHTML = `
-      <div class="text-5xl font-bold" style="color:${color}">${d.score}<span class="text-xl text-slate-400">/100</span></div>
-      <div class="text-sm text-slate-500 mb-3">${d.label}${d.category ? ' -- ' + d.category : ''}</div>
-      <div class="text-sm">
-        <div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Overlay</span><span class="text-slate-600">${zones}</span></div>
+    loading.classList.add('hidden');
+
+    if (d.error) {
+      scoreBox.classList.remove('hidden');
+      scoreBox.innerHTML = `<div class="text-red-500 text-sm">${d.error}</div>`;
+      return;
+    }
+
+    const sc = d.score;
+    const color = scoreColor(sc);
+    const stat = (k, v, hint) => `<div class="flex justify-between items-baseline py-0.5"><span class="text-slate-400">${k}</span><span><span class="text-slate-700 font-medium">${v}</span>${hint ? ` <span class="text-slate-400 text-[10px]" style="margin-left:6px">${hint}</span>` : ''}</span></div>`;
+
+    scoreBox.classList.remove('hidden');
+    let html = `
+      <div class="flex items-baseline gap-2 mb-1">
+        <div class="text-4xl font-bold leading-none" style="color:${color}">${sc}</div>
+        <div class="text-sm font-semibold text-slate-500">/100</div>
+        <div class="ml-auto text-xs text-slate-400">${d.state || 'N/A'}</div>
+      </div>
+      <div class="text-[11px] font-semibold text-slate-600 mb-2">${d.label}</div>
+      <div class="relative h-2 rounded-full overflow-hidden mb-1" style="background:linear-gradient(90deg,#dc2626 0%,#ea580c 25%,#d97706 50%,#65a30d 75%,#16a34a 100%);opacity:0.25"></div>
+      <div class="relative -mt-3 mb-2 h-2">
+        <div class="absolute h-2 w-1 bg-slate-900 rounded-full" style="left:${sc}%;transform:translateX(-50%)"></div>
+      </div>
+      <div class="flex justify-between text-[9px] text-slate-400 mb-3">
+        <span>0 extreme</span><span>50</span><span>100 safe</span>
       </div>`;
-  } catch (e) { el.innerHTML = `<div class="text-red-500 text-sm">Error: ${e.message}</div>`; }
+
+    // Risk summary
+    const parts = [];
+    if (d.bushfire_zones && d.bushfire_zones.length > 0) parts.push('inside a bushfire planning overlay');
+    if (d.vegetation) {
+      if (d.vegetation.fuel_risk >= 0.8) parts.push('dense vegetation with high fuel load');
+      else if (d.vegetation.fuel_risk >= 0.5) parts.push('moderate vegetation fuel');
+      else if (d.vegetation.fuel_risk <= 0.15) parts.push('low-fuel built-up area');
+    }
+    if (d.slope && d.slope.mean_slope_deg >= 15) parts.push('steep terrain amplifies fire spread');
+    else if (d.slope && d.slope.mean_slope_deg >= 8) parts.push('moderate slope terrain');
+    if (d.fire_history && d.fire_history.seasons_with_fire > 0) parts.push('recent fire history detected');
+    if (parts.length > 0) {
+      html += `<div class="text-xs text-slate-600 mb-3 leading-relaxed">${parts.join(', ').replace(/^./, c => c.toUpperCase())}.</div>`;
+    } else if (sc >= 80) {
+      html += `<div class="text-xs text-slate-600 mb-3">No significant bushfire indicators at this location.</div>`;
+    }
+
+    // Planning overlays
+    html += `<div class="text-[10px] text-slate-400 uppercase tracking-wide mt-2 mb-1">Planning Overlays</div>`;
+    if (d.bushfire_zones && d.bushfire_zones.length > 0) {
+      const zoneExplain = {
+        'Bushfire Management Overlay (BMO)': 'Properties must meet BAL construction standards. Vegetation management plans required.',
+        'Bushfire Prone Land': 'NSW designated bushfire prone area. Building standards AS 3959 apply.',
+        'Bush Fire Prone Area (OBRM-023)': 'WA mapped bushfire prone area. BAL assessment required for new builds.',
+      };
+      d.bushfire_zones.forEach(z => {
+        const cls = d.category === 'Vegetation Category 1' ? 'zone-extreme' : z.includes('BMO') || z.includes('Prone Land') ? 'zone-high' : 'zone-moderate';
+        html += `<div class="mb-1.5"><span class="zone-chip ${cls}">${z}</span>`;
+        if (d.category) html += ` <span class="text-[10px] text-slate-400">${d.category}</span>`;
+        if (zoneExplain[z]) html += `<div class="text-[11px] text-slate-500 mt-0.5 ml-0.5">${zoneExplain[z]}</div>`;
+        html += `</div>`;
+      });
+    } else {
+      html += `<div class="text-xs text-slate-500">Not within any bushfire planning overlay</div>`;
+    }
+
+    // Vegetation
+    if (d.vegetation) {
+      const v = d.vegetation;
+      const fuelPct = Math.round(v.fuel_risk * 100);
+      const fuelColor = fuelPct >= 80 ? '#dc2626' : fuelPct >= 50 ? '#ea580c' : fuelPct >= 30 ? '#d97706' : '#16a34a';
+      const fuelDesc = fuelPct >= 80 ? 'Very high fuel load, dense vegetation'
+        : fuelPct >= 60 ? 'High fuel load from surrounding vegetation'
+        : fuelPct >= 30 ? 'Moderate fuel, mixed land cover'
+        : 'Low fuel load, minimal vegetation risk';
+      html += `<div class="text-[10px] text-slate-400 uppercase tracking-wide mt-3 mb-1">Vegetation (ESA WorldCover)</div>`;
+      html += `<div class="text-xs">`;
+      html += stat('Land cover', v.land_cover_label, '10m resolution');
+      html += `<div class="flex items-center gap-2 mt-1 mb-0.5"><span class="text-slate-400">Fuel risk</span><div class="fuel-bar flex-1"><div class="fuel-bar-fill" style="width:${fuelPct}%;background:${fuelColor}"></div></div><span class="text-slate-700 font-medium text-[11px]">${fuelPct}%</span></div>`;
+      html += `<div class="text-[11px] text-slate-500">${fuelDesc}</div>`;
+      if (v.has_nearby_trees) html += `<div class="text-[11px] text-amber-600 mt-0.5">Tree cover detected within 100m</div>`;
+      html += `</div>`;
+    }
+
+    // Slope
+    if (d.slope) {
+      const s = d.slope;
+      const slopeLabel = s.mean_slope_deg >= 25 ? 'extreme' : s.mean_slope_deg >= 15 ? 'steep' : s.mean_slope_deg >= 8 ? 'moderate' : s.mean_slope_deg >= 3 ? 'gentle' : 'flat';
+      const slopeDesc = s.mean_slope_deg >= 15 ? 'Steep terrain significantly accelerates fire spread uphill'
+        : s.mean_slope_deg >= 8 ? 'Moderate slope increases fire spread rate'
+        : 'Relatively flat terrain, slope has minimal effect on fire spread';
+      html += `<div class="text-[10px] text-slate-400 uppercase tracking-wide mt-3 mb-1">Terrain (Copernicus DEM)</div>`;
+      html += `<div class="text-xs">`;
+      html += stat('Mean slope', s.mean_slope_deg + '°', slopeLabel);
+      html += stat('Max slope', s.max_slope_deg + '°');
+      html += stat('Elevation', s.elevation_m + ' m');
+      html += `<div class="text-[11px] text-slate-500 mt-0.5">${slopeDesc}</div>`;
+      html += `</div>`;
+    }
+
+    // Fire history
+    if (d.fire_history) {
+      const f = d.fire_history;
+      html += `<div class="text-[10px] text-slate-400 uppercase tracking-wide mt-3 mb-1">Fire History (MODIS)</div>`;
+      html += `<div class="text-xs">`;
+      if (f.seasons_with_fire > 0) {
+        html += stat('Seasons with fire', `${f.seasons_with_fire}/${f.total_seasons_checked}`, 'recent years');
+        html += `<div class="text-[11px] text-red-600 mt-0.5">Area has burned in recent fire seasons, indicating proven bushfire risk</div>`;
+      } else {
+        html += `<div class="text-slate-500">No burns detected in ${f.total_seasons_checked} fire seasons checked</div>`;
+      }
+      html += `</div>`;
+    }
+
+    // Disclaimer
+    html += `<div class="text-[10px] text-slate-400 mt-3 pt-2 border-t border-slate-100">${d.disclaimer || ''}</div>`;
+
+    scoreBox.innerHTML = html;
+
+  } catch (e) {
+    loading.classList.add('hidden');
+    scoreBox.classList.remove('hidden');
+    scoreBox.innerHTML = `<div class="text-red-500 text-sm">Error: ${e.message}</div>`;
+  }
 }
+
+initMap();
 </script>
 </body>
 </html>

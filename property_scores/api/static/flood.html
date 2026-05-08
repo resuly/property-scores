@@ -310,42 +310,82 @@ async function query() {
         <span>0 high risk</span><span>50</span><span>100 safe</span>
       </div>`;
 
+    // Risk summary
+    const summaryParts = [];
+    if (d.flood_zones && d.flood_zones.length > 0) summaryParts.push('inside a government flood overlay');
+    if (d.hand && d.hand.hand_m < 3) summaryParts.push('low elevation above drainage');
+    else if (d.hand && d.hand.hand_m >= 20) summaryParts.push('well elevated above drainage');
+    if (d.jrc && d.jrc.flood_cells >= 5) summaryParts.push('satellite evidence of past flooding');
+    else if (d.jrc && d.jrc.max_occurrence_pct > 80) summaryParts.push('near permanent water body');
+    if (summaryParts.length > 0) {
+      html += `<div class="text-xs text-slate-600 mb-3 leading-relaxed">${summaryParts.join(', ').replace(/^./, c => c.toUpperCase())}.</div>`;
+    } else if (sc >= 80) {
+      html += `<div class="text-xs text-slate-600 mb-3">No significant flood indicators detected at this location.</div>`;
+    }
+
     // Overlay zones
     html += `<div class="text-[10px] text-slate-400 uppercase tracking-wide mt-2 mb-1">Planning Overlays</div>`;
     if (d.flood_zones && d.flood_zones.length > 0) {
-      html += `<div class="flex flex-wrap gap-1 mb-1">`;
+      const zoneExplain = {
+        'Floodway Overlay (FO)': 'Primary flow path during a flood. Development severely restricted.',
+        'Rural Floodway (RFO)': 'Rural flood flow path. Strict building controls apply.',
+        'LSIO (1% AEP)': 'Land Subject to Inundation. 1-in-100 year flood probability.',
+        'Special Building (SBO)': 'Overland flow area. Floor level and building design requirements apply.',
+      };
       d.flood_zones.forEach(z => {
         const cls = z.includes('Floodway') ? 'zone-floodway' : z.includes('LSIO') ? 'zone-flood' : 'zone-moderate';
-        html += `<span class="zone-chip ${cls}">${z}</span>`;
+        html += `<div class="mb-1.5"><span class="zone-chip ${cls}">${z}</span>`;
+        if (zoneExplain[z]) html += `<div class="text-[11px] text-slate-500 mt-0.5 ml-0.5">${zoneExplain[z]}</div>`;
+        html += `</div>`;
       });
-      html += `</div>`;
     } else {
-      html += `<div class="text-xs text-slate-500">No flood overlay zones detected</div>`;
+      html += `<div class="text-xs text-slate-500">Not within any government flood overlay</div>`;
     }
 
     // HAND
     if (d.hand) {
+      const hm = d.hand.hand_m;
+      const handLabel = hm < 1 ? 'very low' : hm < 3 ? 'low' : hm < 5 ? 'moderate' : hm < 10 ? 'elevated' : hm < 20 ? 'high' : 'very high';
+      const handDesc = hm < 1 ? 'At drainage level, highly vulnerable to any water rise'
+        : hm < 3 ? 'Near drainage level, vulnerable in moderate flood events'
+        : hm < 5 ? 'Moderate buffer above nearest waterway'
+        : hm < 10 ? 'Good elevation above drainage network'
+        : 'Well above any nearby drainage, very low physical flood exposure';
       html += `<div class="text-[10px] text-slate-400 uppercase tracking-wide mt-3 mb-1">Elevation (HAND)</div>`;
-      html += `<div class="text-xs">${stat('Height above drainage', d.hand.hand_m + ' m', d.hand.hand_m < 3 ? 'low' : d.hand.hand_m < 10 ? 'moderate' : 'high')}</div>`;
+      html += `<div class="text-xs">`;
+      html += stat('Height above drainage', hm + ' m', handLabel);
+      html += `<div class="text-[11px] text-slate-500 mt-0.5">${handDesc}</div>`;
+      html += `</div>`;
     }
 
     // JRC
     if (d.jrc) {
-      html += `<div class="text-[10px] text-slate-400 uppercase tracking-wide mt-3 mb-1">Satellite Water (JRC)</div>`;
+      const jrc = d.jrc;
+      html += `<div class="text-[10px] text-slate-400 uppercase tracking-wide mt-3 mb-1">Satellite Record (JRC)</div>`;
       html += `<div class="text-xs">`;
-      html += stat('Max occurrence', d.jrc.max_occurrence_pct + '%', '38yr record');
-      html += stat('Wet cells', `${d.jrc.wet_cells}/${d.jrc.total_cells}`, '500m grid');
-      html += stat('Flood cells', d.jrc.flood_cells.toString(), '1-90% occ');
-      if (d.jrc.nearest_water_m != null) html += stat('Nearest water', d.jrc.nearest_water_m + ' m');
+      if (jrc.wet_cells === 0) {
+        html += `<div class="text-slate-500">No water detected in 38 years of satellite imagery within 500m</div>`;
+      } else {
+        if (jrc.max_occurrence_pct > 90) {
+          html += stat('Permanent water', jrc.max_occurrence_pct + '%', 'river/lake/bay');
+        } else if (jrc.max_occurrence_pct > 0) {
+          html += stat('Peak water occurrence', jrc.max_occurrence_pct + '%', '38yr record');
+        }
+        if (jrc.flood_cells > 0) {
+          const intensity = jrc.flood_cells >= 10 ? 'significant' : jrc.flood_cells >= 5 ? 'moderate' : 'minor';
+          html += stat('Flood evidence', `${jrc.flood_cells} cells`, intensity);
+        }
+        if (jrc.nearest_water_m != null) html += stat('Nearest water', jrc.nearest_water_m + ' m');
+      }
       html += `</div>`;
     }
 
     // P95 rainfall
     if (d.p95) {
-      html += `<div class="text-[10px] text-slate-400 uppercase tracking-wide mt-3 mb-1">Extreme Rainfall (ERA5)</div>`;
+      html += `<div class="text-[10px] text-slate-400 uppercase tracking-wide mt-3 mb-1">Extreme Rainfall</div>`;
       html += `<div class="text-xs">`;
-      html += stat('P95 daily', d.p95.p95_mm.toFixed(1) + ' mm');
-      html += stat('P99 daily', d.p95.p99_mm.toFixed(1) + ' mm');
+      html += stat('95th percentile', d.p95.p95_mm.toFixed(0) + ' mm/day', 'ERA5 climatology');
+      html += stat('99th percentile', d.p95.p99_mm.toFixed(0) + ' mm/day');
       html += `</div>`;
     }
 

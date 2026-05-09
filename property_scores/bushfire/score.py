@@ -349,6 +349,81 @@ def _terrain_slope(lat: float, lng: float) -> dict | None:
         return _terrain_slope_fallback(lat, lng)
 
 
+def _fire_history_local(state: str | None, lat: float, lng: float) -> dict | None:
+    """Query state fire history APIs (same sources as DA Leads tiles).
+
+    VIC: DEECA fire_history_scar WFS (87k+ records since 1903)
+    NSW: RFS Wild Fire History ArcGIS REST
+    """
+    try:
+        if state == "VIC":
+            buf = 0.02  # ~2km
+            url = (
+                "https://opendata.maps.vic.gov.au/geoserver/wfs"
+                f"?service=WFS&version=2.0.0&request=GetFeature"
+                f"&typeNames=open-data-platform:fire_history_scar"
+                f"&outputFormat=application/json"
+                f"&BBOX={lng-buf},{lat-buf},{lng+buf},{lat+buf},EPSG:4326"
+                f"&count=100&propertyName=firetype,season,area_ha"
+            )
+            resp = requests.get(url, timeout=8)
+            if not resp.ok:
+                return None
+            data = resp.json()
+            features = data.get("features", [])
+            if not features:
+                return {"seasons_with_fire": 0, "total_seasons_checked": 3,
+                        "total_burned_pixels": 0}
+            bushfires = [f for f in features
+                         if f["properties"].get("firetype") == "Bushfire"]
+            recent = [f for f in features
+                      if (f["properties"].get("season") or 0) >= 2015]
+            return {
+                "seasons_with_fire": len(set(f["properties"].get("season")
+                                             for f in bushfires if f["properties"].get("season"))),
+                "total_seasons_checked": 3,
+                "total_burned_pixels": len(features),
+                "total_fires": len(features),
+                "bushfires": len(bushfires),
+                "recent_fires": len(recent),
+            }
+
+        if state == "NSW":
+            nsw_url = (
+                "https://spatial.industry.nsw.gov.au/arcgis/rest/services"
+                "/CrownLands_Bushfire/Bushfire_RFSData/MapServer/5/query"
+            )
+            buf = 0.02
+            resp = requests.get(nsw_url, params={
+                "geometry": f"{lng-buf},{lat-buf},{lng+buf},{lat+buf}",
+                "geometryType": "esriGeometryEnvelope",
+                "inSR": "4326", "outSR": "4326",
+                "outFields": "FIRENAME,YEAROFFIRE,CLASS",
+                "returnGeometry": "false", "f": "json",
+            }, timeout=8)
+            if not resp.ok:
+                return None
+            data = resp.json()
+            features = data.get("features", [])
+            if not features:
+                return {"seasons_with_fire": 0, "total_seasons_checked": 3,
+                        "total_burned_pixels": 0}
+            years = set(f["attributes"].get("YEAROFFIRE") for f in features
+                        if f["attributes"].get("YEAROFFIRE"))
+            recent = [f for f in features
+                      if (f["attributes"].get("YEAROFFIRE") or 0) >= 2015]
+            return {
+                "seasons_with_fire": len(years),
+                "total_seasons_checked": 3,
+                "total_burned_pixels": len(features),
+                "total_fires": len(features),
+                "recent_fires": len(recent),
+            }
+    except Exception as e:
+        logger.debug("Local fire history failed: %s", e)
+    return None
+
+
 def _terrain_slope_fallback(lat: float, lng: float) -> dict | None:
     """Fallback: estimate elevation from Overture buildings (ground floor ~ terrain)."""
     try:
@@ -544,7 +619,7 @@ def bushfire_score(lat: float, lng: float, *, quick: bool = False) -> dict:
     veg = None if quick else _vegetation_fuel(lat, lng)
     slope = None if quick else _terrain_slope(lat, lng)
 
-    fire = None
+    fire = None if quick else _fire_history_local(state, lat, lng)
 
     sat_score = _satellite_to_score(veg, slope, fire)
 

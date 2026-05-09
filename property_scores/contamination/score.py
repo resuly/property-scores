@@ -13,7 +13,7 @@ import math
 
 import requests
 
-from property_scores.common.overture import get_db, pois_near
+from property_scores.common.overture import get_db, pois_near, pois_near_detailed
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +82,8 @@ def _vic_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict]:
                     "name": props.get("address", "Unknown"),
                     "issue": props.get("issue", ""),
                     "distance_m": round(dist),
+                    "lng": round(coords[0], 6),
+                    "lat": round(coords[1], 6),
                     "source": "VIC EPA PSR",
                 })
         return sorted(results, key=lambda x: x["distance_m"])
@@ -123,6 +125,8 @@ def _nsw_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict]:
                     "name": a.get("SiteName", "Unknown"),
                     "issue": a.get("ContaminationActivityType", ""),
                     "distance_m": round(dist),
+                    "lng": round(flng, 6),
+                    "lat": round(flat, 6),
                     "source": "NSW EPA CLR",
                 })
         return sorted(results, key=lambda x: x["distance_m"])
@@ -169,6 +173,8 @@ def _wa_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict]:
                 "name": a.get("SITENAME", a.get("site_name", "Unknown")),
                 "issue": a.get("CLASSIFICATION", ""),
                 "distance_m": round(dist),
+                "lng": round(float(flng), 6) if flng else None,
+                "lat": round(float(flat), 6) if flat else None,
                 "source": "WA DWER",
             })
         return sorted(results, key=lambda x: x["distance_m"])
@@ -201,26 +207,33 @@ def _industrial_proximity(lat: float, lng: float) -> dict:
     """Count industrial/contamination-risk POIs within 500m using Overture."""
     try:
         db = get_db()
-        pois = pois_near(db, lat, lng, radius_m=500)
+        pois = pois_near_detailed(db, lat, lng, radius_m=500)
 
-        industrial: list[tuple[str, float]] = []
-        for cat, dist_m in pois:
+        industrial: list[dict] = []
+        for cat, dist_m, plng, plat, pname in pois:
             if not cat:
                 continue
             cat_lower = cat.lower()
             if any(ex in cat_lower for ex in INDUSTRIAL_EXCLUDE):
                 continue
             if any(kw in cat_lower for kw in INDUSTRIAL_KEYWORDS):
-                industrial.append((cat, dist_m))
+                industrial.append({
+                    "type": cat.replace("_", " "),
+                    "name": pname or cat.replace("_", " "),
+                    "distance_m": round(dist_m),
+                    "lng": round(plng, 6) if plng else None,
+                    "lat": round(plat, 6) if plat else None,
+                })
 
-        industrial.sort(key=lambda x: x[1])
+        industrial.sort(key=lambda x: x["distance_m"])
         return {
             "count_500m": len(industrial),
-            "nearest_m": round(industrial[0][1]) if industrial else None,
-            "nearest_type": industrial[0][0] if industrial else None,
+            "nearest_m": industrial[0]["distance_m"] if industrial else None,
+            "nearest_type": industrial[0]["type"] if industrial else None,
+            "sites": industrial[:10],
         }
     except Exception:
-        return {"count_500m": 0, "nearest_m": None, "nearest_type": None}
+        return {"count_500m": 0, "nearest_m": None, "nearest_type": None, "sites": []}
 
 
 # ---------------------------------------------------------------------------

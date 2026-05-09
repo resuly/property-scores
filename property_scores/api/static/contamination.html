@@ -115,9 +115,10 @@ async function initMap() {
 }
 
 function clearMap() {
-  ['epa-markers', 'ind-markers', 'query-pt', 'radius-circle'].forEach(id => {
+  ['epa-markers', 'epa-markers-stroke', 'ind-markers', 'query-pt', 'radius-circle'].forEach(id => {
     if (map.getLayer(id)) map.removeLayer(id);
-    if (map.getLayer(id + '-stroke')) map.removeLayer(id + '-stroke');
+  });
+  ['epa-markers', 'ind-markers', 'query-pt', 'radius-circle'].forEach(id => {
     if (map.getSource(id)) map.removeSource(id);
   });
 }
@@ -179,41 +180,75 @@ async function query() {
     details.classList.remove('hidden');
     let html = '';
 
-    // EPA Sites
+    // EPA Sites on map + sidebar
+    const epaFeats = [];
     if (d.epa_sites && d.epa_sites.length > 0) {
       html += '<div class="section-hdr">EPA Registered Sites</div>';
-      const epaFeatures = [];
       for (const site of d.epa_sites) {
-        epaFeatures.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [lng + (Math.random() - 0.5) * 0.001, lat + (Math.random() - 0.5) * 0.001] }, properties: { name: site.name } });
-        const distColor = site.distance_m < 500 ? 'var(--danger)' : site.distance_m < 1000 ? 'var(--warn)' : 'var(--text-3)';
-        html += `<div class="epa-card">
+        if (site.lng && site.lat) {
+          epaFeats.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [site.lng, site.lat] }, properties: { name: site.name, issue: site.issue || '', dist: site.distance_m } });
+        }
+        const dc = site.distance_m < 500 ? 'var(--danger)' : site.distance_m < 1000 ? 'var(--warn)' : 'var(--text-3)';
+        const clickAttr = site.lng ? `onclick="flyToSite(${site.lng},${site.lat})" style="cursor:pointer"` : '';
+        html += `<div class="epa-card" ${clickAttr}>
           <div class="epa-name">${site.name}</div>
           ${site.issue ? `<div class="epa-issue">${site.issue}</div>` : ''}
-          <div class="epa-meta"><span>${site.source}</span><span style="color:${distColor};font-weight:600">${site.distance_m}m</span></div>
+          <div class="epa-meta"><span>${site.source}</span><span style="color:${dc};font-weight:600">${site.distance_m}m</span></div>
         </div>`;
       }
     } else if (d.state && ['VIC','NSW','WA'].includes(d.state)) {
       html += '<div class="section-hdr">EPA Registered Sites</div>';
-      html += '<div style="font-size:12px;color:var(--text-3);padding:4px 0">No contamination sites found within 2km</div>';
+      html += '<div style="font-size:12px;color:var(--safe);padding:4px 0">&#10003; No contamination sites found within 2km</div>';
     }
 
-    // Industrial
-    html += '<div class="section-hdr">Industrial Proximity (500m)</div>';
+    // Industrial POIs on map + sidebar
+    const indFeats = [];
     const ind = d.industrial;
-    if (ind.count_500m > 0) {
-      html += `<div class="ind-row">
-        <div class="ind-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#92400e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 20V8l4-6h3l-1 6h5l-1 6h5l-1 6"/><path d="M18 20V8"/><path d="M22 20H2"/></svg></div>
-        <div>
-          <div style="font-weight:600">${ind.count_500m} industrial site${ind.count_500m > 1 ? 's' : ''}</div>
-          ${ind.nearest_type ? `<div style="font-size:11px;color:var(--text-3)">Nearest: ${ind.nearest_type.replace(/_/g, ' ')} at ${ind.nearest_m}m</div>` : ''}
-        </div>
-      </div>`;
+    html += '<div class="section-hdr">Industrial Proximity (500m)</div>';
+    if (ind.sites && ind.sites.length > 0) {
+      for (const s of ind.sites) {
+        if (s.lng && s.lat) {
+          indFeats.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [s.lng, s.lat] }, properties: { name: s.name, type: s.type, dist: s.distance_m } });
+        }
+      }
+      for (const s of ind.sites.slice(0, 5)) {
+        html += `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px"${s.lng ? ` onclick="flyToSite(${s.lng},${s.lat})" style="cursor:pointer"` : ''}>
+          <span style="width:6px;height:6px;border-radius:50%;background:var(--warn);flex-shrink:0"></span>
+          <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</span>
+          <span style="color:var(--text-3);flex-shrink:0">${s.distance_m}m</span>
+        </div>`;
+      }
+      if (ind.sites.length > 5) html += `<div style="font-size:11px;color:var(--text-3);padding:2px 0">+${ind.sites.length - 5} more</div>`;
     } else {
-      html += '<div style="font-size:12px;color:var(--text-3);padding:4px 0">No industrial sites within 500m</div>';
+      html += '<div style="font-size:12px;color:var(--safe);padding:4px 0">&#10003; No industrial sites within 500m</div>';
     }
 
     html += `<div style="font-size:10px;color:var(--text-3);margin-top:12px;padding-top:8px;border-top:1px solid var(--border)">${d.disclaimer}</div>`;
     details.innerHTML = html;
+
+    // Plot markers on map
+    if (epaFeats.length) {
+      map.addSource('epa-markers', { type: 'geojson', data: { type: 'FeatureCollection', features: epaFeats } });
+      map.addLayer({ id: 'epa-markers-stroke', type: 'circle', source: 'epa-markers', paint: { 'circle-radius': 10, 'circle-color': '#fff', 'circle-opacity': .9 } });
+      map.addLayer({ id: 'epa-markers', type: 'circle', source: 'epa-markers', paint: { 'circle-radius': 7, 'circle-color': '#dc2626', 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' } });
+    }
+    if (indFeats.length) {
+      map.addSource('ind-markers', { type: 'geojson', data: { type: 'FeatureCollection', features: indFeats } });
+      map.addLayer({ id: 'ind-markers', type: 'circle', source: 'ind-markers', paint: { 'circle-radius': 5, 'circle-color': '#d97706', 'circle-stroke-width': 1.5, 'circle-stroke-color': '#fff' } });
+    }
+
+    // Hover tooltips
+    const popup = new mapboxgl.Popup({ closeButton: false, closeOnClick: false, offset: 12 });
+    ['epa-markers', 'ind-markers'].forEach(layer => {
+      if (!map.getLayer(layer)) return;
+      map.on('mouseenter', layer, e => {
+        map.getCanvas().style.cursor = 'pointer';
+        const p = e.features[0].properties;
+        const label = layer === 'epa-markers' ? `<strong>${p.name}</strong><br><span style="font-size:11px;color:#666">${p.issue || 'EPA site'}</span><br><span style="font-size:10px;color:#999">${p.dist}m away</span>` : `<strong>${p.name}</strong><br><span style="font-size:11px;color:#666">${p.type}</span><br><span style="font-size:10px;color:#999">${p.dist}m away</span>`;
+        popup.setLngLat(e.lngLat).setHTML(`<div style="font-family:'DM Sans',sans-serif;font-size:12px">${label}</div>`).addTo(map);
+      });
+      map.on('mouseleave', layer, () => { map.getCanvas().style.cursor = ''; popup.remove(); });
+    });
 
   } catch (e) { loading.classList.add('hidden'); scoreBox.classList.remove('hidden'); scoreBox.innerHTML = `<div style="color:var(--danger)">Error: ${e.message}</div>`; }
 }

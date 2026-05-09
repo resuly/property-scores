@@ -425,6 +425,106 @@ def _hand_to_score(hand_m: float) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Local data alternatives (replace remote COG calls)
+# ---------------------------------------------------------------------------
+
+def _water_proximity_local(lat: float, lng: float) -> dict | None:
+    """Replace JRC satellite query with local Overture water data.
+
+    Maps water proximity + type to JRC-equivalent output format so the
+    existing _jrc_to_score() function works unchanged.
+    """
+    try:
+        from property_scores.common.overture import get_db, water_near
+
+        db = get_db()
+        waters = water_near(db, lat, lng, radius_m=500)
+        if not waters:
+            return {
+                "max_occurrence_pct": 0,
+                "nearest_water_m": None,
+                "wet_cells": 0,
+                "flood_cells": 0,
+                "total_cells": 121,
+                "mean_occurrence_pct": 0,
+            }
+
+        flood_types = {"river", "stream", "drain", "canal", "wetland"}
+        permanent_types = {"ocean", "sea", "bay", "lake", "reservoir"}
+
+        nearest_m = waters[0][2]
+        flood_waters = [w for w in waters if w[0] in flood_types]
+        permanent_waters = [w for w in waters if w[0] in permanent_types]
+
+        if flood_waters:
+            nearest_flood = min(w[2] for w in flood_waters)
+            flood_cells = max(1, min(15, int(10 * (1 - nearest_flood / 500))))
+        else:
+            flood_cells = 0
+
+        if permanent_waters:
+            max_occ = 95
+        elif flood_waters:
+            max_occ = min(80, max(10, int(80 * (1 - nearest_m / 500))))
+        else:
+            max_occ = 0
+
+        wet_cells = len([w for w in waters if w[2] < 500])
+
+        return {
+            "max_occurrence_pct": max_occ,
+            "nearest_water_m": round(nearest_m),
+            "wet_cells": wet_cells,
+            "flood_cells": flood_cells,
+            "total_cells": 121,
+            "mean_occurrence_pct": round(max_occ * 0.6) if max_occ > 0 else 0,
+        }
+    except Exception as e:
+        logger.debug("Local water proximity failed: %s", e)
+        return None
+
+
+def _hand_local(lat: float, lng: float) -> dict | None:
+    """Approximate HAND using Overture water distance + building density.
+
+    HAND = height above nearest drainage. Without DEM we approximate:
+    - Close to river/stream with few buildings → low HAND (floodplain)
+    - Close to river with dense buildings → moderate HAND (developed, likely raised)
+    - Far from any drainage → high HAND
+    """
+    try:
+        from property_scores.common.overture import get_db, water_near, buildings_near
+
+        db = get_db()
+        waters = water_near(db, lat, lng, radius_m=1000)
+        drainage_types = {"river", "stream", "drain", "canal"}
+        drainages = [w for w in waters if w[0] in drainage_types]
+
+        if not drainages:
+            return {"hand_m": 20.0}
+
+        nearest_drain_m = min(w[2] for w in drainages)
+        buildings = buildings_near(db, lat, lng, radius_m=300)
+        building_count = len(buildings)
+
+        if nearest_drain_m < 100:
+            hand_m = 0.5 if building_count < 5 else 2.0
+        elif nearest_drain_m < 300:
+            hand_m = 2.0 if building_count < 5 else 5.0
+        elif nearest_drain_m < 500:
+            hand_m = 5.0 if building_count < 10 else 8.0
+        elif nearest_drain_m < 1000:
+            hand_m = 10.0
+        else:
+            hand_m = 20.0
+
+        return {"hand_m": round(hand_m, 1)}
+    except Exception as e:
+        logger.debug("Local HAND approximation failed: %s", e)
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Main scoring function
 # ---------------------------------------------------------------------------
 
@@ -461,14 +561,14 @@ def flood_score(lat: float, lng: float) -> dict:
     else:
         overlay_score = 90 if not warnings else 80
 
-    # --- Phase 2: JRC satellite data ---
-    jrc = _jrc_flood_proximity(lat, lng)
+    # --- Phase 2: Water proximity (local Overture data) ---
+    jrc = _water_proximity_local(lat, lng)
     jrc_score: int | None = None
     if jrc:
         jrc_score = _jrc_to_score(jrc)
 
-    # --- Phase 3: HAND (physical elevation above drainage) ---
-    hand = _query_hand(lat, lng)
+    # --- Phase 3: HAND approximation (local data) ---
+    hand = _hand_local(lat, lng)
 
     # --- Phase 4: ERA5 P95 extreme rainfall ---
     p95 = _query_p95(lat, lng)

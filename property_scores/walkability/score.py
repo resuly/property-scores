@@ -91,24 +91,24 @@ CATEGORY_MAP: dict[str, tuple[str, str]] = {
 
 # Scenarios ordered by importance for a home buyer
 SCENARIO_CONFIG: dict[str, dict] = {
-    "supermarket":     {"weight": 3.0, "icon": "\U0001F6D2", "label": "Supermarket"},
-    "train":           {"weight": 3.0, "icon": "\U0001F686", "label": "Train Station"},
-    "primary_school":  {"weight": 2.5, "icon": "\U0001F3EB", "label": "Primary School"},
-    "gp_clinic":       {"weight": 2.5, "icon": "\U0001FA7A", "label": "GP / Medical Clinic"},
-    "park":            {"weight": 2.0, "icon": "\U0001F333", "label": "Park / Green Space"},
-    "childcare":       {"weight": 2.0, "icon": "\U0001F476", "label": "Childcare / Preschool"},
-    "pharmacy":        {"weight": 2.0, "icon": "\U0001F48A", "label": "Pharmacy"},
-    "tram_bus":        {"weight": 2.0, "icon": "\U0001F68C", "label": "Tram / Bus Stop"},
-    "cafe":            {"weight": 1.5, "icon": "☕",          "label": "Cafe"},
-    "restaurant":      {"weight": 1.5, "icon": "\U0001F37D️", "label": "Restaurant"},
-    "convenience":     {"weight": 1.0, "icon": "\U0001F3EA", "label": "Convenience Store"},
-    "secondary_school":{"weight": 1.5, "icon": "\U0001F393", "label": "Secondary School"},
-    "hospital":        {"weight": 1.5, "icon": "\U0001F3E5", "label": "Hospital"},
-    "fitness":         {"weight": 1.0, "icon": "\U0001F3CB️", "label": "Gym / Fitness"},
-    "shopping":        {"weight": 1.0, "icon": "\U0001F6CD️", "label": "Shopping Centre"},
-    "bank":            {"weight": 1.0, "icon": "\U0001F3E6", "label": "Bank / ATM"},
-    "library":         {"weight": 0.5, "icon": "\U0001F4DA", "label": "Library"},
-    "post_office":     {"weight": 0.5, "icon": "\U0001F4EE", "label": "Post Office"},
+    "supermarket":     {"weight": 3.0, "icon": "supermarket",     "label": "Supermarket",          "group": "essential"},
+    "train":           {"weight": 3.0, "icon": "train",          "label": "Train Station",        "group": "essential"},
+    "primary_school":  {"weight": 2.5, "icon": "school",         "label": "Primary School",       "group": "essential"},
+    "gp_clinic":       {"weight": 2.5, "icon": "medical",        "label": "GP / Medical Clinic",  "group": "essential"},
+    "park":            {"weight": 2.0, "icon": "park",           "label": "Park / Green Space",   "group": "essential"},
+    "childcare":       {"weight": 2.0, "icon": "childcare",      "label": "Childcare / Preschool","group": "essential"},
+    "pharmacy":        {"weight": 2.0, "icon": "pharmacy",       "label": "Pharmacy",             "group": "lifestyle"},
+    "tram_bus":        {"weight": 2.0, "icon": "bus",            "label": "Tram / Bus Stop",      "group": "essential"},
+    "cafe":            {"weight": 1.5, "icon": "cafe",           "label": "Cafe",                 "group": "lifestyle"},
+    "restaurant":      {"weight": 1.5, "icon": "restaurant",     "label": "Restaurant",           "group": "lifestyle"},
+    "convenience":     {"weight": 1.0, "icon": "convenience",    "label": "Convenience Store",    "group": "lifestyle"},
+    "secondary_school":{"weight": 1.5, "icon": "school2",        "label": "Secondary School",     "group": "lifestyle"},
+    "hospital":        {"weight": 1.5, "icon": "hospital",       "label": "Hospital",             "group": "lifestyle"},
+    "fitness":         {"weight": 1.0, "icon": "fitness",        "label": "Gym / Fitness",        "group": "extra"},
+    "shopping":        {"weight": 1.0, "icon": "shopping",       "label": "Shopping Centre",      "group": "extra"},
+    "bank":            {"weight": 1.0, "icon": "bank",           "label": "Bank / ATM",           "group": "extra"},
+    "library":         {"weight": 0.5, "icon": "library",        "label": "Library",              "group": "extra"},
+    "post_office":     {"weight": 0.5, "icon": "post",           "label": "Post Office",          "group": "extra"},
 }
 
 # Overture categories to always skip (false positives)
@@ -279,6 +279,7 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
                 "barrier": eff_dist > raw_dist,
                 "icon": cfg["icon"],
                 "label": cfg["label"],
+                "group": cfg["group"],
             }
             if scenario in nearest_detail:
                 cs["nearest"] = nearest_detail[scenario]
@@ -288,6 +289,7 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
             category_scores[scenario] = {
                 "distance_m": None, "decay": 0.0, "count": 0,
                 "icon": cfg["icon"], "label": cfg["label"],
+                "group": cfg["group"],
             }
         weighted_sum += weight * d
 

@@ -21,13 +21,15 @@
   .sidebar-toggle { position: fixed; top: 50%; right: 380px; transform: translate(50%, -50%); width: 28px; height: 28px; border-radius: 9999px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 3px rgba(0,0,0,0.12); display: flex; align-items: center; justify-content: center; cursor: pointer; color: #64748b; z-index: 50; }
   .sidebar-toggle:hover { color: #16a34a; border-color: #86efac; }
   body.sidebar-collapsed .sidebar-toggle { right: 36px; }
-  .scene-card { padding: 8px 10px; border-radius: 8px; cursor: pointer; transition: background 0.15s, box-shadow 0.15s; border: 1px solid transparent; }
-  .scene-card:hover { background: #f0fdf4; border-color: #bbf7d0; }
-  .scene-card.active { background: #f0fdf4; border-color: #22c55e; box-shadow: 0 0 0 1px #22c55e; }
-  .scene-card.not-found { opacity: 0.5; cursor: default; }
-  .scene-card.not-found:hover { background: transparent; border-color: transparent; }
-  .dist-bar { height: 4px; border-radius: 2px; background: #e2e8f0; flex: 1; overflow: hidden; }
-  .dist-bar-fill { height: 100%; border-radius: 2px; }
+  .scene-row { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 6px; cursor: pointer; transition: background 0.12s; }
+  .scene-row:hover { background: #f0fdf4; }
+  .scene-row.active { background: #ecfdf5; outline: 1.5px solid #22c55e; }
+  .scene-row.none { opacity: 0.35; cursor: default; }
+  .scene-row.none:hover { background: transparent; }
+  .scene-icon { width: 28px; height: 28px; border-radius: 6px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .scene-icon svg { width: 16px; height: 16px; }
+  .dist-pill { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 10px; white-space: nowrap; }
+  .group-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; margin: 12px 0 4px; }
 </style>
 </head>
 <body class="bg-slate-50 font-sans text-slate-900">
@@ -43,7 +45,7 @@
       <a href="/" class="text-slate-400 hover:text-brand-600 text-sm">&larr;</a>
       <h1 class="text-lg font-bold">Walkability Score</h1>
     </div>
-    <p class="text-xs text-slate-400 mb-4">Click the map or enter coordinates. Tap a category to see the walking route.</p>
+    <p class="text-xs text-slate-400 mb-4">Click the map or enter coordinates. Tap a row to see the walking route.</p>
     <div class="flex gap-2 mb-2">
       <input id="lat" type="number" step="any" placeholder="Lat" value="-37.8136" class="input-field flex-1 min-w-0">
       <input id="lng" type="number" step="any" placeholder="Lng" value="144.9631" class="input-field flex-1 min-w-0">
@@ -58,44 +60,47 @@
     </div>
 
     <div id="loading" class="hidden text-green-600 text-sm py-5 text-center">Analysing walkability...</div>
-    <div id="score-box" class="hidden card p-4 mb-4"></div>
-    <div id="scenes" class="hidden space-y-1"></div>
+    <div id="score-box" class="hidden card p-4 mb-3"></div>
+    <div id="scenes" class="hidden"></div>
 
     <details class="mt-6 text-xs text-slate-600">
       <summary class="cursor-pointer text-[11px] font-semibold text-slate-400 uppercase tracking-wide hover:text-slate-600 select-none">Methodology</summary>
-      <div class="mt-3 space-y-4">
-        <div>
-          <h4 class="font-semibold text-slate-700 mb-1">What It Measures</h4>
-          <p>Rates how walkable a location is on a 0-100 scale based on proximity to 13 amenity categories. Higher = more walkable.</p>
-        </div>
-        <div>
-          <h4 class="font-semibold text-slate-700 mb-1">Categories (weighted)</h4>
-          <ul class="list-disc ml-4 space-y-0.5">
-            <li>Grocery &amp; Transit (3x weight)</li>
-            <li>Restaurant, Park, School, Healthcare (2x)</li>
-            <li>Shopping, Cafe, Pharmacy (1.5x)</li>
-            <li>Bank, Entertainment, Fitness, Bookstore (1x)</li>
-          </ul>
-        </div>
-        <div>
-          <h4 class="font-semibold text-slate-700 mb-1">Adjustments</h4>
-          <ul class="list-disc ml-4 space-y-0.5">
-            <li>Highway barrier detection (2.5x distance penalty)</li>
-            <li>Diversity bonus for multiple nearby options</li>
-            <li>Slope penalty for hilly terrain</li>
-          </ul>
-        </div>
+      <div class="mt-3 space-y-3">
+        <p>Scores 0-100 based on walking distance to 18 amenity types, weighted by importance. Supermarket and train station carry the most weight (3x). Includes highway barrier detection and slope penalty.</p>
       </div>
     </details>
   </div>
 </div>
 
 <script>
-let map, mapboxToken;
-let lastData = null;
-let queryLat, queryLng;
+let map, mapboxToken, lastData, queryLat, queryLng;
 
-// Icons and labels now come from API response (icon/label fields in each category)
+const SVGS = {
+  supermarket: '<path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/>',
+  train: '<rect x="4" y="3" width="16" height="14" rx="2"/><path d="M4 11h16"/><path d="M12 3v8"/><path d="M8 21l2-4h4l2 4"/><circle cx="9" cy="15" r="1"/><circle cx="15" cy="15" r="1"/>',
+  school: '<path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c0 1.66 2.69 3 6 3s6-1.34 6-3v-5"/>',
+  school2: '<path d="M4 19.5v-15A2.5 2.5 0 016.5 2H20v20H6.5a2.5 2.5 0 010-5H20"/><path d="M8 7h6"/><path d="M8 11h8"/>',
+  medical: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  park: '<path d="M17 14c1.66 0 3-1.34 3-3s-1.34-3-3-3a3 3 0 00-2.83 2M7 14c-1.66 0-3-1.34-3-3a3 3 0 015.83-1"/><path d="M12 22V9"/><path d="M12 9a5 5 0 00-5 0"/><path d="M12 9a5 5 0 015 0"/>',
+  childcare: '<circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 00-16 0"/>',
+  pharmacy: '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0016.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 002 8.5c0 2.3 1.5 4.05 3 5.5l7 7z"/>',
+  bus: '<path d="M8 6v6"/><path d="M16 6v6"/><rect x="4" y="3" width="16" height="13" rx="2"/><path d="M4 12h16"/><path d="M7 19l-1 2"/><path d="M17 19l1 2"/><circle cx="8" cy="15" r="0.5" fill="currentColor"/><circle cx="16" cy="15" r="0.5" fill="currentColor"/>',
+  cafe: '<path d="M17 8h1a4 4 0 010 8h-1"/><path d="M3 8h14v9a4 4 0 01-4 4H7a4 4 0 01-4-4z"/><line x1="6" y1="2" x2="6" y2="4"/><line x1="10" y1="2" x2="10" y2="4"/><line x1="14" y1="2" x2="14" y2="4"/>',
+  restaurant: '<path d="M18 8h1a4 4 0 010 8h-1"/><path d="M2 8h16v9a4 4 0 01-4 4H6a4 4 0 01-4-4z"/>',
+  convenience: '<path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
+  hospital: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8"/><path d="M8 12h8"/>',
+  fitness: '<path d="M6.5 6.5h11"/><path d="M17.5 6.5V4a1 1 0 011-1h1a1 1 0 011 1v4a1 1 0 01-1 1h-1a1 1 0 01-1-1z"/><path d="M6.5 6.5V4a1 1 0 00-1-1h-1a1 1 0 00-1 1v4a1 1 0 001 1h1a1 1 0 001-1z"/><path d="M2 6.5h2M20 6.5h2"/>',
+  shopping: '<circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/>',
+  bank: '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/>',
+  library: '<path d="M4 19.5v-15A2.5 2.5 0 016.5 2H20v20H6.5a2.5 2.5 0 010-5H20"/>',
+  post: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 7l-10 7L2 7"/>',
+};
+
+const GROUP_LABELS = { essential: 'Daily Essentials', lifestyle: 'Lifestyle', extra: 'Nice to Have' };
+
+function icon(key, color) {
+  return `<div class="scene-icon" style="background:${color}15"><svg viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${SVGS[key] || SVGS.convenience}</svg></div>`;
+}
 
 function setPoint(lat, lng) {
   document.getElementById('lat').value = lat.toFixed(4);
@@ -112,29 +117,27 @@ function scoreColor(s) {
 }
 
 function distColor(d) {
-  if (d == null) return '#e2e8f0';
+  if (d == null) return '#94a3b8';
   if (d < 300) return '#16a34a';
   if (d < 600) return '#65a30d';
   if (d < 1000) return '#d97706';
   return '#dc2626';
 }
 
+function distPill(d) {
+  if (d == null) return '<span class="dist-pill" style="background:#f1f5f9;color:#94a3b8">N/A</span>';
+  const min = Math.max(1, Math.round(d / 80));
+  const c = distColor(d);
+  return `<span class="dist-pill" style="background:${c}12;color:${c}">${d < 1000 ? d + 'm' : (d/1000).toFixed(1) + 'km'} · ${min}min</span>`;
+}
+
 async function initMap() {
   const cfg = await fetch('/api/config').then(r => r.json());
   mapboxToken = cfg.mapbox_token;
   mapboxgl.accessToken = mapboxToken;
-  map = new mapboxgl.Map({
-    container: 'map',
-    style: 'mapbox://styles/mapbox/streets-v12',
-    center: [144.9631, -37.8136],
-    zoom: 15,
-  });
+  map = new mapboxgl.Map({ container: 'map', style: 'mapbox://styles/mapbox/streets-v12', center: [144.9631, -37.8136], zoom: 15 });
   map.addControl(new mapboxgl.NavigationControl(), 'top-right');
-  map.on('click', (e) => {
-    document.getElementById('lat').value = e.lngLat.lat.toFixed(6);
-    document.getElementById('lng').value = e.lngLat.lng.toFixed(6);
-    query();
-  });
+  map.on('click', (e) => { document.getElementById('lat').value = e.lngLat.lat.toFixed(6); document.getElementById('lng').value = e.lngLat.lng.toFixed(6); query(); });
 }
 
 function clearRoute() {
@@ -145,35 +148,24 @@ function clearRoute() {
 async function showRoute(cat) {
   const info = lastData?.category_scores?.[cat];
   if (!info?.nearest) return;
-
-  document.querySelectorAll('.scene-card').forEach(c => c.classList.remove('active'));
+  document.querySelectorAll('.scene-row').forEach(c => c.classList.remove('active'));
   document.querySelector(`[data-cat="${cat}"]`)?.classList.add('active');
-
   clearRoute();
   const dest = info.nearest;
-
   try {
-    const url = `https://api.mapbox.com/directions/v5/mapbox/walking/${queryLng},${queryLat};${dest.lng},${dest.lat}?geometries=geojson&access_token=${mapboxToken}`;
-    const resp = await fetch(url);
+    const resp = await fetch(`https://api.mapbox.com/directions/v5/mapbox/walking/${queryLng},${queryLat};${dest.lng},${dest.lat}?geometries=geojson&access_token=${mapboxToken}`);
     const data = await resp.json();
     const route = data.routes?.[0];
     if (!route) return;
-
     map.addSource('route-line', { type: 'geojson', data: { type: 'Feature', geometry: route.geometry } });
-    map.addLayer({ id: 'route-line', type: 'line', source: 'route-line',
-      paint: { 'line-color': '#22c55e', 'line-width': 4, 'line-opacity': 0.8 } });
-
+    map.addLayer({ id: 'route-line', type: 'line', source: 'route-line', paint: { 'line-color': '#22c55e', 'line-width': 4, 'line-opacity': 0.85 } });
     const mins = Math.round(route.duration / 60);
-    const distM = Math.round(route.distance);
-    const el = document.querySelector(`[data-cat="${cat}"] .route-info`);
-    if (el) el.innerHTML = `<span class="text-green-600 font-medium">${mins} min walk</span> <span class="text-slate-400">(${distM}m road)</span>`;
-
+    const el = document.querySelector(`[data-cat="${cat}"] .route-time`);
+    if (el) el.textContent = `${mins} min walking route`;
     const bounds = new mapboxgl.LngLatBounds();
     route.geometry.coordinates.forEach(c => bounds.extend(c));
     map.fitBounds(bounds, { padding: 80, maxZoom: 17 });
-  } catch (e) {
-    console.warn('Route fetch failed:', e);
-  }
+  } catch (e) { console.warn('Route failed:', e); }
 }
 
 async function query() {
@@ -186,34 +178,23 @@ async function query() {
     if (map.getLayer(id)) map.removeLayer(id);
     if (map.getSource(id)) map.removeSource(id);
   });
-
   map.flyTo({ center: [queryLng, queryLat], zoom: Math.max(map.getZoom(), 15), duration: 800 });
-
   map.addSource('query-pt-circle', { type: 'geojson', data: { type: 'Feature', geometry: { type: 'Point', coordinates: [queryLng, queryLat] } } });
-  map.addLayer({ id: 'query-pt-circle', type: 'circle', source: 'query-pt-circle',
-    paint: { 'circle-radius': 10, 'circle-color': '#16a34a', 'circle-stroke-width': 3, 'circle-stroke-color': '#fff' } });
+  map.addLayer({ id: 'query-pt-circle', type: 'circle', source: 'query-pt-circle', paint: { 'circle-radius': 10, 'circle-color': '#16a34a', 'circle-stroke-width': 3, 'circle-stroke-color': '#fff' } });
 
   const loading = document.getElementById('loading');
   const scoreBox = document.getElementById('score-box');
   const scenes = document.getElementById('scenes');
-  loading.classList.remove('hidden');
-  scoreBox.classList.add('hidden');
-  scenes.classList.add('hidden');
+  loading.classList.remove('hidden'); scoreBox.classList.add('hidden'); scenes.classList.add('hidden');
 
   try {
     const resp = await fetch(`/scores/walkability?lat=${queryLat}&lng=${queryLng}`);
     const d = await resp.json();
     loading.classList.add('hidden');
     lastData = d;
+    if (d.error) { scoreBox.classList.remove('hidden'); scoreBox.innerHTML = `<div class="text-red-500 text-sm">${d.error}</div>`; return; }
 
-    if (d.error) {
-      scoreBox.classList.remove('hidden');
-      scoreBox.innerHTML = `<div class="text-red-500 text-sm">${d.error}</div>`;
-      return;
-    }
-
-    const sc = d.score;
-    const color = scoreColor(sc);
+    const sc = d.score; const color = scoreColor(sc);
     scoreBox.classList.remove('hidden');
     scoreBox.innerHTML = `
       <div class="flex items-baseline gap-2 mb-1">
@@ -223,82 +204,63 @@ async function query() {
       </div>
       <div class="text-[11px] font-semibold text-slate-600 mb-2">${d.label}</div>
       <div class="relative h-2 rounded-full overflow-hidden mb-1" style="background:linear-gradient(90deg,#dc2626 0%,#d97706 25%,#65a30d 50%,#16a34a 75%,#16a34a 100%);opacity:0.25"></div>
-      <div class="relative -mt-3 mb-2 h-2">
-        <div class="absolute h-2 w-1 bg-slate-900 rounded-full" style="left:${sc}%;transform:translateX(-50%)"></div>
-      </div>
-      <div class="flex justify-between text-[9px] text-slate-400">
-        <span>0 car-dependent</span><span>100 walker's paradise</span>
-      </div>
-      ${d.slope_penalty ? `<div class="text-[11px] text-amber-600 mt-1">Hilly terrain (${Math.round((1-d.slope_penalty)*100)}% walkability reduction)</div>` : ''}
-      ${d.barriers_crossed ? `<div class="text-[11px] text-amber-600 mt-1">${d.barriers_crossed} highway barrier(s) detected</div>` : ''}
-    `;
+      <div class="relative -mt-3 mb-2 h-2"><div class="absolute h-2 w-1 bg-slate-900 rounded-full" style="left:${sc}%;transform:translateX(-50%)"></div></div>
+      <div class="flex justify-between text-[9px] text-slate-400"><span>0 car-dependent</span><span>100 walker's paradise</span></div>
+      ${d.slope_penalty ? `<div class="text-[11px] text-amber-600 mt-1">Hilly terrain (${Math.round((1-d.slope_penalty)*100)}% reduction)</div>` : ''}
+      ${d.barriers_crossed ? `<div class="text-[11px] text-amber-600 mt-1">${d.barriers_crossed} highway barrier(s)</div>` : ''}`;
 
-    // POI markers on map
+    // POI markers
     const poiFeatures = [];
     for (const [cat, info] of Object.entries(d.category_scores)) {
-      if (info.nearest) {
-        poiFeatures.push({
-          type: 'Feature',
-          geometry: { type: 'Point', coordinates: [info.nearest.lng, info.nearest.lat] },
-          properties: { cat, name: info.nearest.name, dist: info.distance_m },
-        });
+      if (info.nearest) poiFeatures.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [info.nearest.lng, info.nearest.lat] }, properties: { cat } });
+    }
+    if (poiFeatures.length) {
+      map.addSource('poi-markers', { type: 'geojson', data: { type: 'FeatureCollection', features: poiFeatures } });
+      map.addLayer({ id: 'poi-markers', type: 'circle', source: 'poi-markers', paint: { 'circle-radius': 5, 'circle-color': '#f59e0b', 'circle-stroke-width': 1.5, 'circle-stroke-color': '#fff' } });
+    }
+
+    // Scene rows grouped
+    scenes.classList.remove('hidden');
+    const groups = { essential: [], lifestyle: [], extra: [] };
+    for (const [cat, info] of Object.entries(d.category_scores)) {
+      (groups[info.group] || groups.extra).push([cat, info]);
+    }
+    // Sort each group: found first (by distance), then not-found
+    for (const g of Object.values(groups)) {
+      g.sort((a,b) => {
+        if (a[1].distance_m == null) return 1;
+        if (b[1].distance_m == null) return -1;
+        return a[1].distance_m - b[1].distance_m;
+      });
+    }
+
+    let html = '';
+    for (const [gKey, gLabel] of Object.entries(GROUP_LABELS)) {
+      const items = groups[gKey];
+      if (!items || !items.length) continue;
+      html += `<div class="group-label">${gLabel}</div>`;
+      for (const [cat, info] of items) {
+        const dist = info.distance_m;
+        const found = dist != null;
+        const name = info.nearest?.name || '';
+        const c = distColor(dist);
+        html += `
+          <div class="scene-row ${found ? '' : 'none'}" data-cat="${cat}" ${found ? `onclick="showRoute('${cat}')"` : ''}>
+            ${icon(info.icon, found ? c : '#94a3b8')}
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-[13px] font-medium text-slate-800 truncate">${info.label}</span>
+                ${distPill(dist)}
+              </div>
+              ${name ? `<div class="text-[11px] text-slate-400 truncate mt-0.5">${name}${info.count > 1 ? ` <span class="text-slate-300">+${info.count - 1} more</span>` : ''}</div>` : ''}
+              ${info.barrier ? '<div class="text-[10px] text-amber-500 mt-0.5">Highway crossing</div>' : ''}
+              <div class="route-time text-[11px] text-green-600 mt-0.5"></div>
+            </div>
+          </div>`;
       }
     }
-    if (poiFeatures.length > 0) {
-      map.addSource('poi-markers', { type: 'geojson', data: { type: 'FeatureCollection', features: poiFeatures } });
-      map.addLayer({ id: 'poi-markers', type: 'circle', source: 'poi-markers',
-        paint: { 'circle-radius': 6, 'circle-color': '#f59e0b', 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' } });
-    }
-
-    // Scene cards
-    scenes.classList.remove('hidden');
-    const cats = Object.entries(d.category_scores);
-    cats.sort((a,b) => {
-      if (a[1].distance_m == null) return 1;
-      if (b[1].distance_m == null) return -1;
-      return a[1].distance_m - b[1].distance_m;
-    });
-
-    let cardsHtml = `<div class="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Nearby Amenities</div>`;
-    for (const [cat, info] of cats) {
-      const icon = info.icon || '\u{1F4CD}';
-      const label = info.label || cat;
-      const dist = info.distance_m;
-      const name = info.nearest?.name;
-      const walkMin = dist != null ? Math.max(1, Math.round(dist / 80)) : null;
-      const found = dist != null;
-      const pct = found ? Math.min(100, Math.round(dist / 1500 * 100)) : 100;
-      const barColor = distColor(dist);
-
-      cardsHtml += `
-        <div class="scene-card ${found ? '' : 'not-found'}" data-cat="${cat}" ${found ? `onclick="showRoute('${cat}')"` : ''}>
-          <div class="flex items-center gap-2">
-            <span class="text-base flex-shrink-0">${icon}</span>
-            <div class="flex-1 min-w-0">
-              <div class="flex justify-between items-baseline">
-                <span class="text-xs font-medium text-slate-700 truncate">${label}</span>
-                ${found
-                  ? `<span class="text-[11px] text-slate-500 ml-2 flex-shrink-0">${dist}m ~ ${walkMin}min</span>`
-                  : `<span class="text-[11px] text-slate-400 ml-2">none within 1.5km</span>`}
-              </div>
-              ${name ? `<div class="text-[11px] text-slate-400 truncate">${name}</div>` : ''}
-              <div class="flex items-center gap-2 mt-1">
-                <div class="dist-bar"><div class="dist-bar-fill" style="width:${100 - pct}%;background:${barColor}"></div></div>
-                ${info.count > 1 ? `<span class="text-[10px] text-slate-400 flex-shrink-0">${info.count} nearby</span>` : ''}
-              </div>
-              ${info.barrier ? '<div class="text-[10px] text-amber-500 mt-0.5">Highway crossing required</div>' : ''}
-              <div class="route-info text-[11px] mt-0.5"></div>
-            </div>
-          </div>
-        </div>`;
-    }
-    scenes.innerHTML = cardsHtml;
-
-  } catch (e) {
-    loading.classList.add('hidden');
-    scoreBox.classList.remove('hidden');
-    scoreBox.innerHTML = `<div class="text-red-500 text-sm">Error: ${e.message}</div>`;
-  }
+    scenes.innerHTML = html;
+  } catch (e) { loading.classList.add('hidden'); scoreBox.classList.remove('hidden'); scoreBox.innerHTML = `<div class="text-red-500 text-sm">Error: ${e.message}</div>`; }
 }
 
 initMap();

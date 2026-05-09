@@ -337,10 +337,9 @@ def contamination_score(lat: float, lng: float) -> dict:
         "disclaimer": "Estimate based on EPA registers and POI proximity. Not a substitute for site contamination assessment.",
         "state": state,
         "epa_sites_count": len(epa_sites),
+        "epa_sites": epa_sites[:10],
         "industrial": industrial,
     }
-    if epa_sites:
-        result["nearest_epa_site"] = epa_sites[0]
     if not epa_sites and state not in ("VIC", "NSW", "WA"):
         result["note"] = f"No EPA register API for {state}. Score based on industrial POI proximity only."
 

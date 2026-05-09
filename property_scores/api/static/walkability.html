@@ -4,110 +4,180 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Walkability Score - Property Scores</title>
-<link rel="stylesheet" href="/css/styles.css?v=2">
+<link rel="stylesheet" href="/css/styles.css?v=3">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet">
 <link href="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.css" rel="stylesheet">
 <script src="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.js"></script>
 <style>
-  #map { position: absolute; top: 0; left: 0; right: 380px; bottom: 0; }
-  #sidebar { width: 380px; }
-  body.sidebar-collapsed #map { right: 36px; }
-  body.sidebar-collapsed #sidebar { width: 36px; }
-  body.sidebar-collapsed #sidebar > .sidebar-content { display: none; }
-  body.sidebar-collapsed .sidebar-toggle svg { transform: rotate(180deg); }
+  :root {
+    --sidebar-w: 370px;
+    --g-green: #1a9a4a;
+    --g-lime: #5a8c1e;
+    --g-amber: #b8760a;
+    --g-red: #c93a2e;
+    --g-muted: #8b95a5;
+    --surface: #fafbfc;
+    --border: #e8ecf1;
+    --text-1: #1a1f2b;
+    --text-2: #4a5568;
+    --text-3: #8b95a5;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'DM Sans', system-ui, -apple-system, sans-serif; color: var(--text-1); background: var(--surface); -webkit-font-smoothing: antialiased; }
+  #map { position: absolute; top: 0; left: 0; right: var(--sidebar-w); bottom: 0; transition: right .28s cubic-bezier(.4,0,.2,1); }
+  #sidebar { position: absolute; top: 0; right: 0; bottom: 0; width: var(--sidebar-w); background: #fff; border-left: 1px solid var(--border); overflow-y: auto; overflow-x: hidden; transition: width .28s cubic-bezier(.4,0,.2,1); }
+  body.sidebar-collapsed #map { right: 0; }
+  body.sidebar-collapsed #sidebar { width: 0; overflow: hidden; }
   .mapboxgl-ctrl-bottom-left, .mapboxgl-ctrl-bottom-right { display: none; }
-  .sidebar-toggle { position: fixed; top: 50%; right: 380px; transform: translate(50%, -50%); width: 28px; height: 28px; border-radius: 9999px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 3px rgba(0,0,0,0.12); display: flex; align-items: center; justify-content: center; cursor: pointer; color: #64748b; z-index: 50; }
-  .sidebar-toggle:hover { color: #16a34a; border-color: #86efac; }
-  body.sidebar-collapsed .sidebar-toggle { right: 36px; }
-  .scene-row { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 6px; cursor: pointer; transition: background 0.12s; }
-  .scene-row:hover { background: #f0fdf4; }
-  .scene-row.active { background: #ecfdf5; outline: 1.5px solid #22c55e; }
-  .scene-row.none { opacity: 0.35; cursor: default; }
-  .scene-row.none:hover { background: transparent; }
-  .scene-icon { width: 28px; height: 28px; border-radius: 6px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-  .scene-icon svg { width: 16px; height: 16px; }
-  .dist-pill { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 10px; white-space: nowrap; }
-  .group-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; margin: 12px 0 4px; }
+
+  .sidebar-toggle { position: fixed; top: 50%; right: var(--sidebar-w); transform: translate(50%,-50%); width: 24px; height: 24px; border-radius: 50%; background: #fff; border: 1px solid var(--border); box-shadow: 0 1px 4px rgba(0,0,0,.1); display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--text-3); z-index: 50; transition: right .28s cubic-bezier(.4,0,.2,1), color .15s; }
+  .sidebar-toggle:hover { color: var(--g-green); }
+  body.sidebar-collapsed .sidebar-toggle { right: 0; }
+  body.sidebar-collapsed .sidebar-toggle svg { transform: rotate(180deg); }
+
+  .sb { padding: 20px; }
+  .sb-title { font-size: 15px; font-weight: 700; letter-spacing: -0.02em; }
+  .sb-desc { font-size: 12px; color: var(--text-3); margin: 4px 0 14px; line-height: 1.5; }
+
+  .input-row { display: flex; gap: 6px; margin-bottom: 8px; }
+  .input-row input { flex: 1; min-width: 0; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; font-family: inherit; color: var(--text-1); background: var(--surface); outline: none; transition: border-color .15s; }
+  .input-row input:focus { border-color: var(--g-green); }
+  .input-row button { padding: 7px 16px; border: none; border-radius: 6px; background: var(--text-1); color: #fff; font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer; transition: background .15s; }
+  .input-row button:hover { background: #333d4d; }
+
+  .presets { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 16px; }
+  .presets button { padding: 3px 10px; border: 1px solid var(--border); border-radius: 100px; background: #fff; font-size: 11px; font-weight: 500; color: var(--text-2); cursor: pointer; font-family: inherit; transition: all .12s; }
+  .presets button:hover { border-color: var(--g-green); color: var(--g-green); }
+
+  .score-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 12px; }
+  .score-num { font-size: 36px; font-weight: 700; line-height: 1; letter-spacing: -0.03em; }
+  .score-label { font-size: 12px; font-weight: 600; color: var(--text-2); margin-top: 2px; }
+  .score-bar { height: 4px; border-radius: 2px; background: var(--border); margin: 8px 0 4px; position: relative; overflow: visible; }
+  .score-bar::before { content: ''; position: absolute; inset: 0; border-radius: 2px; background: linear-gradient(90deg, var(--g-red), var(--g-amber), var(--g-lime), var(--g-green)); opacity: .35; }
+  .score-dot { position: absolute; top: 50%; width: 10px; height: 10px; border-radius: 50%; background: var(--text-1); border: 2px solid #fff; box-shadow: 0 0 0 1px var(--text-1); transform: translate(-50%,-50%); }
+  .score-summary { font-size: 12px; color: var(--text-2); line-height: 1.5; margin-top: 8px; }
+  .score-badge { display: inline-block; font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 100px; margin-top: 6px; }
+
+  .loading-msg { text-align: center; padding: 24px 0; font-size: 13px; color: var(--g-green); font-weight: 500; }
+
+  .group-hdr { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--text-3); padding: 14px 0 6px; border-top: 1px solid var(--border); margin-top: 2px; }
+  .group-hdr:first-child { border-top: none; margin-top: 0; padding-top: 4px; }
+
+  .row { display: flex; align-items: flex-start; gap: 10px; padding: 8px 6px; border-radius: 8px; cursor: pointer; transition: background .1s; }
+  .row:hover { background: #f4f7f5; }
+  .row.active { background: #eef7f1; box-shadow: inset 0 0 0 1.5px var(--g-green); }
+  .row.dim { opacity: .3; cursor: default; }
+  .row.dim:hover { background: transparent; }
+
+  .row-icon { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .row-icon svg { width: 18px; height: 18px; display: block; }
+
+  .row-body { flex: 1; min-width: 0; }
+  .row-head { display: flex; align-items: center; gap: 6px; }
+  .row-label { font-size: 13px; font-weight: 600; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+  .row-dist { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 100px; white-space: nowrap; flex-shrink: 0; }
+  .row-name { font-size: 11px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+
+  .opts { margin-top: 6px; display: flex; flex-direction: column; gap: 2px; }
+  .opt { display: flex; align-items: center; gap: 6px; padding: 3px 4px; border-radius: 5px; cursor: pointer; transition: background .1s; }
+  .opt:hover { background: #f0f2f5; }
+  .opt-logo { width: 16px; height: 16px; border-radius: 3px; flex-shrink: 0; object-fit: contain; }
+  .opt-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .opt-name { font-size: 11px; color: var(--text-2); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .opt-meta { font-size: 10px; color: var(--text-3); white-space: nowrap; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+
+  .row-route { font-size: 11px; margin-top: 3px; min-height: 0; }
+  .row-barrier { font-size: 10px; color: var(--g-amber); margin-top: 2px; }
+
+  .method-toggle { font-size: 11px; font-weight: 600; color: var(--text-3); text-transform: uppercase; letter-spacing: .06em; cursor: pointer; margin-top: 20px; padding: 8px 0; border-top: 1px solid var(--border); }
+  .method-toggle:hover { color: var(--text-2); }
+  .method-body { font-size: 12px; color: var(--text-2); line-height: 1.6; margin-top: 8px; }
+
+  .legend { position: absolute; bottom: 16px; left: 12px; background: rgba(255,255,255,.95); backdrop-filter: blur(8px); border-radius: 8px; border: 1px solid var(--border); padding: 10px 14px; font-size: 11px; color: var(--text-2); z-index: 10; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
+  .legend-title { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--text-3); margin-bottom: 6px; }
+  .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
+  .legend-swatch { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; }
+
+  .hidden { display: none !important; }
 </style>
 </head>
-<body class="bg-slate-50 font-sans text-slate-900">
+<body>
 
 <div id="map"></div>
 
-<div id="sidebar" class="absolute top-0 right-0 bottom-0 bg-white border-l border-slate-200 overflow-y-auto">
-  <button class="sidebar-toggle" onclick="document.body.classList.toggle('sidebar-collapsed'); setTimeout(() => map.resize(), 320)">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 6 15 12 9 18"/></svg>
+<div id="sidebar">
+  <button class="sidebar-toggle" onclick="document.body.classList.toggle('sidebar-collapsed'); setTimeout(() => map.resize(), 300)">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>
   </button>
-  <div class="sidebar-content p-5">
-    <div class="flex items-center gap-2 mb-1">
-      <a href="/" class="text-slate-400 hover:text-brand-600 text-sm">&larr;</a>
-      <h1 class="text-lg font-bold">Walkability Score</h1>
+  <div class="sb">
+    <a href="/" style="font-size:12px;color:var(--text-3);text-decoration:none">&larr; All Scores</a>
+    <div class="sb-title" style="margin-top:8px">Walkability</div>
+    <div class="sb-desc">Click the map or enter coordinates. Tap a row to see the walking route.</div>
+
+    <div class="input-row">
+      <input id="lat" type="number" step="any" placeholder="Latitude" value="-37.8136">
+      <input id="lng" type="number" step="any" placeholder="Longitude" value="144.9631">
+      <button onclick="query()">Go</button>
     </div>
-    <p class="text-xs text-slate-400 mb-4">Click the map or enter coordinates. Tap a row to see the walking route.</p>
-    <div class="flex gap-2 mb-2">
-      <input id="lat" type="number" step="any" placeholder="Lat" value="-37.8136" class="input-field flex-1 min-w-0">
-      <input id="lng" type="number" step="any" placeholder="Lng" value="144.9631" class="input-field flex-1 min-w-0">
-      <button onclick="query()" class="btn-primary">Go</button>
-    </div>
-    <div class="flex flex-wrap gap-1 mb-4 text-[11px]">
-      <button onclick="setPoint(-37.8136,144.9631)" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">CBD</button>
-      <button onclick="setPoint(-37.9000,145.1130)" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">Clayton</button>
-      <button onclick="setPoint(-37.7650,145.0160)" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">Kew</button>
-      <button onclick="setPoint(-37.8500,144.9800)" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">South Yarra</button>
-      <button onclick="setPoint(-37.7530,145.2200)" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">Dandenong Ranges</button>
+    <div class="presets">
+      <button onclick="setPoint(-37.8136,144.9631)">CBD</button>
+      <button onclick="setPoint(-37.9000,145.1130)">Clayton</button>
+      <button onclick="setPoint(-37.7650,145.0160)">Kew</button>
+      <button onclick="setPoint(-37.8500,144.9800)">South Yarra</button>
+      <button onclick="setPoint(-37.7530,145.2200)">Dandenong Ranges</button>
     </div>
 
-    <div id="loading" class="hidden text-green-600 text-sm py-5 text-center">Analysing walkability...</div>
-    <div id="score-box" class="hidden card p-4 mb-3"></div>
+    <div id="loading" class="loading-msg hidden">Analysing walkability&hellip;</div>
+    <div id="score-box" class="hidden"></div>
     <div id="scenes" class="hidden"></div>
 
-    <details class="mt-6 text-xs text-slate-600">
-      <summary class="cursor-pointer text-[11px] font-semibold text-slate-400 uppercase tracking-wide hover:text-slate-600 select-none">Methodology</summary>
-      <div class="mt-3 space-y-3">
-        <p>Scores 0-100 based on walking distance to 18 amenity types, weighted by importance. Supermarket and train station carry the most weight (3x). Includes highway barrier detection and slope penalty.</p>
+    <details class="method-toggle">
+      <summary>Methodology</summary>
+      <div class="method-body">
+        Scores 0&ndash;100 based on walking distance to 24 amenity types, weighted by importance. Supermarket and train station carry the most weight (3&times;). Includes highway barrier detection and slope penalty.
       </div>
     </details>
   </div>
 </div>
 
-<!-- Legend -->
-<div class="absolute bottom-5 left-3 bg-white/95 backdrop-blur rounded-lg shadow-sm border border-slate-200 px-3 py-2 text-xs text-slate-600 z-10" style="min-width:140px">
-  <div class="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Walking Range</div>
-  <div class="flex items-center gap-2 mb-1"><span class="w-3 h-3 rounded-sm inline-block" style="background:rgba(22,163,74,0.15);border:1px dashed rgba(22,163,74,0.4)"></span> 5 min</div>
-  <div class="flex items-center gap-2 mb-1"><span class="w-3 h-3 rounded-sm inline-block" style="background:rgba(101,163,13,0.1);border:1px dashed rgba(101,163,13,0.4)"></span> 10 min</div>
-  <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-sm inline-block" style="background:rgba(217,119,6,0.08);border:1px dashed rgba(217,119,6,0.4)"></span> 15 min</div>
+<div class="legend">
+  <div class="legend-title">Walking range</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:rgba(26,154,74,.22);border:1px dashed rgba(26,154,74,.5)"></div> 5 min</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:rgba(90,140,30,.15);border:1px dashed rgba(90,140,30,.45)"></div> 10 min</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:rgba(184,118,10,.1);border:1px dashed rgba(184,118,10,.4)"></div> 15 min</div>
 </div>
 
 <script>
 let map, mapboxToken, lastData, queryLat, queryLng;
 
+/* ── Lucide-style icons (24×24, stroke-width 2, round caps) ── */
 const SVGS = {
-  supermarket: '<path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/>',
-  train: '<rect x="4" y="3" width="16" height="14" rx="2"/><path d="M4 11h16"/><path d="M12 3v8"/><path d="M8 21l2-4h4l2 4"/><circle cx="9" cy="15" r="1"/><circle cx="15" cy="15" r="1"/>',
-  school: '<path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c0 1.66 2.69 3 6 3s6-1.34 6-3v-5"/>',
-  school2: '<path d="M4 19.5v-15A2.5 2.5 0 016.5 2H20v20H6.5a2.5 2.5 0 010-5H20"/><path d="M8 7h6"/><path d="M8 11h8"/>',
-  medical: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
-  park: '<path d="M17 14c1.66 0 3-1.34 3-3s-1.34-3-3-3a3 3 0 00-2.83 2M7 14c-1.66 0-3-1.34-3-3a3 3 0 015.83-1"/><path d="M12 22V9"/><path d="M12 9a5 5 0 00-5 0"/><path d="M12 9a5 5 0 015 0"/>',
-  childcare: '<circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 00-16 0"/>',
-  pharmacy: '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0016.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 002 8.5c0 2.3 1.5 4.05 3 5.5l7 7z"/>',
-  bus: '<path d="M8 6v6"/><path d="M16 6v6"/><rect x="4" y="3" width="16" height="13" rx="2"/><path d="M4 12h16"/><path d="M7 19l-1 2"/><path d="M17 19l1 2"/><circle cx="8" cy="15" r="0.5" fill="currentColor"/><circle cx="16" cy="15" r="0.5" fill="currentColor"/>',
-  cafe: '<path d="M17 8h1a4 4 0 010 8h-1"/><path d="M3 8h14v9a4 4 0 01-4 4H7a4 4 0 01-4-4z"/><line x1="6" y1="2" x2="6" y2="4"/><line x1="10" y1="2" x2="10" y2="4"/><line x1="14" y1="2" x2="14" y2="4"/>',
-  restaurant: '<path d="M18 8h1a4 4 0 010 8h-1"/><path d="M2 8h16v9a4 4 0 01-4 4H6a4 4 0 01-4-4z"/>',
-  convenience: '<path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
-  hospital: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8"/><path d="M8 12h8"/>',
-  fitness: '<path d="M6.5 6.5h11"/><path d="M17.5 6.5V4a1 1 0 011-1h1a1 1 0 011 1v4a1 1 0 01-1 1h-1a1 1 0 01-1-1z"/><path d="M6.5 6.5V4a1 1 0 00-1-1h-1a1 1 0 00-1 1v4a1 1 0 001 1h1a1 1 0 001-1z"/><path d="M2 6.5h2M20 6.5h2"/>',
-  shopping: '<circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/>',
-  bank: '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/>',
-  library: '<path d="M4 19.5v-15A2.5 2.5 0 016.5 2H20v20H6.5a2.5 2.5 0 010-5H20"/>',
-  post: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 7l-10 7L2 7"/>',
-  playground: '<circle cx="12" cy="6" r="3"/><path d="M12 9v4"/><path d="M8 21l4-8 4 8"/><path d="M6 13h12"/>',
-  dog: '<path d="M10 5.172C10 3.782 8.423 2.679 6.5 3c-2.823.47-4.113 6.006-4 7 .137 1.217 1.5 2 2.5 2s2-.5 2.5-1c.5-.5 1-1 1.5-1h5c.5 0 1 .5 1.5 1s1.5 1 2.5 1 2.363-.783 2.5-2c.113-.994-1.177-6.53-4-7C14.577 2.679 14 3.782 14 5.172V5.5"/><path d="M8 14v.5"/><path d="M16 14v.5"/><path d="M11.25 16.25h1.5L12 17z"/>',
-  trail: '<path d="M4 16l6-6 4 4 6-6"/><polyline points="14 4 20 4 20 10"/>',
-  beach: '<path d="M2 22h20"/><path d="M12 2C6.5 2 2 6.5 2 12"/><path d="M12 2c5.5 0 10 4.5 10 10"/><path d="M12 2v10"/><path d="M5 19c2-3 5-5 7-5s5 2 7 5"/>',
-  sports: '<circle cx="12" cy="12" r="10"/><path d="M12 2a15 15 0 014 10 15 15 0 01-4 10"/><path d="M12 2a15 15 0 00-4 10 15 15 0 004 10"/><path d="M2 12h20"/>',
-  pool: '<path d="M2 12h2a2 2 0 012-2V6a2 2 0 014 0v4a2 2 0 012-2V4a2 2 0 014 0v6a2 2 0 012-2V6a2 2 0 014 0v6h2"/><path d="M2 20c.9-.4 1.8-.8 3-1 2.5-.4 4.5 1 7 1s4.5-1.4 7-1c1.2.2 2.1.6 3 1"/><path d="M2 16c.9-.4 1.8-.8 3-1 2.5-.4 4.5 1 7 1s4.5-1.4 7-1c1.2.2 2.1.6 3 1"/>',
+  supermarket:  '<path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/>',
+  train:        '<path d="M4 15.5V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10.5"/><path d="m8 21 2-4h4l2 4"/><path d="M4 11h16"/><circle cx="9" cy="15" r="1"/><circle cx="15" cy="15" r="1"/>',
+  school:       '<path d="M22 10v6"/><path d="m2 10 10-5 10 5-10 5Z"/><path d="M6 12v5c0 1.7 2.7 3 6 3s6-1.3 6-3v-5"/>',
+  school2:      '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/><path d="M8 7h6"/><path d="M8 11h8"/>',
+  medical:      '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  park:         '<path d="M12 22V8"/><path d="M5 12H2v10h20V12h-3"/><path d="m8 8 4-4 4 4"/><path d="m6 12 6-6 6 6"/>',
+  childcare:    '<circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/>',
+  pharmacy:     '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>',
+  bus:          '<path d="M4 16V6a4 4 0 0 1 4-4h8a4 4 0 0 1 4 4v10"/><path d="M4 11h16"/><path d="m7 19-1 2"/><path d="m17 19 1 2"/><circle cx="7" cy="15" r="1"/><circle cx="17" cy="15" r="1"/>',
+  cafe:         '<path d="M17 8h1a4 4 0 1 1 0 8h-1"/><path d="M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4Z"/><line x1="6" y1="2" x2="6" y2="4"/><line x1="10" y1="2" x2="10" y2="4"/><line x1="14" y1="2" x2="14" y2="4"/>',
+  restaurant:   '<path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2v0a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/>',
+  convenience:  '<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><polyline points="9 22 9 12 15 12 15 22"/>',
+  hospital:     '<path d="M12 6v12"/><path d="M6 12h12"/><rect x="3" y="3" width="18" height="18" rx="2"/>',
+  fitness:      '<path d="M14.4 14.4 9.6 9.6"/><path d="M18.657 21.485a2 2 0 1 1-2.829-2.828l-1.767-1.768a2 2 0 1 1-2.829-2.829l-1.768-1.767a2 2 0 1 1-2.828-2.829l2.828-2.828a2 2 0 1 1 2.829 2.828l1.767 1.768a2 2 0 1 1 2.829 2.829l1.768 1.767a2 2 0 1 1 2.828 2.829Z"/>',
+  shopping:     '<circle cx="8" cy="21" r="1"/><circle cx="19" cy="21" r="1"/><path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57L23 6H6"/>',
+  bank:         '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
+  library:      '<path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/>',
+  post:         '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>',
+  playground:   '<path d="M12 12v10"/><path d="M8 22h8"/><path d="m7 8 5-5 5 5"/><circle cx="12" cy="5" r="2"/>',
+  dog:          '<path d="M10 5.172C10 3.782 8.423 2.679 6.5 3c-2.823.47-4.113 6.006-4 7 .137 1.217 1.5 2 2.5 2s2-.5 2.5-1 1-1 1.5-1h5c.5 0 1 .5 1.5 1s1.5 1 2.5 1 2.363-.783 2.5-2c.113-.994-1.177-6.53-4-7-1.923-.321-3.5.782-3.5 2.172"/><path d="M8 14v.5M16 14v.5"/><path d="M11.25 16.25h1.5L12 17Z"/>',
+  trail:        '<path d="m3 17 4-4 4 4 4-4 4 4"/><path d="M3 7h18"/><path d="m9 7-3 4"/><path d="m15 7 3 4"/>',
+  beach:        '<path d="M17.7 7.7a7.5 7.5 0 1 0 0 10.6"/><path d="M12 2v4"/><path d="m4.93 4.93 2.83 2.83"/><path d="M2 12h4"/><path d="M20 20.7 3 20"/><path d="M22 18H2"/>',
+  sports:       '<circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10"/><path d="M12 2a15.3 15.3 0 0 0-4 10 15.3 15.3 0 0 0 4 10"/><path d="M2 12h20"/>',
+  pool:         '<path d="M2 20c.9-.4 1.8-.8 3-1 2.5-.4 4.5 1 7 1s4.5-1.4 7-1c1.2.2 2.1.6 3 1"/><path d="M2 16c.9-.4 1.8-.8 3-1 2.5-.4 4.5 1 7 1s4.5-1.4 7-1c1.2.2 2.1.6 3 1"/><path d="M6 4v8"/><path d="M18 4v8"/><path d="M6 8h12"/>',
 };
 
 const GROUP_LABELS = { essential: 'Daily Essentials', lifestyle: 'Lifestyle', extra: 'Nice to Have' };
@@ -139,8 +209,9 @@ function brandLogo(name) {
   return null;
 }
 
-function icon(key, color) {
-  return `<div class="scene-icon" style="background:${color}15"><svg viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${SVGS[key] || SVGS.convenience}</svg></div>`;
+function mkIcon(key, color) {
+  const bg = color + '14';
+  return `<div class="row-icon" style="background:${bg}"><svg viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${SVGS[key] || SVGS.convenience}</svg></div>`;
 }
 
 function setPoint(lat, lng) {
@@ -150,26 +221,25 @@ function setPoint(lat, lng) {
 }
 
 function scoreColor(s) {
-  if (s >= 80) return '#16a34a';
-  if (s >= 60) return '#65a30d';
-  if (s >= 40) return '#d97706';
-  if (s >= 20) return '#ea580c';
-  return '#dc2626';
+  if (s >= 80) return 'var(--g-green)';
+  if (s >= 60) return 'var(--g-lime)';
+  if (s >= 40) return 'var(--g-amber)';
+  if (s >= 20) return '#d46218';
+  return 'var(--g-red)';
 }
-
 function distColor(d) {
-  if (d == null) return '#94a3b8';
-  if (d < 300) return '#16a34a';
-  if (d < 600) return '#65a30d';
-  if (d < 1000) return '#d97706';
-  return '#dc2626';
+  if (d == null) return 'var(--g-muted)';
+  if (d < 300) return 'var(--g-green)';
+  if (d < 600) return 'var(--g-lime)';
+  if (d < 1000) return 'var(--g-amber)';
+  return 'var(--g-red)';
 }
-
 function distPill(d) {
-  if (d == null) return '<span class="dist-pill" style="background:#f1f5f9;color:#94a3b8">N/A</span>';
+  if (d == null) return `<span class="row-dist" style="background:#f1f3f5;color:var(--g-muted)">N/A</span>`;
   const min = Math.max(1, Math.round(d / 80));
   const c = distColor(d);
-  return `<span class="dist-pill" style="background:${c}12;color:${c}">${d < 1000 ? d + 'm' : (d/1000).toFixed(1) + 'km'} · ${min}min</span>`;
+  const txt = d < 1000 ? d + 'm' : (d / 1000).toFixed(1) + 'km';
+  return `<span class="row-dist" style="background:${c}14;color:${c}">${txt}&thinsp;&middot;&thinsp;${min}min</span>`;
 }
 
 async function initMap() {
@@ -178,58 +248,48 @@ async function initMap() {
   mapboxgl.accessToken = mapboxToken;
   map = new mapboxgl.Map({ container: 'map', style: 'mapbox://styles/mapbox/streets-v12', center: [144.9631, -37.8136], zoom: 15 });
   map.addControl(new mapboxgl.NavigationControl(), 'top-right');
-  map.on('click', (e) => { document.getElementById('lat').value = e.lngLat.lat.toFixed(6); document.getElementById('lng').value = e.lngLat.lng.toFixed(6); query(); });
+  map.on('click', e => { document.getElementById('lat').value = e.lngLat.lat.toFixed(6); document.getElementById('lng').value = e.lngLat.lng.toFixed(6); query(); });
 }
 
 const ROUTE_LAYERS = ['route-outline', 'route-line', 'route-dest', 'route-dest-inner'];
-
 function clearRoute() {
   ROUTE_LAYERS.forEach(id => { if (map.getLayer(id)) map.removeLayer(id); });
   if (map.getSource('route-line')) map.removeSource('route-line');
   if (map.getSource('route-dest')) map.removeSource('route-dest');
-  document.querySelectorAll('.route-time').forEach(el => el.textContent = '');
+  document.querySelectorAll('.row-route').forEach(el => el.textContent = '');
 }
 
 function showRouteOpt(cat, idx) {
   const info = lastData?.category_scores?.[cat];
   const opts = info?.options;
   if (!opts || !opts[idx]) return;
-  const dest = opts[idx];
-  _drawRoute(cat, dest, info.distance_m);
+  _drawRoute(cat, opts[idx], info.distance_m);
 }
 
 async function _drawRoute(cat, dest, straightDist) {
-  document.querySelectorAll('.scene-row').forEach(c => c.classList.remove('active'));
+  document.querySelectorAll('.row').forEach(c => c.classList.remove('active'));
   document.querySelector(`[data-cat="${cat}"]`)?.classList.add('active');
   clearRoute();
-  const c = distColor(straightDist);
+  const c = distColor(straightDist).replace('var(--g-green)','#1a9a4a').replace('var(--g-lime)','#5a8c1e').replace('var(--g-amber)','#b8760a').replace('var(--g-red)','#c93a2e').replace('var(--g-muted)','#8b95a5');
   try {
     const resp = await fetch(`https://api.mapbox.com/directions/v5/mapbox/walking/${queryLng},${queryLat};${dest.lng},${dest.lat}?geometries=geojson&access_token=${mapboxToken}`);
     const data = await resp.json();
     const route = data.routes?.[0];
     if (!route) return;
-
     map.addSource('route-line', { type: 'geojson', data: { type: 'Feature', geometry: route.geometry } });
-    map.addLayer({ id: 'route-outline', type: 'line', source: 'route-line',
-      paint: { 'line-color': '#ffffff', 'line-width': 8, 'line-opacity': 0.9 } });
-    map.addLayer({ id: 'route-line', type: 'line', source: 'route-line',
-      paint: { 'line-color': c, 'line-width': 4, 'line-opacity': 0.9, 'line-dasharray': [0, 1.5, 3] } });
-
+    map.addLayer({ id: 'route-outline', type: 'line', source: 'route-line', paint: { 'line-color': '#fff', 'line-width': 8, 'line-opacity': .9 } });
+    map.addLayer({ id: 'route-line', type: 'line', source: 'route-line', paint: { 'line-color': c, 'line-width': 4, 'line-opacity': .9, 'line-dasharray': [0, 1.5, 3] } });
     map.addSource('route-dest', { type: 'geojson', data: { type: 'Feature', geometry: { type: 'Point', coordinates: [dest.lng, dest.lat] } } });
-    map.addLayer({ id: 'route-dest', type: 'circle', source: 'route-dest',
-      paint: { 'circle-radius': 8, 'circle-color': c, 'circle-stroke-width': 3, 'circle-stroke-color': '#fff' } });
-    map.addLayer({ id: 'route-dest-inner', type: 'circle', source: 'route-dest',
-      paint: { 'circle-radius': 3, 'circle-color': '#fff' } });
-
+    map.addLayer({ id: 'route-dest', type: 'circle', source: 'route-dest', paint: { 'circle-radius': 8, 'circle-color': c, 'circle-stroke-width': 3, 'circle-stroke-color': '#fff' } });
+    map.addLayer({ id: 'route-dest-inner', type: 'circle', source: 'route-dest', paint: { 'circle-radius': 3, 'circle-color': '#fff' } });
     const mins = Math.round(route.duration / 60);
     const distM = Math.round(route.distance);
-    const el = document.querySelector(`[data-cat="${cat}"] .route-time`);
-    if (el) el.innerHTML = `<span style="color:${c}">${mins} min</span> · ${distM}m to ${dest.name || 'destination'}`;
-
+    const el = document.querySelector(`[data-cat="${cat}"] .row-route`);
+    if (el) el.innerHTML = `<span style="color:${c};font-weight:600">${mins} min</span> <span style="color:var(--text-3)">&middot; ${distM}m to ${dest.name || 'destination'}</span>`;
     const bounds = new mapboxgl.LngLatBounds();
     route.geometry.coordinates.forEach(p => bounds.extend(p));
     bounds.extend([queryLng, queryLat]);
-    map.fitBounds(bounds, { padding: { top: 60, bottom: 60, left: 60, right: 420 }, maxZoom: 17 });
+    map.fitBounds(bounds, { padding: { top: 60, bottom: 60, left: 60, right: 400 }, maxZoom: 17 });
   } catch (e) { console.warn('Route failed:', e); }
 }
 
@@ -243,17 +303,12 @@ async function query() {
   queryLat = parseFloat(document.getElementById('lat').value);
   queryLng = parseFloat(document.getElementById('lng').value);
   if (isNaN(queryLat) || isNaN(queryLng)) return;
-
   clearRoute();
-  ['poi-markers', 'poi-logos', 'query-pt-circle', 'iso-5-fill', 'iso-10-fill', 'iso-15-fill', 'iso-5-line', 'iso-10-line', 'iso-15-line'].forEach(id => {
-    if (map.getLayer(id)) map.removeLayer(id);
-  });
-  ['poi-markers', 'poi-logos', 'query-pt-circle', 'iso-5', 'iso-10', 'iso-15'].forEach(id => {
-    if (map.getSource(id)) map.removeSource(id);
-  });
+  ['poi-markers', 'poi-logos', 'query-pt-circle', 'iso-5-fill', 'iso-10-fill', 'iso-15-fill', 'iso-5-line', 'iso-10-line', 'iso-15-line'].forEach(id => { if (map.getLayer(id)) map.removeLayer(id); });
+  ['poi-markers', 'poi-logos', 'query-pt-circle', 'iso-5', 'iso-10', 'iso-15'].forEach(id => { if (map.getSource(id)) map.removeSource(id); });
   map.flyTo({ center: [queryLng, queryLat], zoom: Math.max(map.getZoom(), 15), duration: 800 });
   map.addSource('query-pt-circle', { type: 'geojson', data: { type: 'Feature', geometry: { type: 'Point', coordinates: [queryLng, queryLat] } } });
-  map.addLayer({ id: 'query-pt-circle', type: 'circle', source: 'query-pt-circle', paint: { 'circle-radius': 10, 'circle-color': '#16a34a', 'circle-stroke-width': 3, 'circle-stroke-color': '#fff' } });
+  map.addLayer({ id: 'query-pt-circle', type: 'circle', source: 'query-pt-circle', paint: { 'circle-radius': 10, 'circle-color': '#1a9a4a', 'circle-stroke-width': 3, 'circle-stroke-color': '#fff' } });
 
   const loading = document.getElementById('loading');
   const scoreBox = document.getElementById('score-box');
@@ -265,36 +320,30 @@ async function query() {
     const d = await resp.json();
     loading.classList.add('hidden');
     lastData = d;
-    if (d.error) { scoreBox.classList.remove('hidden'); scoreBox.innerHTML = `<div class="text-red-500 text-sm">${d.error}</div>`; return; }
+    if (d.error) { scoreBox.classList.remove('hidden'); scoreBox.innerHTML = `<div style="color:var(--g-red);font-size:13px">${d.error}</div>`; return; }
 
     const sc = d.score; const color = scoreColor(sc);
     scoreBox.classList.remove('hidden');
-    scoreBox.innerHTML = `
-      <div class="flex items-baseline gap-2 mb-1">
-        <div class="text-4xl font-bold leading-none" style="color:${color}">${sc}</div>
-        <div class="text-sm font-semibold text-slate-500">/100</div>
-        <div class="ml-auto text-xs text-slate-400">${d.poi_count} POIs</div>
+    scoreBox.innerHTML = `<div class="score-card">
+      <div style="display:flex;align-items:baseline;gap:6px">
+        <div class="score-num" style="color:${color}">${sc}</div>
+        <div style="font-size:14px;font-weight:600;color:var(--text-3)">/100</div>
+        <div style="margin-left:auto;font-size:11px;color:var(--text-3)">${d.poi_count} POIs</div>
       </div>
-      <div class="text-[11px] font-semibold text-slate-600 mb-2">${d.label}</div>
-      <div class="relative h-2 rounded-full overflow-hidden mb-1" style="background:linear-gradient(90deg,#dc2626 0%,#d97706 25%,#65a30d 50%,#16a34a 75%,#16a34a 100%);opacity:0.25"></div>
-      <div class="relative -mt-3 mb-2 h-2"><div class="absolute h-2 w-1 bg-slate-900 rounded-full" style="left:${sc}%;transform:translateX(-50%)"></div></div>
-      <div class="flex justify-between text-[9px] text-slate-400"><span>0 car-dependent</span><span>100 walker's paradise</span></div>
-      ${d.summary ? `<div class="text-xs text-slate-600 mt-2 leading-relaxed">${d.summary}</div>` : ''}
-      ${d.slope_penalty ? `<div class="text-[11px] text-amber-600 mt-1">Hilly terrain (${Math.round((1-d.slope_penalty)*100)}% reduction)</div>` : ''}
-      ${d.barriers_crossed ? `<div class="text-[11px] text-amber-600 mt-1">${d.barriers_crossed} highway barrier(s)</div>` : ''}`;
+      <div class="score-label">${d.label}</div>
+      <div class="score-bar"><div class="score-dot" style="left:${sc}%"></div></div>
+      <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--text-3);margin-top:2px"><span>Car-dependent</span><span>Walker's paradise</span></div>
+      ${d.summary ? `<div class="score-summary">${d.summary}</div>` : ''}
+      ${d.slope_penalty ? `<div class="score-badge" style="background:#fef3cd;color:#92400e">Hilly terrain &minus;${Math.round((1-d.slope_penalty)*100)}%</div>` : ''}
+      ${d.barriers_crossed ? `<div class="score-badge" style="background:#fef3cd;color:#92400e">${d.barriers_crossed} highway barrier(s)</div>` : ''}
+    </div>`;
 
-    // Isochrone (5/10/15 min walking)
+    // Isochrone
     try {
-      const isoUrl = `https://api.mapbox.com/isochrone/v1/mapbox/walking/${queryLng},${queryLat}?contours_minutes=5,10,15&polygons=true&access_token=${mapboxToken}`;
-      const isoResp = await fetch(isoUrl);
+      const isoResp = await fetch(`https://api.mapbox.com/isochrone/v1/mapbox/walking/${queryLng},${queryLat}?contours_minutes=5,10,15&polygons=true&access_token=${mapboxToken}`);
       const isoData = await isoResp.json();
       const isoFeats = isoData.features || [];
-      const isoConf = [
-        { minutes: 5,  color: '#16a34a', opacity: 0.3 },
-        { minutes: 10, color: '#65a30d', opacity: 0.2 },
-        { minutes: 15, color: '#d97706', opacity: 0.12 },
-      ];
-      // Add largest first so smaller polygons render on top
+      const isoConf = [{ minutes:5, color:'#1a9a4a', opacity:.25 }, { minutes:10, color:'#5a8c1e', opacity:.15 }, { minutes:15, color:'#b8760a', opacity:.08 }];
       for (let i = isoFeats.length - 1; i >= 0; i--) {
         const f = isoFeats[i];
         const contour = f.properties?.contour || isoConf[i]?.minutes || (i+1)*5;
@@ -302,19 +351,14 @@ async function query() {
         const srcId = `iso-${contour}`;
         if (!map.getSource(srcId)) {
           map.addSource(srcId, { type: 'geojson', data: f });
-          map.addLayer({ id: srcId + '-fill', type: 'fill', source: srcId,
-            paint: { 'fill-color': conf.color, 'fill-opacity': conf.opacity } });
-          map.addLayer({ id: srcId + '-line', type: 'line', source: srcId,
-            paint: { 'line-color': conf.color, 'line-width': 2, 'line-opacity': 0.7, 'line-dasharray': [3, 2] } });
+          map.addLayer({ id: srcId + '-fill', type: 'fill', source: srcId, paint: { 'fill-color': conf.color, 'fill-opacity': conf.opacity } });
+          map.addLayer({ id: srcId + '-line', type: 'line', source: srcId, paint: { 'line-color': conf.color, 'line-width': 1.5, 'line-opacity': .5, 'line-dasharray': [4, 3] } });
         }
       }
     } catch (e) { console.warn('Isochrone failed:', e); }
 
-    // POI markers — brand logos on map
-    const poiPlain = [];
-    const poiLogos = [];
-    const logoLoadPromises = [];
-
+    // POI markers
+    const poiPlain = [], poiLogos = [], logoLoadPromises = [];
     for (const [cat, info] of Object.entries(d.category_scores)) {
       if (!info.nearest) continue;
       const opts = info.options || [info.nearest];
@@ -325,100 +369,74 @@ async function query() {
           const imgId = `logo-${cat}-${o.name.replace(/\W/g,'')}`.substring(0, 40);
           feat.properties.iconId = imgId;
           poiLogos.push(feat);
-          if (!map.hasImage(imgId)) {
-            logoLoadPromises.push(new Promise(resolve => {
-              map.loadImage(logo, (err, img) => {
-                if (!err && img) map.addImage(imgId, img, { sdf: false });
-                resolve();
-              });
-            }));
-          }
-        } else {
-          poiPlain.push(feat);
-        }
+          if (!map.hasImage(imgId)) logoLoadPromises.push(new Promise(resolve => { map.loadImage(logo, (err, img) => { if (!err && img) map.addImage(imgId, img, { sdf: false }); resolve(); }); }));
+        } else poiPlain.push(feat);
       }
     }
-
     await Promise.all(logoLoadPromises);
-
     if (poiPlain.length) {
       map.addSource('poi-markers', { type: 'geojson', data: { type: 'FeatureCollection', features: poiPlain } });
-      map.addLayer({ id: 'poi-markers', type: 'circle', source: 'poi-markers',
-        paint: { 'circle-radius': 5, 'circle-color': '#f59e0b', 'circle-stroke-width': 1.5, 'circle-stroke-color': '#fff' } });
+      map.addLayer({ id: 'poi-markers', type: 'circle', source: 'poi-markers', paint: { 'circle-radius': 5, 'circle-color': '#f59e0b', 'circle-stroke-width': 1.5, 'circle-stroke-color': '#fff' } });
     }
     if (poiLogos.length) {
       if (!map.getSource('poi-logos')) {
         map.addSource('poi-logos', { type: 'geojson', data: { type: 'FeatureCollection', features: poiLogos } });
-        map.addLayer({ id: 'poi-logos', type: 'symbol', source: 'poi-logos',
-          layout: { 'icon-image': ['get', 'iconId'], 'icon-size': 0.8, 'icon-allow-overlap': true, 'icon-anchor': 'center' } });
-      } else {
-        map.getSource('poi-logos').setData({ type: 'FeatureCollection', features: poiLogos });
-      }
+        map.addLayer({ id: 'poi-logos', type: 'symbol', source: 'poi-logos', layout: { 'icon-image': ['get', 'iconId'], 'icon-size': .8, 'icon-allow-overlap': true } });
+      } else map.getSource('poi-logos').setData({ type: 'FeatureCollection', features: poiLogos });
     }
 
-    // Scene rows grouped
+    // Scene rows
     scenes.classList.remove('hidden');
     const groups = { essential: [], lifestyle: [], extra: [] };
-    for (const [cat, info] of Object.entries(d.category_scores)) {
-      (groups[info.group] || groups.extra).push([cat, info]);
-    }
-    // Sort each group: found first (by distance), then not-found
-    for (const g of Object.values(groups)) {
-      g.sort((a,b) => {
-        if (a[1].distance_m == null) return 1;
-        if (b[1].distance_m == null) return -1;
-        return a[1].distance_m - b[1].distance_m;
-      });
-    }
+    for (const [cat, info] of Object.entries(d.category_scores)) (groups[info.group] || groups.extra).push([cat, info]);
+    for (const g of Object.values(groups)) g.sort((a,b) => { if (a[1].distance_m == null) return 1; if (b[1].distance_m == null) return -1; return a[1].distance_m - b[1].distance_m; });
 
-    let html = '';
+    let html = '', gIdx = 0;
     for (const [gKey, gLabel] of Object.entries(GROUP_LABELS)) {
       const items = groups[gKey];
       if (!items || !items.length) continue;
-      html += `<div class="group-label">${gLabel}</div>`;
+      html += `<div class="group-hdr${gIdx === 0 ? '' : ''}">${gLabel}</div>`;
+      gIdx++;
       for (const [cat, info] of items) {
         const dist = info.distance_m;
         const found = dist != null;
         const name = info.nearest?.name || '';
         const c = distColor(dist);
+        const cRaw = c.startsWith('var(') ? { 'var(--g-green)':'#1a9a4a','var(--g-lime)':'#5a8c1e','var(--g-amber)':'#b8760a','var(--g-red)':'#c93a2e','var(--g-muted)':'#8b95a5' }[c] || '#8b95a5' : c;
         const opts = info.options || [];
+
         let optsHtml = '';
         if (opts.length > 1) {
-          optsHtml = `<div class="mt-1.5 ml-1 space-y-1">`;
+          optsHtml = '<div class="opts">';
           for (let i = 0; i < opts.length; i++) {
             const o = opts[i];
             const oc = distColor(o.distance_m);
+            const ocRaw = oc.startsWith('var(') ? { 'var(--g-green)':'#1a9a4a','var(--g-lime)':'#5a8c1e','var(--g-amber)':'#b8760a','var(--g-red)':'#c93a2e','var(--g-muted)':'#8b95a5' }[oc] || '#8b95a5' : oc;
             const oMin = Math.max(1, Math.round(o.distance_m / 80));
             const logo = brandLogo(o.name);
-            const logoHtml = logo
-              ? `<img src="${logo}" width="16" height="16" class="flex-shrink-0 rounded" style="image-rendering:crisp-edges" onerror="this.style.display='none'">`
-              : `<span class="w-1.5 h-1.5 rounded-full flex-shrink-0" style="background:${oc}"></span>`;
-            optsHtml += `<div class="flex items-center gap-1.5 text-[11px] cursor-pointer hover:text-slate-900 rounded px-1 py-0.5 hover:bg-slate-50" data-cat="${cat}" data-opt="${i}" onclick="showRouteOpt('${cat}',${i})">
-              ${logoHtml}
-              <span class="truncate text-slate-500${i === 0 ? ' font-medium' : ''}">${o.name}</span>
-              <span class="ml-auto flex-shrink-0 text-slate-400">${o.distance_m}m · ${oMin}min</span>
-            </div>`;
+            const logoEl = logo ? `<img src="${logo}" class="opt-logo" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'opt-dot',style:'background:${ocRaw}'}))">` : `<div class="opt-dot" style="background:${ocRaw}"></div>`;
+            optsHtml += `<div class="opt" data-cat="${cat}" data-opt="${i}" onclick="showRouteOpt('${cat}',${i})">${logoEl}<span class="opt-name">${o.name}</span><span class="opt-meta">${o.distance_m}m &middot; ${oMin}min</span></div>`;
           }
-          optsHtml += `</div>`;
+          optsHtml += '</div>';
         }
-        html += `
-          <div class="scene-row ${found ? '' : 'none'}" data-cat="${cat}" ${found && opts.length <= 1 ? `onclick="showRoute('${cat}')"` : ''}>
-            ${icon(info.icon, found ? c : '#94a3b8')}
-            <div class="flex-1 min-w-0">
-              <div class="flex items-center justify-between gap-2">
-                <span class="text-[13px] font-medium text-slate-800 truncate">${info.label}</span>
-                ${distPill(dist)}
-              </div>
-              ${opts.length <= 1 && name ? `<div class="text-[11px] text-slate-400 truncate mt-0.5">${name}</div>` : ''}
-              ${optsHtml}
-              ${info.barrier ? '<div class="text-[10px] text-amber-500 mt-0.5">Highway crossing</div>' : ''}
-              <div class="route-time text-[11px] mt-0.5"></div>
+
+        html += `<div class="row ${found ? '' : 'dim'}" data-cat="${cat}" ${found && opts.length <= 1 ? `onclick="showRoute('${cat}')"` : ''}>
+          ${mkIcon(info.icon, found ? cRaw : '#8b95a5')}
+          <div class="row-body">
+            <div class="row-head">
+              <span class="row-label">${info.label}</span>
+              ${distPill(dist)}
             </div>
-          </div>`;
+            ${opts.length <= 1 && name ? `<div class="row-name">${name}</div>` : ''}
+            ${optsHtml}
+            ${info.barrier ? '<div class="row-barrier">Highway crossing required</div>' : ''}
+            <div class="row-route"></div>
+          </div>
+        </div>`;
       }
     }
     scenes.innerHTML = html;
-  } catch (e) { loading.classList.add('hidden'); scoreBox.classList.remove('hidden'); scoreBox.innerHTML = `<div class="text-red-500 text-sm">Error: ${e.message}</div>`; }
+  } catch (e) { loading.classList.add('hidden'); scoreBox.classList.remove('hidden'); scoreBox.innerHTML = `<div style="color:var(--g-red);font-size:13px">Error: ${e.message}</div>`; }
 }
 
 initMap();

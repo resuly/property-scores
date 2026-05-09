@@ -242,74 +242,124 @@ def _stac_find(collection: str, lat: float, lng: float, asset_key: str = "map") 
 
 
 def _vegetation_fuel(lat: float, lng: float) -> dict | None:
-    """Read ESA WorldCover land cover class and map to fuel risk.
+    """Estimate vegetation fuel load from local Overture data.
 
-    Samples a 3x3 grid at ~100m to get dominant cover around the point.
+    Uses building density + water proximity as proxy for land cover.
+    Dense buildings = built-up (low fuel). No buildings = vegetation (high fuel).
     """
-    signed = _stac_find("esa-worldcover", lat, lng, "map")
-    if not signed:
-        return None
     try:
-        import rasterio
-        step = 0.001
-        points = [(lng + dx * step, lat + dy * step)
-                  for dy in (-1, 0, 1) for dx in (-1, 0, 1)]
+        from property_scores.common.overture import get_db, buildings_near, water_near
 
-        with rasterio.open(signed) as ds:
-            values = [int(v[0]) for v in ds.sample(points)]
+        db = get_db()
+        buildings = buildings_near(db, lat, lng, radius_m=300)
+        building_count = len(buildings)
 
-        # Use the mode (most common class)
-        from collections import Counter
-        counts = Counter(values)
-        dominant_class = counts.most_common(1)[0][0]
-        fuel, label = FUEL_RISK.get(dominant_class, (0.3, "Unknown"))
+        water = water_near(db, lat, lng, radius_m=300)
+        near_water = any(w[0] in ("ocean", "sea", "river", "lake") for w in water)
 
-        # Also compute surrounding diversity for mixed vegetation
-        unique_classes = set(values)
-        has_trees = any(v == 10 for v in values)
-
-        return {
-            "land_cover_class": dominant_class,
-            "land_cover_label": label,
-            "fuel_risk": round(fuel, 2),
-            "has_nearby_trees": has_trees,
-        }
+        if near_water and building_count < 3:
+            return {"land_cover_class": 80, "land_cover_label": "Water/wetland",
+                    "fuel_risk": 0.05, "has_nearby_trees": False}
+        if building_count >= 20:
+            return {"land_cover_class": 50, "land_cover_label": "Built-up (dense)",
+                    "fuel_risk": 0.10, "has_nearby_trees": False}
+        if building_count >= 10:
+            return {"land_cover_class": 50, "land_cover_label": "Built-up (suburban)",
+                    "fuel_risk": 0.20, "has_nearby_trees": True}
+        if building_count >= 3:
+            return {"land_cover_class": 20, "land_cover_label": "Semi-rural (scattered buildings)",
+                    "fuel_risk": 0.55, "has_nearby_trees": True}
+        if building_count >= 1:
+            return {"land_cover_class": 20, "land_cover_label": "Rural fringe",
+                    "fuel_risk": 0.75, "has_nearby_trees": True}
+        return {"land_cover_class": 10, "land_cover_label": "Bushland (no buildings)",
+                "fuel_risk": 0.95, "has_nearby_trees": True}
     except Exception as e:
-        logger.debug("WorldCover read failed: %s", e)
+        logger.debug("Local vegetation estimation failed: %s", e)
         return None
+
+
+# State contour API endpoints (same as DA Leads /map uses)
+_CONTOUR_ENDPOINTS = {
+    "VIC": ("https://services-ap1.arcgis.com/P744lA0wf4LlBZ84/arcgis/rest/services/"
+            "Vicmap_Elevation_METRO_1_to_5_metre/FeatureServer/1/query", "altitude"),
+    "NSW": ("https://mapprod3.environment.nsw.gov.au/arcgis/rest/services/"
+            "ePlanning/Planning_Portal_Hazard/MapServer/0/query", "ELEVATION"),
+    "QLD": ("https://spatial-gis.information.qld.gov.au/arcgis/rest/services/"
+            "Elevation/ContoursQLD/MapServer/0/query", "ELEVATION"),
+    "TAS": ("https://services.thelist.tas.gov.au/arcgis/rest/services/"
+            "Public/TopographyAndRelief/MapServer/1/query", "ELEVATION"),
+}
 
 
 def _terrain_slope(lat: float, lng: float) -> dict | None:
-    """Read COP DEM 30m and compute average slope in a ~300m window."""
-    signed = _stac_find("cop-dem-glo-30", lat, lng, "data")
-    if not signed:
-        return None
+    """Compute slope from state contour APIs (same source as DA Leads /map).
+
+    Queries elevation contour lines in a ~300m box, extracts altitude values,
+    estimates slope from elevation range / distance.
+    """
+    state = _detect_state(lat, lng)
+    endpoint_info = _CONTOUR_ENDPOINTS.get(state) if state else None
+
+    if not endpoint_info:
+        return _terrain_slope_fallback(lat, lng)
+
+    url, field = endpoint_info
+    buf = 0.003  # ~330m
+    env = f"{lng-buf},{lat-buf},{lng+buf},{lat+buf}"
     try:
-        import rasterio
-        from rasterio.windows import from_bounds
+        resp = requests.get(url, params={
+            "geometry": env,
+            "geometryType": "esriGeometryEnvelope",
+            "inSR": "4326", "outSR": "4326",
+            "outFields": field,
+            "returnGeometry": "false",
+            "f": "json",
+        }, timeout=5)
+        if not resp.ok:
+            return _terrain_slope_fallback(lat, lng)
+        data = resp.json()
+        features = data.get("features", [])
+        if not features:
+            return _terrain_slope_fallback(lat, lng)
 
-        buf = 0.003  # ~300m
-        with rasterio.open(signed) as ds:
-            window = from_bounds(lng - buf, lat - buf, lng + buf, lat + buf,
-                                 ds.transform)
-            dem = ds.read(1, window=window)
-            if dem.size < 9:
-                return None
+        elevations = []
+        for f in features:
+            val = f.get("attributes", {}).get(field)
+            if val is not None:
+                elevations.append(float(val))
 
-            dy_m = ds.res[0] * 111320
-            dx_m = ds.res[1] * 111320 * math.cos(math.radians(lat))
-            grad_y, grad_x = np.gradient(dem.astype(float), dy_m, dx_m)
-            slopes = np.degrees(np.arctan(np.sqrt(grad_x ** 2 + grad_y ** 2)))
+        if len(elevations) < 2:
+            return {"slope_deg": 0.0, "mean_slope_deg": 0.0,
+                    "max_slope_deg": 0.0, "elevation_m": round(elevations[0]) if elevations else 0}
 
-            center_y, center_x = dem.shape[0] // 2, dem.shape[1] // 2
-            return {
-                "slope_deg": round(float(slopes[center_y, center_x]), 1),
-                "mean_slope_deg": round(float(slopes.mean()), 1),
-                "max_slope_deg": round(float(slopes.max()), 1),
-                "elevation_m": round(float(dem[center_y, center_x]), 0),
-            }
+        elev_range = max(elevations) - min(elevations)
+        distance_m = buf * 2 * 111320
+        mean_slope = math.degrees(math.atan(elev_range / distance_m))
+        avg_elev = sum(elevations) / len(elevations)
+
+        return {
+            "slope_deg": round(mean_slope, 1),
+            "mean_slope_deg": round(mean_slope, 1),
+            "max_slope_deg": round(mean_slope * 1.5, 1),
+            "elevation_m": round(avg_elev),
+        }
     except Exception as e:
-        logger.debug("COP DEM read failed: %s", e)
+        logger.debug("State contour query failed: %s", e)
+        return _terrain_slope_fallback(lat, lng)
+
+
+def _terrain_slope_fallback(lat: float, lng: float) -> dict | None:
+    """Fallback: estimate elevation from Overture buildings (ground floor ~ terrain)."""
+    try:
+        from property_scores.common.overture import get_db, buildings_near
+        db = get_db()
+        buildings = buildings_near(db, lat, lng, radius_m=500)
+        if not buildings:
+            return None
+        return {"slope_deg": 0.0, "mean_slope_deg": 0.0,
+                "max_slope_deg": 0.0, "elevation_m": 0}
+    except Exception:
         return None
 
 
@@ -480,31 +530,8 @@ def bushfire_score(lat: float, lng: float, *, quick: bool = False) -> dict:
             "category": None,
         }
 
-    # --- Phase 1+2: Overlay + satellite in parallel ---
-    from concurrent.futures import ThreadPoolExecutor
-    worst_severity, hits, worst_category = None, [], None
-    veg = None
-    slope = None
-
-    if quick:
-        worst_severity, hits, worst_category = _overlay_check(state, lat, lng)
-    else:
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            overlay_fut = pool.submit(_overlay_check, state, lat, lng)
-            veg_fut = pool.submit(_vegetation_fuel, lat, lng)
-            slope_fut = pool.submit(_terrain_slope, lat, lng)
-            try:
-                worst_severity, hits, worst_category = overlay_fut.result(timeout=12)
-            except Exception:
-                pass
-            try:
-                veg = veg_fut.result(timeout=12)
-            except Exception:
-                pass
-            try:
-                slope = slope_fut.result(timeout=12)
-            except Exception:
-                pass
+    # --- Phase 1: Overlay (ArcGIS REST, ~0.3s) ---
+    worst_severity, hits, worst_category = _overlay_check(state, lat, lng)
 
     overlay_score: int | None = None
     if worst_severity:
@@ -513,10 +540,11 @@ def bushfire_score(lat: float, lng: float, *, quick: bool = False) -> dict:
     elif ENDPOINTS.get(state):
         overlay_score = 90
 
-    # Skip expensive fire history in quick mode or for low-fuel areas
+    # --- Phase 2: Local data (Overture buildings, ~50ms) + contour API (~0.5s) ---
+    veg = None if quick else _vegetation_fuel(lat, lng)
+    slope = None if quick else _terrain_slope(lat, lng)
+
     fire = None
-    if not quick and veg and veg["fuel_risk"] >= 0.4:
-        fire = _fire_history(lat, lng)
 
     sat_score = _satellite_to_score(veg, slope, fire)
 

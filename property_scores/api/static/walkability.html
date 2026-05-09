@@ -100,6 +100,8 @@
   .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
   .legend-swatch { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; }
 
+  .poi-popup .mapboxgl-popup-content { padding: 8px 12px; border-radius: 8px; font-family: 'DM Sans', sans-serif; font-size: 12px; box-shadow: 0 4px 12px rgba(0,0,0,.15); }
+  .poi-popup .mapboxgl-popup-tip { border-top-color: #fff; }
   .hidden { display: none !important; }
 </style>
 </head>
@@ -393,14 +395,23 @@ async function query() {
       }
     } catch (e) { console.warn('Isochrone failed:', e); }
 
-    // POI markers
+    // POI markers — color by category
+    const CAT_COLORS = {
+      supermarket:'#e74c3c', train:'#3498db', primary_school:'#2ecc71', gp_clinic:'#e67e22',
+      park:'#27ae60', childcare:'#9b59b6', pharmacy:'#1abc9c', tram_bus:'#3498db',
+      cafe:'#8b6914', restaurant:'#c0392b', convenience:'#e67e22', secondary_school:'#2ecc71',
+      hospital:'#e74c3c', fitness:'#e74c3c', shopping:'#8e44ad', bank:'#2c3e50',
+      library:'#7f8c8d', post_office:'#e74c3c', playground:'#f39c12', dog_park:'#d35400',
+      walking_trail:'#16a085', beach:'#2980b9', sports:'#27ae60', pool:'#3498db',
+    };
     const poiPlain = [], poiLogos = [], logoLoadPromises = [];
     for (const [cat, info] of Object.entries(d.category_scores)) {
       if (!info.nearest) continue;
       const opts = info.options || [info.nearest];
       for (const o of opts) {
         const logo = brandLogo(o.name);
-        const feat = { type: 'Feature', geometry: { type: 'Point', coordinates: [o.lng, o.lat] }, properties: { cat, name: o.name } };
+        const label = info.label || cat;
+        const feat = { type: 'Feature', geometry: { type: 'Point', coordinates: [o.lng, o.lat] }, properties: { cat, name: o.name, label, color: CAT_COLORS[cat] || '#7f8c8d' } };
         if (logo) {
           const imgId = `logo-${cat}-${o.name.replace(/\W/g,'')}`.substring(0, 40);
           feat.properties.iconId = imgId;
@@ -412,7 +423,8 @@ async function query() {
     await Promise.all(logoLoadPromises);
     if (poiPlain.length) {
       map.addSource('poi-markers', { type: 'geojson', data: { type: 'FeatureCollection', features: poiPlain } });
-      map.addLayer({ id: 'poi-markers', type: 'circle', source: 'poi-markers', paint: { 'circle-radius': 5, 'circle-color': '#f59e0b', 'circle-stroke-width': 1.5, 'circle-stroke-color': '#fff' } });
+      map.addLayer({ id: 'poi-markers', type: 'circle', source: 'poi-markers',
+        paint: { 'circle-radius': 6, 'circle-color': ['get', 'color'], 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' } });
     }
     if (poiLogos.length) {
       if (!map.getSource('poi-logos')) {
@@ -420,6 +432,17 @@ async function query() {
         map.addLayer({ id: 'poi-logos', type: 'symbol', source: 'poi-logos', layout: { 'icon-image': ['get', 'iconId'], 'icon-size': .8, 'icon-allow-overlap': true } });
       } else map.getSource('poi-logos').setData({ type: 'FeatureCollection', features: poiLogos });
     }
+
+    // Hover popup for POI markers
+    const popup = new mapboxgl.Popup({ closeButton: false, closeOnClick: false, offset: 12, className: 'poi-popup' });
+    ['poi-markers', 'poi-logos'].forEach(layerId => {
+      map.on('mouseenter', layerId, e => {
+        map.getCanvas().style.cursor = 'pointer';
+        const p = e.features[0].properties;
+        popup.setLngLat(e.lngLat).setHTML(`<strong>${p.name}</strong><br><span style="color:var(--text-3);font-size:11px">${p.label}</span>`).addTo(map);
+      });
+      map.on('mouseleave', layerId, () => { map.getCanvas().style.cursor = ''; popup.remove(); });
+    });
 
     // Scene rows
     scenes.classList.remove('hidden');
@@ -437,8 +460,7 @@ async function query() {
         const dist = info.distance_m;
         const found = dist != null;
         const name = info.nearest?.name || '';
-        const c = distColor(dist);
-        const cRaw = c.startsWith('var(') ? { 'var(--g-green)':'#1a9a4a','var(--g-lime)':'#5a8c1e','var(--g-amber)':'#b8760a','var(--g-red)':'#c93a2e','var(--g-muted)':'#8b95a5' }[c] || '#8b95a5' : c;
+        const iconColor = found ? '#64748b' : '#c0c7d0';
         const opts = info.options || [];
 
         let optsHtml = '';
@@ -446,11 +468,9 @@ async function query() {
           optsHtml = '<div class="opts">';
           for (let i = 0; i < opts.length; i++) {
             const o = opts[i];
-            const oc = distColor(o.distance_m);
-            const ocRaw = oc.startsWith('var(') ? { 'var(--g-green)':'#1a9a4a','var(--g-lime)':'#5a8c1e','var(--g-amber)':'#b8760a','var(--g-red)':'#c93a2e','var(--g-muted)':'#8b95a5' }[oc] || '#8b95a5' : oc;
             const oMin = Math.max(1, Math.round(o.distance_m / 80));
             const logo = brandLogo(o.name);
-            const miniSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="${ocRaw}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;flex-shrink:0;opacity:.6">${SVGS[info.icon] || SVGS.convenience}</svg>`;
+            const miniSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;flex-shrink:0;opacity:.5">${SVGS[info.icon] || SVGS.convenience}</svg>`;
             const logoEl = logo ? `<img src="${logo}" class="opt-logo" onerror="this.style.display='none';this.nextElementSibling.style.display=''">${miniSvg.replace('style="','style="display:none;')}` : miniSvg;
             optsHtml += `<div class="opt" data-cat="${cat}" data-opt="${i}" onclick="showRouteOpt('${cat}',${i})">${logoEl}<span class="opt-name">${o.name}</span><span class="opt-meta">${o.distance_m}m &middot; ${oMin}min</span></div>`;
           }
@@ -458,7 +478,7 @@ async function query() {
         }
 
         html += `<div class="row ${found ? '' : 'dim'}" data-cat="${cat}" ${found && opts.length <= 1 ? `onclick="showRoute('${cat}')"` : ''}>
-          ${mkIcon(info.icon, found ? cRaw : '#8b95a5')}
+          ${mkIcon(info.icon, iconColor)}
           <div class="row-body">
             <div class="row-head">
               <span class="row-label">${info.label}</span>

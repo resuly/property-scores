@@ -140,9 +140,13 @@ async function initMap() {
   map.on('click', (e) => { document.getElementById('lat').value = e.lngLat.lat.toFixed(6); document.getElementById('lng').value = e.lngLat.lng.toFixed(6); query(); });
 }
 
+const ROUTE_LAYERS = ['route-outline', 'route-line', 'route-dest', 'route-dest-inner'];
+
 function clearRoute() {
-  if (map.getLayer('route-line')) map.removeLayer('route-line');
+  ROUTE_LAYERS.forEach(id => { if (map.getLayer(id)) map.removeLayer(id); });
   if (map.getSource('route-line')) map.removeSource('route-line');
+  if (map.getSource('route-dest')) map.removeSource('route-dest');
+  document.querySelectorAll('.route-time').forEach(el => el.textContent = '');
 }
 
 async function showRoute(cat) {
@@ -152,19 +156,34 @@ async function showRoute(cat) {
   document.querySelector(`[data-cat="${cat}"]`)?.classList.add('active');
   clearRoute();
   const dest = info.nearest;
+  const c = distColor(info.distance_m);
   try {
     const resp = await fetch(`https://api.mapbox.com/directions/v5/mapbox/walking/${queryLng},${queryLat};${dest.lng},${dest.lat}?geometries=geojson&access_token=${mapboxToken}`);
     const data = await resp.json();
     const route = data.routes?.[0];
     if (!route) return;
+
     map.addSource('route-line', { type: 'geojson', data: { type: 'Feature', geometry: route.geometry } });
-    map.addLayer({ id: 'route-line', type: 'line', source: 'route-line', paint: { 'line-color': '#22c55e', 'line-width': 4, 'line-opacity': 0.85 } });
+    map.addLayer({ id: 'route-outline', type: 'line', source: 'route-line',
+      paint: { 'line-color': '#ffffff', 'line-width': 8, 'line-opacity': 0.9 } });
+    map.addLayer({ id: 'route-line', type: 'line', source: 'route-line',
+      paint: { 'line-color': c, 'line-width': 4, 'line-opacity': 0.9, 'line-dasharray': [0, 1.5, 3] } });
+
+    map.addSource('route-dest', { type: 'geojson', data: { type: 'Feature', geometry: { type: 'Point', coordinates: [dest.lng, dest.lat] } } });
+    map.addLayer({ id: 'route-dest', type: 'circle', source: 'route-dest',
+      paint: { 'circle-radius': 8, 'circle-color': c, 'circle-stroke-width': 3, 'circle-stroke-color': '#fff' } });
+    map.addLayer({ id: 'route-dest-inner', type: 'circle', source: 'route-dest',
+      paint: { 'circle-radius': 3, 'circle-color': '#fff' } });
+
     const mins = Math.round(route.duration / 60);
+    const distM = Math.round(route.distance);
     const el = document.querySelector(`[data-cat="${cat}"] .route-time`);
-    if (el) el.textContent = `${mins} min walking route`;
+    if (el) el.innerHTML = `<span style="color:${c}">${mins} min</span> · ${distM}m walking`;
+
     const bounds = new mapboxgl.LngLatBounds();
-    route.geometry.coordinates.forEach(c => bounds.extend(c));
-    map.fitBounds(bounds, { padding: 80, maxZoom: 17 });
+    route.geometry.coordinates.forEach(p => bounds.extend(p));
+    bounds.extend([queryLng, queryLat]);
+    map.fitBounds(bounds, { padding: { top: 60, bottom: 60, left: 60, right: 420 }, maxZoom: 17 });
   } catch (e) { console.warn('Route failed:', e); }
 }
 

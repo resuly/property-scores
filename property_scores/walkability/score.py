@@ -19,8 +19,8 @@ CATEGORY_MAP: dict[str, tuple[str, str]] = {
     # Supermarket (weekly shop)
     "supermarket": ("supermarket", "supermarket"),
     "superstore": ("supermarket", "supermarket"),
-    "grocery_store": ("supermarket", "grocery"),
-    "specialty_grocery_store": ("supermarket", "specialty"),
+    "grocery_store": ("convenience", "grocery"),
+    "specialty_grocery_store": ("convenience", "specialty"),
     "wholesale_club": ("supermarket", "wholesale"),
     # Convenience (quick buy)
     "convenience_store": ("convenience", "convenience"),
@@ -122,7 +122,17 @@ _EXCLUDE_CATS = {
 _NAME_BLACKLIST = [
     "post office", "lpo", "visa", "immigration", "consulting",
     "massage", "holistic", "healing", "therapy", "beauty",
-    "supply", "equipment", "wholesale",
+    "supply", "equipment", "wholesale", "federation", "association",
+    "council", "institute", "foundation", "society", "union",
+    "cosmetic", "plastic surgery", "aesthetic", "laser",
+    "online", "virtual", "digital", "interactive", "software",
+    "training", "academy", "coaching", "tutoring",
+]
+
+# Known supermarket chain names (AU) - if grocery_store name doesn't match, demote to convenience
+_SUPERMARKET_NAMES = [
+    "woolworths", "coles", "aldi", "iga", "supa iga", "costco",
+    "foodworks", "drakes", "harris farm", "fresh market",
 ]
 
 MAX_WALK_DISTANCE_M = 1500.0
@@ -140,11 +150,20 @@ def _match_category(poi_category: str | None, poi_name: str | None = None) -> st
     entry = CATEGORY_MAP.get(cat_lower)
     if not entry:
         return None
-    if poi_name:
-        name_lower = poi_name.lower()
-        if any(bl in name_lower for bl in _NAME_BLACKLIST):
+    scenario = entry[0]
+    name_lower = (poi_name or "").lower()
+    if name_lower and any(bl in name_lower for bl in _NAME_BLACKLIST):
+        return None
+    if cat_lower in ("grocery_store", "specialty_grocery_store") and scenario == "convenience":
+        if any(sn in name_lower for sn in _SUPERMARKET_NAMES):
+            return "supermarket"
+    if scenario == "primary_school" and name_lower:
+        if "school" not in name_lower and "primary" not in name_lower:
             return None
-    return entry[0]
+    if scenario == "gp_clinic" and name_lower:
+        if any(w in name_lower for w in ["cosmetic", "plastic", "aesthetic", "laser", "online", "montu"]):
+            return None
+    return scenario
 
 
 OPEN_METEO_ELEV = "https://api.open-meteo.com/v1/elevation"

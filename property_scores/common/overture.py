@@ -284,3 +284,28 @@ def pois_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
           AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
     """
     return db.sql(sql).fetchall()
+
+
+def pois_near_detailed(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
+                       radius_m: int = 1500) -> list[tuple]:
+    """Like pois_near but returns (category, dist_m, lng, lat, name)."""
+    pois_path = data_path(POIS_FILE)
+    if not pois_path.exists():
+        return []
+    delta = radius_m / 111_000 * 1.5
+    import math
+    m_per_deg = 111_320 * math.cos(math.radians(lat))
+    deg_thresh = radius_m / m_per_deg
+    sql = f"""
+        SELECT categories.primary AS category,
+               ST_Distance(geometry, ST_Point({lng}, {lat})) * {m_per_deg} AS dist_m,
+               ST_X(geometry) AS poi_lng,
+               ST_Y(geometry) AS poi_lat,
+               names.primary AS name
+        FROM read_parquet('{pois_path}')
+        WHERE bbox.xmin BETWEEN {lng - delta} AND {lng + delta}
+          AND bbox.ymin BETWEEN {lat - delta} AND {lat + delta}
+          AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
+        ORDER BY dist_m
+    """
+    return db.sql(sql).fetchall()

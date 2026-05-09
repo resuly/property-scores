@@ -4,135 +4,316 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Walkability Score - Property Scores</title>
-<link rel="stylesheet" href="/css/styles.css">
+<link rel="stylesheet" href="/css/styles.css?v=2">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.css" rel="stylesheet">
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.js"></script>
+<style>
+  #map { position: absolute; top: 0; left: 0; right: 380px; bottom: 0; }
+  #sidebar { width: 380px; }
+  body.sidebar-collapsed #map { right: 36px; }
+  body.sidebar-collapsed #sidebar { width: 36px; }
+  body.sidebar-collapsed #sidebar > .sidebar-content { display: none; }
+  body.sidebar-collapsed .sidebar-toggle svg { transform: rotate(180deg); }
+  .mapboxgl-ctrl-bottom-left, .mapboxgl-ctrl-bottom-right { display: none; }
+  .sidebar-toggle { position: fixed; top: 50%; right: 380px; transform: translate(50%, -50%); width: 28px; height: 28px; border-radius: 9999px; background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 3px rgba(0,0,0,0.12); display: flex; align-items: center; justify-content: center; cursor: pointer; color: #64748b; z-index: 50; }
+  .sidebar-toggle:hover { color: #16a34a; border-color: #86efac; }
+  body.sidebar-collapsed .sidebar-toggle { right: 36px; }
+  .scene-card { padding: 8px 10px; border-radius: 8px; cursor: pointer; transition: background 0.15s, box-shadow 0.15s; border: 1px solid transparent; }
+  .scene-card:hover { background: #f0fdf4; border-color: #bbf7d0; }
+  .scene-card.active { background: #f0fdf4; border-color: #22c55e; box-shadow: 0 0 0 1px #22c55e; }
+  .scene-card.not-found { opacity: 0.5; cursor: default; }
+  .scene-card.not-found:hover { background: transparent; border-color: transparent; }
+  .dist-bar { height: 4px; border-radius: 2px; background: #e2e8f0; flex: 1; overflow: hidden; }
+  .dist-bar-fill { height: 100%; border-radius: 2px; }
+</style>
 </head>
 <body class="bg-slate-50 font-sans text-slate-900">
-<div class="max-w-3xl mx-auto px-6 py-10">
-  <a href="/" class="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-brand-600 mb-8">&larr; All Scores</a>
 
-  <div class="text-center mb-12">
-    <span class="inline-block px-3 py-1 rounded-full badge-walk text-xs font-semibold mb-4">Property Scores</span>
-    <h1 class="text-3xl font-bold mb-3"><span class="text-blue-600">Walkability</span> Score</h1>
-    <p class="text-slate-500 max-w-xl mx-auto text-sm">Measure how walkable any address is using Overture Maps POI data and a Walk Score-style distance decay algorithm across 13 amenity categories.</p>
-  </div>
+<div id="map"></div>
 
-  <div class="card p-6 mb-10">
-    <h2 class="text-lg font-semibold mb-4">Try It</h2>
-    <div class="flex gap-2 flex-wrap">
-      <input id="lat" type="number" step="any" placeholder="Latitude" value="-37.8136" class="input-field w-36">
-      <input id="lng" type="number" step="any" placeholder="Longitude" value="144.9631" class="input-field w-36">
-      <button onclick="compute()" class="btn-primary">Calculate</button>
+<div id="sidebar" class="absolute top-0 right-0 bottom-0 bg-white border-l border-slate-200 overflow-y-auto">
+  <button class="sidebar-toggle" onclick="document.body.classList.toggle('sidebar-collapsed'); setTimeout(() => map.resize(), 320)">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 6 15 12 9 18"/></svg>
+  </button>
+  <div class="sidebar-content p-5">
+    <div class="flex items-center gap-2 mb-1">
+      <a href="/" class="text-slate-400 hover:text-brand-600 text-sm">&larr;</a>
+      <h1 class="text-lg font-bold">Walkability Score</h1>
     </div>
-    <div id="result" class="hidden mt-4 p-4 bg-slate-50 rounded-lg"></div>
-  </div>
-
-  <div class="prose-scores">
-    <h2>What It Measures</h2>
-    <p>The Walkability Score rates how convenient daily errands are on foot, on a scale of 0 to 100. It checks proximity to 13 essential amenity categories and applies a distance decay: facilities within a 5-minute walk score highest, while anything beyond 20 minutes scores zero.</p>
-
-    <div class="flex rounded-lg overflow-hidden text-xs text-center mb-6">
-      <div class="flex-1 py-3 bg-green-100 text-green-700"><span class="block text-sm font-bold">90-100</span>Walker's Paradise</div>
-      <div class="flex-1 py-3 bg-emerald-100 text-emerald-700"><span class="block text-sm font-bold">70-89</span>Very Walkable</div>
-      <div class="flex-1 py-3 bg-amber-100 text-amber-700"><span class="block text-sm font-bold">50-69</span>Somewhat Walkable</div>
-      <div class="flex-1 py-3 bg-orange-100 text-orange-700"><span class="block text-sm font-bold">25-49</span>Car-Dependent</div>
-      <div class="flex-1 py-3 bg-red-100 text-red-700"><span class="block text-sm font-bold">0-24</span>Car Required</div>
+    <p class="text-xs text-slate-400 mb-4">Click the map or enter coordinates. Tap a category to see the walking route.</p>
+    <div class="flex gap-2 mb-2">
+      <input id="lat" type="number" step="any" placeholder="Lat" value="-37.8136" class="input-field flex-1 min-w-0">
+      <input id="lng" type="number" step="any" placeholder="Lng" value="144.9631" class="input-field flex-1 min-w-0">
+      <button onclick="query()" class="btn-primary">Go</button>
+    </div>
+    <div class="flex flex-wrap gap-1 mb-4 text-[11px]">
+      <button onclick="setPoint(-37.8136,144.9631)" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">CBD</button>
+      <button onclick="setPoint(-37.9000,145.1130)" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">Clayton</button>
+      <button onclick="setPoint(-37.7650,145.0160)" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">Kew</button>
+      <button onclick="setPoint(-37.8500,144.9800)" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">South Yarra</button>
+      <button onclick="setPoint(-37.7530,145.2200)" class="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-600">Dandenong Ranges</button>
     </div>
 
-    <h2>Methodology</h2>
+    <div id="loading" class="hidden text-green-600 text-sm py-5 text-center">Analysing walkability...</div>
+    <div id="score-box" class="hidden card p-4 mb-4"></div>
+    <div id="scenes" class="hidden space-y-1"></div>
 
-    <h3>13 Amenity Categories</h3>
-    <table>
-      <tr><th>Category</th><th>Weight</th><th>Examples</th></tr>
-      <tr><td>Grocery</td><td>3.0</td><td>Supermarket, convenience store</td></tr>
-      <tr><td>Transit</td><td>3.0</td><td>Bus stop, train station, tram</td></tr>
-      <tr><td>Restaurant</td><td>2.0</td><td>Restaurant, fast food</td></tr>
-      <tr><td>Park</td><td>2.0</td><td>Park, playground, garden</td></tr>
-      <tr><td>School</td><td>2.0</td><td>School, university</td></tr>
-      <tr><td>Healthcare</td><td>2.0</td><td>Hospital, clinic, doctor</td></tr>
-      <tr><td>Shopping</td><td>1.5</td><td>Clothing, department store</td></tr>
-      <tr><td>Cafe</td><td>1.5</td><td>Cafe, coffee shop</td></tr>
-      <tr><td>Pharmacy</td><td>1.5</td><td>Pharmacy, drugstore</td></tr>
-      <tr><td>Bank</td><td>1.0</td><td>Bank, ATM</td></tr>
-      <tr><td>Entertainment</td><td>1.0</td><td>Cinema, museum, theatre</td></tr>
-      <tr><td>Fitness</td><td>1.0</td><td>Gym, pool, sports centre</td></tr>
-      <tr><td>Bookstore</td><td>0.5</td><td>Bookstore, library</td></tr>
-    </table>
-
-    <h3>Calculation Steps</h3>
-    <ol>
-      <li><strong>Search POIs</strong> within 1.5 km of the target coordinate using Overture places data.</li>
-      <li><strong>Classify</strong> each POI into one of 13 categories by keyword matching.</li>
-      <li><strong>Distance decay</strong> per category: <code>decay = max(0, 1 - distance_m / 1500)</code></li>
-      <li><strong>Weighted sum</strong>: <code>score = sum(weight_i x decay_i) / sum(weights) x 100</code></li>
-    </ol>
-
-    <h2>Accuracy</h2>
-    <table>
-      <tr><th>Factor</th><th>Impact</th><th>Notes</th></tr>
-      <tr><td>POI coverage (developed countries)</td><td>High</td><td>Overture + OSM well-covered in AU/US/EU</td></tr>
-      <tr><td>POI coverage (developing countries)</td><td>Lower</td><td>Systematic undercount of informal businesses</td></tr>
-      <tr><td>Distance measurement</td><td>Approximate</td><td>Straight-line, not walking route (Phase 2: Valhalla routing)</td></tr>
-      <tr><td>Category classification</td><td>Good</td><td>Keyword matching on Overture primary category</td></tr>
-      <tr><td>Pedestrian infrastructure</td><td>Not modeled</td><td>Phase 2: sidewalk/crosswalk data from OSM</td></tr>
-    </table>
-
-    <h3>Comparison with Walk Score</h3>
-    <table>
-      <tr><th></th><th>Walk Score (Redfin)</th><th>Property Scores</th></tr>
-      <tr><td>Algorithm</td><td>13-category distance decay + pedestrian friendliness</td><td>13-category distance decay (same structure)</td></tr>
-      <tr><td>Distance</td><td>Road-network (proprietary routing)</td><td>Straight-line (Phase 2: Valhalla)</td></tr>
-      <tr><td>Coverage</td><td>US-focused, limited international</td><td>Global (Overture coverage)</td></tr>
-      <tr><td>Data</td><td>Proprietary POI aggregation</td><td>100% open data</td></tr>
-      <tr><td>Cost</td><td>API: $0.004-0.01/request</td><td>Free / open source</td></tr>
-      <tr><td>Updates</td><td>Slow outside US since Redfin acquisition</td><td>Monthly (Overture release cycle)</td></tr>
-    </table>
-
-    <h2>Reference Benchmarks (Melbourne)</h2>
-    <table>
-      <tr><th>Location</th><th>Score</th><th>Label</th><th>POIs</th></tr>
-      <tr><td>Melbourne CBD</td><td>96</td><td>Walker's Paradise</td><td>23,683</td></tr>
-      <tr><td>Glen Waverley Station</td><td>95</td><td>Walker's Paradise</td><td>1,430</td></tr>
-      <tr><td>Chadstone Shopping Centre</td><td>88</td><td>Very Walkable</td><td>2,354</td></tr>
-      <tr><td>Chapel St, South Yarra</td><td>77</td><td>Very Walkable</td><td>1,888</td></tr>
-      <tr><td>Warrandyte bushland</td><td>29</td><td>Car-Dependent</td><td>108</td></tr>
-    </table>
-
-    <h2>API</h2>
-    <p><code>GET /scores/walkability?lat=-37.8136&amp;lng=144.9631&amp;radius=1500</code></p>
-  </div>
-
-  <div class="mt-16 pt-6 border-t border-slate-100 text-center text-xs text-slate-400">
-    Built by <a href="https://daleads.com.au" class="text-brand-500 hover:text-brand-600 no-underline">DA Leads</a> | Data: <a href="https://overturemaps.org" class="text-brand-500 hover:text-brand-600 no-underline">Overture Maps Foundation</a>
+    <details class="mt-6 text-xs text-slate-600">
+      <summary class="cursor-pointer text-[11px] font-semibold text-slate-400 uppercase tracking-wide hover:text-slate-600 select-none">Methodology</summary>
+      <div class="mt-3 space-y-4">
+        <div>
+          <h4 class="font-semibold text-slate-700 mb-1">What It Measures</h4>
+          <p>Rates how walkable a location is on a 0-100 scale based on proximity to 13 amenity categories. Higher = more walkable.</p>
+        </div>
+        <div>
+          <h4 class="font-semibold text-slate-700 mb-1">Categories (weighted)</h4>
+          <ul class="list-disc ml-4 space-y-0.5">
+            <li>Grocery &amp; Transit (3x weight)</li>
+            <li>Restaurant, Park, School, Healthcare (2x)</li>
+            <li>Shopping, Cafe, Pharmacy (1.5x)</li>
+            <li>Bank, Entertainment, Fitness, Bookstore (1x)</li>
+          </ul>
+        </div>
+        <div>
+          <h4 class="font-semibold text-slate-700 mb-1">Adjustments</h4>
+          <ul class="list-disc ml-4 space-y-0.5">
+            <li>Highway barrier detection (2.5x distance penalty)</li>
+            <li>Diversity bonus for multiple nearby options</li>
+            <li>Slope penalty for hilly terrain</li>
+          </ul>
+        </div>
+      </div>
+    </details>
   </div>
 </div>
 
 <script>
-async function compute() {
-  const lat = document.getElementById('lat').value;
-  const lng = document.getElementById('lng').value;
-  const el = document.getElementById('result');
-  el.classList.remove('hidden');
-  el.innerHTML = '<div class="text-brand-500 text-sm">Computing...</div>';
-  try {
-    const resp = await fetch(`/scores/walkability?lat=${lat}&lng=${lng}`);
-    const d = await resp.json();
-    if (d.error) { el.innerHTML = `<div class="text-red-500 text-sm">${d.error}</div>`; return; }
-    const color = d.score >= 70 ? '#16a34a' : d.score >= 50 ? '#d97706' : '#dc2626';
-    let cats = '';
-    if (d.category_scores) {
-      cats = '<div class="grid grid-cols-2 gap-x-4 mt-3 pt-3 border-t border-slate-200">' + Object.entries(d.category_scores).map(([k, v]) =>
-        `<div class="flex justify-between py-1 text-sm"><span class="text-slate-400 capitalize">${k}</span><span class="${v.distance_m ? 'text-slate-600' : 'text-slate-300'}">${v.distance_m ? v.distance_m + 'm' : 'not found'}</span></div>`
-      ).join('') + '</div>';
-    }
-    el.innerHTML = `
-      <div class="text-5xl font-bold" style="color:${color}">${d.score}<span class="text-xl text-slate-400">/100</span></div>
-      <div class="text-sm text-slate-500 mb-3">${d.label} -- ${d.poi_count} POIs in range</div>
-      ${cats}`;
-  } catch (e) { el.innerHTML = `<div class="text-red-500 text-sm">Error: ${e.message}</div>`; }
+let map, mapboxToken;
+let lastData = null;
+let queryLat, queryLng;
+
+const CAT_ICONS = {
+  grocery: '\u{1F6D2}', restaurant: '\u{1F37D}\u{FE0F}', shopping: '\u{1F6CD}\u{FE0F}',
+  cafe: '☕', bank: '\u{1F3E6}', park: '\u{1F333}', school: '\u{1F3EB}',
+  entertainment: '\u{1F3AC}', fitness: '\u{1F3CB}\u{FE0F}', pharmacy: '\u{1F48A}',
+  healthcare: '\u{1F3E5}', transit: '\u{1F68C}', bookstore: '\u{1F4DA}',
+};
+const CAT_LABELS = {
+  grocery: 'Grocery', restaurant: 'Restaurant', shopping: 'Shopping',
+  cafe: 'Cafe', bank: 'Bank / ATM', park: 'Park',
+  school: 'School', entertainment: 'Entertainment', fitness: 'Gym',
+  pharmacy: 'Pharmacy', healthcare: 'Hospital', transit: 'Public Transport',
+  bookstore: 'Library',
+};
+
+function setPoint(lat, lng) {
+  document.getElementById('lat').value = lat.toFixed(4);
+  document.getElementById('lng').value = lng.toFixed(4);
+  query();
 }
+
+function scoreColor(s) {
+  if (s >= 80) return '#16a34a';
+  if (s >= 60) return '#65a30d';
+  if (s >= 40) return '#d97706';
+  if (s >= 20) return '#ea580c';
+  return '#dc2626';
+}
+
+function distColor(d) {
+  if (d == null) return '#e2e8f0';
+  if (d < 300) return '#16a34a';
+  if (d < 600) return '#65a30d';
+  if (d < 1000) return '#d97706';
+  return '#dc2626';
+}
+
+async function initMap() {
+  const cfg = await fetch('/api/config').then(r => r.json());
+  mapboxToken = cfg.mapbox_token;
+  mapboxgl.accessToken = mapboxToken;
+  map = new mapboxgl.Map({
+    container: 'map',
+    style: 'mapbox://styles/mapbox/streets-v12',
+    center: [144.9631, -37.8136],
+    zoom: 15,
+  });
+  map.addControl(new mapboxgl.NavigationControl(), 'top-right');
+  map.on('click', (e) => {
+    document.getElementById('lat').value = e.lngLat.lat.toFixed(6);
+    document.getElementById('lng').value = e.lngLat.lng.toFixed(6);
+    query();
+  });
+}
+
+function clearRoute() {
+  if (map.getLayer('route-line')) map.removeLayer('route-line');
+  if (map.getSource('route-line')) map.removeSource('route-line');
+}
+
+async function showRoute(cat) {
+  const info = lastData?.category_scores?.[cat];
+  if (!info?.nearest) return;
+
+  document.querySelectorAll('.scene-card').forEach(c => c.classList.remove('active'));
+  document.querySelector(`[data-cat="${cat}"]`)?.classList.add('active');
+
+  clearRoute();
+  const dest = info.nearest;
+
+  try {
+    const url = `https://api.mapbox.com/directions/v5/mapbox/walking/${queryLng},${queryLat};${dest.lng},${dest.lat}?geometries=geojson&access_token=${mapboxToken}`;
+    const resp = await fetch(url);
+    const data = await resp.json();
+    const route = data.routes?.[0];
+    if (!route) return;
+
+    map.addSource('route-line', { type: 'geojson', data: { type: 'Feature', geometry: route.geometry } });
+    map.addLayer({ id: 'route-line', type: 'line', source: 'route-line',
+      paint: { 'line-color': '#22c55e', 'line-width': 4, 'line-opacity': 0.8 } });
+
+    const mins = Math.round(route.duration / 60);
+    const distM = Math.round(route.distance);
+    const el = document.querySelector(`[data-cat="${cat}"] .route-info`);
+    if (el) el.innerHTML = `<span class="text-green-600 font-medium">${mins} min walk</span> <span class="text-slate-400">(${distM}m road)</span>`;
+
+    const bounds = new mapboxgl.LngLatBounds();
+    route.geometry.coordinates.forEach(c => bounds.extend(c));
+    map.fitBounds(bounds, { padding: 80, maxZoom: 17 });
+  } catch (e) {
+    console.warn('Route fetch failed:', e);
+  }
+}
+
+async function query() {
+  queryLat = parseFloat(document.getElementById('lat').value);
+  queryLng = parseFloat(document.getElementById('lng').value);
+  if (isNaN(queryLat) || isNaN(queryLng)) return;
+
+  clearRoute();
+  ['poi-markers', 'query-pt-circle'].forEach(id => {
+    if (map.getLayer(id)) map.removeLayer(id);
+    if (map.getSource(id)) map.removeSource(id);
+  });
+
+  map.flyTo({ center: [queryLng, queryLat], zoom: Math.max(map.getZoom(), 15), duration: 800 });
+
+  map.addSource('query-pt-circle', { type: 'geojson', data: { type: 'Feature', geometry: { type: 'Point', coordinates: [queryLng, queryLat] } } });
+  map.addLayer({ id: 'query-pt-circle', type: 'circle', source: 'query-pt-circle',
+    paint: { 'circle-radius': 10, 'circle-color': '#16a34a', 'circle-stroke-width': 3, 'circle-stroke-color': '#fff' } });
+
+  const loading = document.getElementById('loading');
+  const scoreBox = document.getElementById('score-box');
+  const scenes = document.getElementById('scenes');
+  loading.classList.remove('hidden');
+  scoreBox.classList.add('hidden');
+  scenes.classList.add('hidden');
+
+  try {
+    const resp = await fetch(`/scores/walkability?lat=${queryLat}&lng=${queryLng}`);
+    const d = await resp.json();
+    loading.classList.add('hidden');
+    lastData = d;
+
+    if (d.error) {
+      scoreBox.classList.remove('hidden');
+      scoreBox.innerHTML = `<div class="text-red-500 text-sm">${d.error}</div>`;
+      return;
+    }
+
+    const sc = d.score;
+    const color = scoreColor(sc);
+    scoreBox.classList.remove('hidden');
+    scoreBox.innerHTML = `
+      <div class="flex items-baseline gap-2 mb-1">
+        <div class="text-4xl font-bold leading-none" style="color:${color}">${sc}</div>
+        <div class="text-sm font-semibold text-slate-500">/100</div>
+        <div class="ml-auto text-xs text-slate-400">${d.poi_count} POIs</div>
+      </div>
+      <div class="text-[11px] font-semibold text-slate-600 mb-2">${d.label}</div>
+      <div class="relative h-2 rounded-full overflow-hidden mb-1" style="background:linear-gradient(90deg,#dc2626 0%,#d97706 25%,#65a30d 50%,#16a34a 75%,#16a34a 100%);opacity:0.25"></div>
+      <div class="relative -mt-3 mb-2 h-2">
+        <div class="absolute h-2 w-1 bg-slate-900 rounded-full" style="left:${sc}%;transform:translateX(-50%)"></div>
+      </div>
+      <div class="flex justify-between text-[9px] text-slate-400">
+        <span>0 car-dependent</span><span>100 walker's paradise</span>
+      </div>
+      ${d.slope_penalty ? `<div class="text-[11px] text-amber-600 mt-1">Hilly terrain (${Math.round((1-d.slope_penalty)*100)}% walkability reduction)</div>` : ''}
+      ${d.barriers_crossed ? `<div class="text-[11px] text-amber-600 mt-1">${d.barriers_crossed} highway barrier(s) detected</div>` : ''}
+    `;
+
+    // POI markers on map
+    const poiFeatures = [];
+    for (const [cat, info] of Object.entries(d.category_scores)) {
+      if (info.nearest) {
+        poiFeatures.push({
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [info.nearest.lng, info.nearest.lat] },
+          properties: { cat, name: info.nearest.name, dist: info.distance_m },
+        });
+      }
+    }
+    if (poiFeatures.length > 0) {
+      map.addSource('poi-markers', { type: 'geojson', data: { type: 'FeatureCollection', features: poiFeatures } });
+      map.addLayer({ id: 'poi-markers', type: 'circle', source: 'poi-markers',
+        paint: { 'circle-radius': 6, 'circle-color': '#f59e0b', 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' } });
+    }
+
+    // Scene cards
+    scenes.classList.remove('hidden');
+    const cats = Object.entries(d.category_scores);
+    cats.sort((a,b) => {
+      if (a[1].distance_m == null) return 1;
+      if (b[1].distance_m == null) return -1;
+      return a[1].distance_m - b[1].distance_m;
+    });
+
+    let cardsHtml = `<div class="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Nearby Amenities</div>`;
+    for (const [cat, info] of cats) {
+      const icon = CAT_ICONS[cat] || '\u{1F4CD}';
+      const label = CAT_LABELS[cat] || cat;
+      const dist = info.distance_m;
+      const name = info.nearest?.name;
+      const walkMin = dist != null ? Math.max(1, Math.round(dist / 80)) : null;
+      const found = dist != null;
+      const pct = found ? Math.min(100, Math.round(dist / 1500 * 100)) : 100;
+      const barColor = distColor(dist);
+
+      cardsHtml += `
+        <div class="scene-card ${found ? '' : 'not-found'}" data-cat="${cat}" ${found ? `onclick="showRoute('${cat}')"` : ''}>
+          <div class="flex items-center gap-2">
+            <span class="text-base flex-shrink-0">${icon}</span>
+            <div class="flex-1 min-w-0">
+              <div class="flex justify-between items-baseline">
+                <span class="text-xs font-medium text-slate-700 truncate">${label}</span>
+                ${found
+                  ? `<span class="text-[11px] text-slate-500 ml-2 flex-shrink-0">${dist}m ~ ${walkMin}min</span>`
+                  : `<span class="text-[11px] text-slate-400 ml-2">none within 1.5km</span>`}
+              </div>
+              ${name ? `<div class="text-[11px] text-slate-400 truncate">${name}</div>` : ''}
+              <div class="flex items-center gap-2 mt-1">
+                <div class="dist-bar"><div class="dist-bar-fill" style="width:${100 - pct}%;background:${barColor}"></div></div>
+                ${info.count > 1 ? `<span class="text-[10px] text-slate-400 flex-shrink-0">${info.count} nearby</span>` : ''}
+              </div>
+              ${info.barrier ? '<div class="text-[10px] text-amber-500 mt-0.5">Highway crossing required</div>' : ''}
+              <div class="route-info text-[11px] mt-0.5"></div>
+            </div>
+          </div>
+        </div>`;
+    }
+    scenes.innerHTML = cardsHtml;
+
+  } catch (e) {
+    loading.classList.add('hidden');
+    scoreBox.classList.remove('hidden');
+    scoreBox.innerHTML = `<div class="text-red-500 text-sm">Error: ${e.message}</div>`;
+  }
+}
+
+initMap();
 </script>
 </body>
 </html>

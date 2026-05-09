@@ -11,7 +11,7 @@ or OSRM) can be substituted for higher accuracy.
 
 import math
 
-from property_scores.common.overture import get_db, pois_near, roads_near
+from property_scores.common.overture import get_db, pois_near, pois_near_detailed, roads_near
 
 CATEGORY_MAP: dict[str, list[str]] = {
     "grocery": ["grocery", "supermarket", "food_store", "convenience_store"],
@@ -120,7 +120,13 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
         dict with score (0-100), label, category_scores, poi_count.
     """
     db = get_db()
-    pois = pois_near(db, lat, lng, radius_m, source=source)
+    if source:
+        pois = pois_near(db, lat, lng, radius_m, source=source)
+        detailed = False
+    else:
+        pois_full = pois_near_detailed(db, lat, lng, radius_m)
+        pois = [(cat, dist) for cat, dist, *_ in pois_full]
+        detailed = True
 
     # Detect major road/rail barriers within the search area
     barriers = roads_near(db, lat, lng, radius_m, source=source)
@@ -131,13 +137,21 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
     ]
 
     nearest: dict[str, float] = {}
+    nearest_detail: dict[str, dict] = {}
     cat_counts: dict[str, int] = {}
-    for poi_cat, dist_m in pois:
+
+    items = pois_full if detailed else [(c, d, None, None, None) for c, d in pois]
+    for poi_cat, dist_m, plng, plat, pname in items:
         matched = _match_category(poi_cat)
         if matched:
             cat_counts[matched] = cat_counts.get(matched, 0) + 1
             if matched not in nearest or dist_m < nearest[matched]:
                 nearest[matched] = dist_m
+                if plng is not None:
+                    nearest_detail[matched] = {
+                        "lng": round(plng, 6), "lat": round(plat, 6),
+                        "name": pname or poi_cat,
+                    }
 
     def _effective_distance(poi_dist_m: float) -> float:
         """Check if a highway barrier lies between property and POI.
@@ -171,12 +185,15 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
                 d *= 0.7
             elif count <= 2:
                 d *= 0.85
-            category_scores[cat] = {
+            cs = {
                 "distance_m": round(raw_dist),
                 "decay": round(d, 2),
                 "count": count,
                 "barrier": eff_dist > raw_dist,
             }
+            if cat in nearest_detail:
+                cs["nearest"] = nearest_detail[cat]
+            category_scores[cat] = cs
         else:
             d = 0.0
             category_scores[cat] = {"distance_m": None, "decay": 0.0, "count": 0}

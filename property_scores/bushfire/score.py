@@ -464,6 +464,12 @@ def bushfire_score(lat: float, lng: float, *, quick: bool = False) -> dict:
     Combines official planning overlays with satellite-derived vegetation
     and terrain data for full Australia coverage.
     """
+    if not quick:
+        from property_scores.bushfire.cache import get as cache_get, put as cache_put
+        cached = cache_get(lat, lng)
+        if cached:
+            return cached
+
     state = _detect_state(lat, lng)
     if not state:
         return {
@@ -551,6 +557,9 @@ def bushfire_score(lat: float, lng: float, *, quick: bool = False) -> dict:
         result["slope"] = slope
     if fire:
         result["fire_history"] = fire
+
+    if not quick:
+        cache_put(lat, lng, result)
 
     return result
 

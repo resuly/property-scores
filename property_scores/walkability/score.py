@@ -13,52 +13,138 @@ import math
 
 from property_scores.common.overture import get_db, pois_near, pois_near_detailed, roads_near
 
-CATEGORY_MAP: dict[str, list[str]] = {
-    "grocery": ["grocery", "supermarket", "food_store", "convenience_store"],
-    "restaurant": ["restaurant", "fast_food", "food"],
-    "shopping": ["shopping", "clothing_store", "department_store", "mall"],
-    "cafe": ["cafe", "coffee_shop", "coffee"],
-    "bank": ["bank", "atm", "financial_service"],
-    "park": ["park", "playground", "garden", "recreation"],
-    "school": ["school", "education", "university", "college"],
-    "entertainment": ["entertainment", "cinema", "theater", "museum", "arts"],
-    "fitness": ["fitness", "gym", "sports", "swimming_pool"],
-    "pharmacy": ["pharmacy", "drugstore"],
-    "healthcare": ["hospital", "clinic", "doctor", "healthcare", "medical"],
-    "transit": ["bus_station", "train_station", "transit", "subway", "tram_stop"],
-    "bookstore": ["bookstore", "library", "book_store"],
+# Exact Overture category → walkability scenario mapping.
+# Keys are exact Overture category strings; values are (scenario, sub_type).
+CATEGORY_MAP: dict[str, tuple[str, str]] = {
+    # Supermarket (weekly shop)
+    "supermarket": ("supermarket", "supermarket"),
+    "superstore": ("supermarket", "supermarket"),
+    "grocery_store": ("supermarket", "grocery"),
+    "specialty_grocery_store": ("supermarket", "specialty"),
+    "wholesale_club": ("supermarket", "wholesale"),
+    # Convenience (quick buy)
+    "convenience_store": ("convenience", "convenience"),
+    # Childcare
+    "child_care_and_day_care": ("childcare", "childcare"),
+    "preschool": ("childcare", "preschool"),
+    "kindergarten": ("childcare", "kindergarten"),
+    # Primary school
+    "elementary_school": ("primary_school", "primary"),
+    "primary_school": ("primary_school", "primary"),
+    # Secondary school
+    "high_school": ("secondary_school", "secondary"),
+    "secondary_school": ("secondary_school", "secondary"),
+    "middle_school": ("secondary_school", "middle"),
+    # Train station
+    "train_station": ("train", "train"),
+    "railway_station": ("train", "train"),
+    "subway_station": ("train", "metro"),
+    # Tram / bus
+    "tram_stop": ("tram_bus", "tram"),
+    "bus_stop": ("tram_bus", "bus"),
+    "bus_station": ("tram_bus", "bus"),
+    "transit_station": ("tram_bus", "transit"),
+    # GP / medical clinic
+    "doctor": ("gp_clinic", "gp"),
+    "general_practitioner": ("gp_clinic", "gp"),
+    "medical_center": ("gp_clinic", "clinic"),
+    "medical_clinic": ("gp_clinic", "clinic"),
+    "urgent_care": ("gp_clinic", "urgent"),
+    # Hospital
+    "hospital": ("hospital", "hospital"),
+    "emergency_room": ("hospital", "emergency"),
+    # Pharmacy
+    "pharmacy": ("pharmacy", "pharmacy"),
+    "drugstore": ("pharmacy", "drugstore"),
+    # Park / green space
+    "park": ("park", "park"),
+    "playground": ("park", "playground"),
+    "garden": ("park", "garden"),
+    "botanical_garden": ("park", "botanical"),
+    "recreation_area": ("park", "recreation"),
+    "nature_reserve": ("park", "nature"),
+    # Cafe
+    "cafe": ("cafe", "cafe"),
+    "coffee_shop": ("cafe", "coffee"),
+    # Restaurant
+    "restaurant": ("restaurant", "restaurant"),
+    "fast_food_restaurant": ("restaurant", "fast_food"),
+    # Gym / fitness
+    "gym": ("fitness", "gym"),
+    "fitness_center": ("fitness", "fitness"),
+    "swimming_pool": ("fitness", "pool"),
+    "recreation_center": ("fitness", "recreation"),
+    # Shopping
+    "shopping_center": ("shopping", "mall"),
+    "department_store": ("shopping", "department"),
+    "clothing_store": ("shopping", "clothing"),
+    "shopping_mall": ("shopping", "mall"),
+    # Bank
+    "bank": ("bank", "bank"),
+    "atm": ("bank", "atm"),
+    # Library
+    "library": ("library", "library"),
+    "public_library": ("library", "public"),
+    # Post office
+    "post_office": ("post_office", "post"),
 }
 
-CATEGORY_WEIGHTS: dict[str, float] = {
-    "grocery": 3.0,
-    "restaurant": 2.0,
-    "shopping": 1.5,
-    "cafe": 1.5,
-    "bank": 1.0,
-    "park": 2.0,
-    "school": 2.0,
-    "entertainment": 1.0,
-    "fitness": 1.0,
-    "pharmacy": 1.5,
-    "healthcare": 2.0,
-    "transit": 3.0,
-    "bookstore": 0.5,
+# Scenarios ordered by importance for a home buyer
+SCENARIO_CONFIG: dict[str, dict] = {
+    "supermarket":     {"weight": 3.0, "icon": "\U0001F6D2", "label": "Supermarket"},
+    "train":           {"weight": 3.0, "icon": "\U0001F686", "label": "Train Station"},
+    "primary_school":  {"weight": 2.5, "icon": "\U0001F3EB", "label": "Primary School"},
+    "gp_clinic":       {"weight": 2.5, "icon": "\U0001FA7A", "label": "GP / Medical Clinic"},
+    "park":            {"weight": 2.0, "icon": "\U0001F333", "label": "Park / Green Space"},
+    "childcare":       {"weight": 2.0, "icon": "\U0001F476", "label": "Childcare / Preschool"},
+    "pharmacy":        {"weight": 2.0, "icon": "\U0001F48A", "label": "Pharmacy"},
+    "tram_bus":        {"weight": 2.0, "icon": "\U0001F68C", "label": "Tram / Bus Stop"},
+    "cafe":            {"weight": 1.5, "icon": "☕",          "label": "Cafe"},
+    "restaurant":      {"weight": 1.5, "icon": "\U0001F37D️", "label": "Restaurant"},
+    "convenience":     {"weight": 1.0, "icon": "\U0001F3EA", "label": "Convenience Store"},
+    "secondary_school":{"weight": 1.5, "icon": "\U0001F393", "label": "Secondary School"},
+    "hospital":        {"weight": 1.5, "icon": "\U0001F3E5", "label": "Hospital"},
+    "fitness":         {"weight": 1.0, "icon": "\U0001F3CB️", "label": "Gym / Fitness"},
+    "shopping":        {"weight": 1.0, "icon": "\U0001F6CD️", "label": "Shopping Centre"},
+    "bank":            {"weight": 1.0, "icon": "\U0001F3E6", "label": "Bank / ATM"},
+    "library":         {"weight": 0.5, "icon": "\U0001F4DA", "label": "Library"},
+    "post_office":     {"weight": 0.5, "icon": "\U0001F4EE", "label": "Post Office"},
 }
+
+# Overture categories to always skip (false positives)
+_EXCLUDE_CATS = {
+    "marketing_agency", "dance_school", "driving_school", "music_school",
+    "language_school", "cooking_school", "art_school", "flight_school",
+    "trade_school", "adult_education", "medical_supply", "medical_equipment",
+}
+
+# Name substrings that indicate a POI is miscategorized
+_NAME_BLACKLIST = [
+    "post office", "lpo", "visa", "immigration", "consulting",
+    "massage", "holistic", "healing", "therapy", "beauty",
+    "supply", "equipment", "wholesale",
+]
 
 MAX_WALK_DISTANCE_M = 1500.0
 BARRIER_CLASSES = {"motorway", "trunk"}
-BARRIER_PENALTY = 2.5  # effective distance multiplier when crossing a barrier
+BARRIER_PENALTY = 2.5
 
 
-def _match_category(poi_category: str | None) -> str | None:
+def _match_category(poi_category: str | None, poi_name: str | None = None) -> str | None:
+    """Map exact Overture category to our scenario. Returns scenario key."""
     if not poi_category:
         return None
-    poi_lower = poi_category.lower().replace(" ", "_")
-    for cat, keywords in CATEGORY_MAP.items():
-        for kw in keywords:
-            if kw in poi_lower:
-                return cat
-    return None
+    cat_lower = poi_category.lower().replace(" ", "_")
+    if cat_lower in _EXCLUDE_CATS:
+        return None
+    entry = CATEGORY_MAP.get(cat_lower)
+    if not entry:
+        return None
+    if poi_name:
+        name_lower = poi_name.lower()
+        if any(bl in name_lower for bl in _NAME_BLACKLIST):
+            return None
+    return entry[0]
 
 
 OPEN_METEO_ELEV = "https://api.open-meteo.com/v1/elevation"
@@ -142,7 +228,7 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
 
     items = pois_full if detailed else [(c, d, None, None, None) for c, d in pois]
     for poi_cat, dist_m, plng, plat, pname in items:
-        matched = _match_category(poi_cat)
+        matched = _match_category(poi_cat, pname)
         if matched:
             cat_counts[matched] = cat_counts.get(matched, 0) + 1
             if matched not in nearest or dist_m < nearest[matched]:
@@ -168,19 +254,20 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
                 return poi_dist_m * BARRIER_PENALTY
         return poi_dist_m
 
-    total_weight = sum(CATEGORY_WEIGHTS.values())
+    total_weight = sum(cfg["weight"] for cfg in SCENARIO_CONFIG.values())
     weighted_sum = 0.0
     category_scores = {}
     barriers_crossed = 0
 
-    for cat, weight in CATEGORY_WEIGHTS.items():
-        if cat in nearest:
-            raw_dist = nearest[cat]
+    for scenario, cfg in SCENARIO_CONFIG.items():
+        weight = cfg["weight"]
+        if scenario in nearest:
+            raw_dist = nearest[scenario]
             eff_dist = _effective_distance(raw_dist)
             if eff_dist > raw_dist:
                 barriers_crossed += 1
             d = _decay(eff_dist)
-            count = cat_counts.get(cat, 0)
+            count = cat_counts.get(scenario, 0)
             if count <= 1:
                 d *= 0.7
             elif count <= 2:
@@ -190,13 +277,18 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
                 "decay": round(d, 2),
                 "count": count,
                 "barrier": eff_dist > raw_dist,
+                "icon": cfg["icon"],
+                "label": cfg["label"],
             }
-            if cat in nearest_detail:
-                cs["nearest"] = nearest_detail[cat]
-            category_scores[cat] = cs
+            if scenario in nearest_detail:
+                cs["nearest"] = nearest_detail[scenario]
+            category_scores[scenario] = cs
         else:
             d = 0.0
-            category_scores[cat] = {"distance_m": None, "decay": 0.0, "count": 0}
+            category_scores[scenario] = {
+                "distance_m": None, "decay": 0.0, "count": 0,
+                "icon": cfg["icon"], "label": cfg["label"],
+            }
         weighted_sum += weight * d
 
     raw_score = round(weighted_sum / total_weight * 100)

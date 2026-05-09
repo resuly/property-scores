@@ -95,19 +95,7 @@ let map, mapboxToken;
 let lastData = null;
 let queryLat, queryLng;
 
-const CAT_ICONS = {
-  grocery: '\u{1F6D2}', restaurant: '\u{1F37D}\u{FE0F}', shopping: '\u{1F6CD}\u{FE0F}',
-  cafe: '☕', bank: '\u{1F3E6}', park: '\u{1F333}', school: '\u{1F3EB}',
-  entertainment: '\u{1F3AC}', fitness: '\u{1F3CB}\u{FE0F}', pharmacy: '\u{1F48A}',
-  healthcare: '\u{1F3E5}', transit: '\u{1F68C}', bookstore: '\u{1F4DA}',
-};
-const CAT_LABELS = {
-  grocery: 'Grocery', restaurant: 'Restaurant', shopping: 'Shopping',
-  cafe: 'Cafe', bank: 'Bank / ATM', park: 'Park',
-  school: 'School', entertainment: 'Entertainment', fitness: 'Gym',
-  pharmacy: 'Pharmacy', healthcare: 'Hospital', transit: 'Public Transport',
-  bookstore: 'Library',
-};
+// Icons and labels now come from API response (icon/label fields in each category)
 
 function setPoint(lat, lng) {
   document.getElementById('lat').value = lat.toFixed(4);
@@ -273,8 +261,8 @@ async function query() {
 
     let cardsHtml = `<div class="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Nearby Amenities</div>`;
     for (const [cat, info] of cats) {
-      const icon = CAT_ICONS[cat] || '\u{1F4CD}';
-      const label = CAT_LABELS[cat] || cat;
+      const icon = info.icon || '\u{1F4CD}';
+      const label = info.label || cat;
       const dist = info.distance_m;
       const name = info.nearest?.name;
       const walkMin = dist != null ? Math.max(1, Math.round(dist / 80)) : null;

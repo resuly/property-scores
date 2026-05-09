@@ -183,21 +183,57 @@ const SVGS = {
 const GROUP_LABELS = { essential: 'Daily Essentials', lifestyle: 'Lifestyle', extra: 'Nice to Have' };
 
 const BRAND_DOMAINS = {
+  // Supermarkets
   'woolworths': 'woolworths.com.au', 'coles': 'coles.com.au', 'aldi': 'aldi.com.au',
   'iga': 'iga.com.au', 'costco': 'costco.com.au', 'foodworks': 'foodworks.com.au',
+  // Convenience
   '7-eleven': '7eleven.com.au', '7eleven': '7eleven.com.au', 'ezymart': 'ezymart.com.au',
-  "mcdonald": 'mcdonalds.com.au', 'kfc': 'kfc.com.au', 'subway': 'subway.com',
-  'hungry jack': 'hungryjacks.com.au', 'domino': 'dominos.com.au',
+  // Fast food
+  "mcdonald": 'mcdonalds.com.au', 'mccaf': 'mcdonalds.com.au', 'kfc': 'kfc.com.au',
+  'subway': 'subway.com', 'hungry jack': 'hungryjacks.com.au', 'domino': 'dominos.com.au',
+  "nando": 'nandos.com.au', "grill'd": 'grilld.com.au', 'boost juice': 'boostjuice.com.au',
+  'oporto': 'oporto.com.au', 'red rooster': 'redrooster.com.au', 'sushi hub': 'sushihub.com.au',
+  'breadtop': 'breadtop.com.au', 'spudbar': 'spudbar.com.au', 'guzman': 'gmg.com.au',
+  'chatime': 'chatime.com.au', 'oliver brown': 'oliverbrown.com.au',
+  'zambrero': 'zambrero.com', 'san churro': 'sanchurro.com',
+  // Coffee
   'starbucks': 'starbucks.com', 'gloria jean': 'gloriajeanscoffees.com.au',
+  'the coffee club': 'thecoffeeclub.com.au', 'soul origin': 'soulorigin.com.au',
+  'muffin break': 'muffinbreak.com.au', 'jamaica blue': 'jamaicablue.com.au',
+  // Pharmacy
   'priceline': 'priceline.com.au', 'chemist warehouse': 'chemistwarehouse.com.au',
   'terry white': 'terrywhitechemmart.com.au', 'amcal': 'amcal.com.au',
+  'blooms': 'bloomsthechemist.com.au', 'pharmacy 4 less': 'pharmacy4less.com.au',
+  // Fitness
   'anytime fitness': 'anytimefitness.com.au', 'f45': 'f45training.com.au',
   'fitness first': 'fitnessfirst.com.au', 'snap fitness': 'snapfitness.com.au',
+  'goodlife': 'goodlifehealthclubs.com.au', 'jetts': 'jetts.com.au',
+  'plus fitness': 'plusfitness.com.au',
+  // Banks
   'nab': 'nab.com.au', 'commonwealth bank': 'commbank.com.au', 'commbank': 'commbank.com.au',
   'anz': 'anz.com.au', 'westpac': 'westpac.com.au', 'bendigo bank': 'bendigobank.com.au',
+  'bank of melbourne': 'bankofmelbourne.com.au', 'st.george': 'stgeorge.com.au',
+  'macquarie': 'macquarie.com', 'hsbc': 'hsbc.com.au',
+  // Post / services
   'australia post': 'auspost.com.au',
+  // Retail
   'bunnings': 'bunnings.com.au', 'kmart': 'kmart.com.au', 'target': 'target.com.au',
   'big w': 'bigw.com.au', 'officeworks': 'officeworks.com.au',
+  'jb hi-fi': 'jbhifi.com.au', 'jb hi fi': 'jbhifi.com.au', 'harvey norman': 'harveynorman.com.au',
+  'myer': 'myer.com.au', 'david jones': 'davidjones.com', 'country road': 'countryroad.com.au',
+  'cotton on': 'cottonon.com', 'uniqlo': 'uniqlo.com', 'h&m': 'hm.com',
+  'zara': 'zara.com', 'rebel': 'rebelsport.com.au', 'bcf': 'bcf.com.au',
+  'lovisa': 'lovisa.com', 'sunglass hut': 'sunglasshut.com',
+  // Liquor
+  'bws': 'bws.com.au', 'dan murphy': 'danmurphys.com.au', 'liquorland': 'liquorland.com.au',
+  // Telecom
+  'telstra': 'telstra.com.au', 'optus': 'optus.com.au', 'vodafone': 'vodafone.com.au',
+  // Childcare
+  'goodstart': 'goodstart.org.au', 'guardian': 'guardian.edu.au',
+  'busy bees': 'busybees.com.au', 'only about children': 'oac.edu.au',
+  // Petrol
+  'bp ': 'bp.com.au', 'shell': 'shell.com.au', 'caltex': 'caltex.com.au',
+  'ampol': 'ampol.com.au', 'united petroleum': 'unitedpetroleum.com.au',
 };
 
 function brandLogo(name) {
@@ -414,7 +450,8 @@ async function query() {
             const ocRaw = oc.startsWith('var(') ? { 'var(--g-green)':'#1a9a4a','var(--g-lime)':'#5a8c1e','var(--g-amber)':'#b8760a','var(--g-red)':'#c93a2e','var(--g-muted)':'#8b95a5' }[oc] || '#8b95a5' : oc;
             const oMin = Math.max(1, Math.round(o.distance_m / 80));
             const logo = brandLogo(o.name);
-            const logoEl = logo ? `<img src="${logo}" class="opt-logo" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'opt-dot',style:'background:${ocRaw}'}))">` : `<div class="opt-dot" style="background:${ocRaw}"></div>`;
+            const miniSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="${ocRaw}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;flex-shrink:0;opacity:.6">${SVGS[info.icon] || SVGS.convenience}</svg>`;
+            const logoEl = logo ? `<img src="${logo}" class="opt-logo" onerror="this.outerHTML='${miniSvg.replace(/'/g,"\\'")}'">` : miniSvg;
             optsHtml += `<div class="opt" data-cat="${cat}" data-opt="${i}" onclick="showRouteOpt('${cat}',${i})">${logoEl}<span class="opt-name">${o.name}</span><span class="opt-meta">${o.distance_m}m &middot; ${oMin}min</span></div>`;
           }
           optsHtml += '</div>';

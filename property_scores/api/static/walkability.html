@@ -72,6 +72,14 @@
   </div>
 </div>
 
+<!-- Legend -->
+<div class="absolute bottom-5 left-3 bg-white/95 backdrop-blur rounded-lg shadow-sm border border-slate-200 px-3 py-2 text-xs text-slate-600 z-10" style="min-width:140px">
+  <div class="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Walking Range</div>
+  <div class="flex items-center gap-2 mb-1"><span class="w-3 h-3 rounded-sm inline-block" style="background:rgba(22,163,74,0.15);border:1px dashed rgba(22,163,74,0.4)"></span> 5 min</div>
+  <div class="flex items-center gap-2 mb-1"><span class="w-3 h-3 rounded-sm inline-block" style="background:rgba(101,163,13,0.1);border:1px dashed rgba(101,163,13,0.4)"></span> 10 min</div>
+  <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-sm inline-block" style="background:rgba(217,119,6,0.08);border:1px dashed rgba(217,119,6,0.4)"></span> 15 min</div>
+</div>
+
 <script>
 let map, mapboxToken, lastData, queryLat, queryLng;
 
@@ -204,8 +212,10 @@ async function query() {
   if (isNaN(queryLat) || isNaN(queryLng)) return;
 
   clearRoute();
-  ['poi-markers', 'query-pt-circle'].forEach(id => {
+  ['poi-markers', 'query-pt-circle', 'iso-5-fill', 'iso-10-fill', 'iso-15-fill', 'iso-5-line', 'iso-10-line', 'iso-15-line'].forEach(id => {
     if (map.getLayer(id)) map.removeLayer(id);
+  });
+  ['poi-markers', 'query-pt-circle', 'iso-5', 'iso-10', 'iso-15'].forEach(id => {
     if (map.getSource(id)) map.removeSource(id);
   });
   map.flyTo({ center: [queryLng, queryLat], zoom: Math.max(map.getZoom(), 15), duration: 800 });
@@ -236,8 +246,36 @@ async function query() {
       <div class="relative h-2 rounded-full overflow-hidden mb-1" style="background:linear-gradient(90deg,#dc2626 0%,#d97706 25%,#65a30d 50%,#16a34a 75%,#16a34a 100%);opacity:0.25"></div>
       <div class="relative -mt-3 mb-2 h-2"><div class="absolute h-2 w-1 bg-slate-900 rounded-full" style="left:${sc}%;transform:translateX(-50%)"></div></div>
       <div class="flex justify-between text-[9px] text-slate-400"><span>0 car-dependent</span><span>100 walker's paradise</span></div>
+      ${d.summary ? `<div class="text-xs text-slate-600 mt-2 leading-relaxed">${d.summary}</div>` : ''}
       ${d.slope_penalty ? `<div class="text-[11px] text-amber-600 mt-1">Hilly terrain (${Math.round((1-d.slope_penalty)*100)}% reduction)</div>` : ''}
       ${d.barriers_crossed ? `<div class="text-[11px] text-amber-600 mt-1">${d.barriers_crossed} highway barrier(s)</div>` : ''}`;
+
+    // Isochrone (5/10/15 min walking)
+    try {
+      const isoUrl = `https://api.mapbox.com/isochrone/v1/mapbox/walking/${queryLng},${queryLat}?contours_minutes=5,10,15&polygons=true&access_token=${mapboxToken}`;
+      const isoResp = await fetch(isoUrl);
+      const isoData = await isoResp.json();
+      const isoFeats = isoData.features || [];
+      const isoConf = [
+        { minutes: 5,  color: '#16a34a', opacity: 0.3 },
+        { minutes: 10, color: '#65a30d', opacity: 0.2 },
+        { minutes: 15, color: '#d97706', opacity: 0.12 },
+      ];
+      // Add largest first so smaller polygons render on top
+      for (let i = isoFeats.length - 1; i >= 0; i--) {
+        const f = isoFeats[i];
+        const contour = f.properties?.contour || isoConf[i]?.minutes || (i+1)*5;
+        const conf = isoConf.find(c => c.minutes === contour) || isoConf[i];
+        const srcId = `iso-${contour}`;
+        if (!map.getSource(srcId)) {
+          map.addSource(srcId, { type: 'geojson', data: f });
+          map.addLayer({ id: srcId + '-fill', type: 'fill', source: srcId,
+            paint: { 'fill-color': conf.color, 'fill-opacity': conf.opacity } });
+          map.addLayer({ id: srcId + '-line', type: 'line', source: srcId,
+            paint: { 'line-color': conf.color, 'line-width': 2, 'line-opacity': 0.7, 'line-dasharray': [3, 2] } });
+        }
+      }
+    } catch (e) { console.warn('Isochrone failed:', e); }
 
     // POI markers
     const poiFeatures = [];

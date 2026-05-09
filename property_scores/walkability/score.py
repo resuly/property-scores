@@ -129,11 +129,23 @@ _NAME_BLACKLIST = [
     "training", "academy", "coaching", "tutoring",
 ]
 
-# Known supermarket chain names (AU) - if grocery_store name doesn't match, demote to convenience
+# Known supermarket chain names (AU)
 _SUPERMARKET_NAMES = [
     "woolworths", "coles", "aldi", "iga", "supa iga", "costco",
     "foodworks", "drakes", "harris farm", "fresh market",
+    "nqr", "save on", "supabarn", "ritchies", "romeo's",
 ]
+
+# Names that are definitely NOT what the category says
+_FALSE_POSITIVES = {
+    "supermarket": ["safety", "rsea", "auto", "car wash", "pet", "hardware", "timber"],
+    "primary_school": ["learning centre", "tutor", "coaching", "cpd", "tj7"],
+    "gp_clinic": ["imaging", "radiology", "pathology", "veterinary", "dental",
+                  "physiotherapy", "chiropractic", "osteopath", "podiatry"],
+    "hospital": ["medical centre", "medical clinic", "health centre", "imaging"],
+    "pharmacy": ["nursing", "midwifery", "association", "federation"],
+    "childcare": ["doncaster", "ringwood", "berwick", "frankston"],  # wrong suburb in POI name = bad coords
+}
 
 MAX_WALK_DISTANCE_M = 1500.0
 BARRIER_CLASSES = {"motorway", "trunk"}
@@ -162,6 +174,9 @@ def _match_category(poi_category: str | None, poi_name: str | None = None) -> st
             return None
     if scenario == "gp_clinic" and name_lower:
         if any(w in name_lower for w in ["cosmetic", "plastic", "aesthetic", "laser", "online", "montu"]):
+            return None
+    if name_lower and scenario in _FALSE_POSITIVES:
+        if any(fp in name_lower for fp in _FALSE_POSITIVES[scenario]):
             return None
     return scenario
 
@@ -348,13 +363,28 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
     else:
         label = "Almost All Errands Require a Car"
 
+    # Generate summary
+    essentials = ["supermarket", "train", "primary_school", "gp_clinic", "park", "tram_bus"]
+    close = [SCENARIO_CONFIG[s]["label"] for s in essentials
+             if s in nearest and nearest[s] < 400]
+    far = [SCENARIO_CONFIG[s]["label"] for s in essentials
+           if s not in nearest or nearest[s] >= 1000]
+    summary_parts = []
+    if close:
+        summary_parts.append(f"{', '.join(close[:3])} within 5 min walk")
+    if far:
+        summary_parts.append(f"no {' or '.join(far[:2])} within walking distance")
+    summary = '. '.join(summary_parts) + '.' if summary_parts else None
+
     result = {
         "score": score,
         "label": label,
-        "disclaimer": "Based on straight-line distance to amenities with highway barrier detection. Does not use road-network routing or account for pedestrian infrastructure.",
+        "disclaimer": "Based on straight-line distance to amenities with highway barrier detection.",
         "category_scores": category_scores,
         "poi_count": len(pois),
     }
+    if summary:
+        result["summary"] = summary
     if barriers_crossed > 0:
         result["barriers_crossed"] = barriers_crossed
     if slope_mult < 1.0:

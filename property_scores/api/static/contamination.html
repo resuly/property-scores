@@ -114,21 +114,73 @@ async function initMap() {
   map.on('click', e => { document.getElementById('lat').value = e.lngLat.lat.toFixed(6); document.getElementById('lng').value = e.lngLat.lng.toFixed(6); query(); });
 }
 
-function mapEmoji(type) {
+const MARKER_SVGS = {
+  epa:     '<path d="M12 9v4" stroke-width="2.5"/><circle cx="12" cy="17" r="0.5" fill="white"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/>',
+  fuel:    '<rect x="4" y="2" width="10" height="20" rx="2"/><path d="M14 10h2a2 2 0 0 1 2 2v3"/><path d="M20 9v6"/><path d="M4 12h10"/>',
+  recycle: '<path d="M12 2v6"/><path d="M8 8H4l4 7"/><path d="M16 8h4l-4 7"/><path d="M7 21h10"/><path d="M9 15l3 6"/><path d="M15 15l-3 6"/>',
+  wrench:  '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.9 8l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 8-7.9Z"/>',
+  flask:   '<path d="M10 2v8L4.7 20.5a1 1 0 0 0 .9 1.5h12.8a1 1 0 0 0 .9-1.5L14 10V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/>',
+  trash:   '<path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><rect x="5" y="6" width="14" height="15" rx="1"/><path d="M10 11v6"/><path d="M14 11v6"/>',
+};
+
+function markerType(type) {
   const t = (type || '').toLowerCase();
-  if (t.includes('fuel') || t.includes('petrol') || t.includes('gas station')) return '⛽';
-  if (t.includes('recycl') || t.includes('scrap')) return '♻️';
-  if (t.includes('auto') || t.includes('mechanic') || t.includes('car repair')) return '🔧';
-  if (t.includes('chemical')) return '⚗️';
-  if (t.includes('waste') || t.includes('dry clean')) return '🧹';
-  return '⚠️';
+  if (t.includes('fuel') || t.includes('petrol') || t.includes('gas station')) return 'fuel';
+  if (t.includes('recycl') || t.includes('scrap')) return 'recycle';
+  if (t.includes('auto') || t.includes('mechanic') || t.includes('car repair')) return 'wrench';
+  if (t.includes('chemical')) return 'flask';
+  if (t.includes('waste') || t.includes('dry clean')) return 'trash';
+  return 'trash';
+}
+
+function makeSvgDataUrl(svgContent, size, bgColor) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+    <circle cx="${size/2}" cy="${size/2}" r="${size/2 - 2}" fill="${bgColor}"/>
+    <circle cx="${size/2}" cy="${size/2}" r="${size/2 - 2}" fill="none" stroke="white" stroke-width="3"/>
+    <g transform="translate(${size*0.2},${size*0.2}) scale(${size*0.6/24})" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${svgContent}</g>
+  </svg>`;
+  return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+}
+
+function loadMarkerIcon(id, svgContent, displaySize, bgColor) {
+  return new Promise(resolve => {
+    if (map.hasImage(id)) { resolve(); return; }
+    const dpr = window.devicePixelRatio || 1;
+    const renderSize = Math.round(displaySize * dpr);
+    const svgXml = makeSvgDataUrl(svgContent, renderSize, bgColor);
+    const img = new Image(renderSize, renderSize);
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = renderSize;
+      canvas.height = renderSize;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, renderSize, renderSize);
+      const imageData = ctx.getImageData(0, 0, renderSize, renderSize);
+      if (!map.hasImage(id)) {
+        map.addImage(id, imageData, { pixelRatio: dpr });
+      }
+      resolve();
+    };
+    img.onerror = () => resolve();
+    img.src = svgXml;
+  });
+}
+
+async function loadAllMarkerIcons() {
+  const sz = 36;
+  await Promise.all([
+    loadMarkerIcon('marker-epa', MARKER_SVGS.epa, sz, '#dc2626'),
+    loadMarkerIcon('marker-fuel', MARKER_SVGS.fuel, sz, '#b45309'),
+    loadMarkerIcon('marker-recycle', MARKER_SVGS.recycle, sz, '#d97706'),
+    loadMarkerIcon('marker-wrench', MARKER_SVGS.wrench, sz, '#78350f'),
+    loadMarkerIcon('marker-flask', MARKER_SVGS.flask, sz, '#be123c'),
+    loadMarkerIcon('marker-trash', MARKER_SVGS.trash, sz, '#a16207'),
+  ]);
 }
 
 function clearMap() {
-  ['epa-markers', 'epa-markers-bg', 'ind-markers', 'ind-markers-bg', 'query-pt', 'radius-circle'].forEach(id => {
-    if (map.getLayer(id)) map.removeLayer(id);
-  });
   ['epa-markers', 'ind-markers', 'query-pt', 'radius-circle'].forEach(id => {
+    if (map.getLayer(id)) map.removeLayer(id);
     if (map.getSource(id)) map.removeSource(id);
   });
 }
@@ -236,22 +288,18 @@ async function query() {
     html += `<div style="font-size:10px;color:var(--text-3);margin-top:12px;padding-top:8px;border-top:1px solid var(--border)">${d.disclaimer}</div>`;
     details.innerHTML = html;
 
-    // Plot markers — circle background + emoji text label
+    // Plot markers — SVG icons via loadImage (crisp at any DPI)
+    await loadAllMarkerIcons();
     if (epaFeats.length) {
-      for (const f of epaFeats) f.properties.emoji = '⚠️';
       map.addSource('epa-markers', { type: 'geojson', data: { type: 'FeatureCollection', features: epaFeats } });
-      map.addLayer({ id: 'epa-markers-bg', type: 'circle', source: 'epa-markers',
-        paint: { 'circle-radius': 16, 'circle-color': '#dc2626', 'circle-stroke-width': 3, 'circle-stroke-color': '#fff' } });
       map.addLayer({ id: 'epa-markers', type: 'symbol', source: 'epa-markers',
-        layout: { 'text-field': '⚠️', 'text-size': 14, 'text-allow-overlap': true } });
+        layout: { 'icon-image': 'marker-epa', 'icon-size': 1, 'icon-allow-overlap': true } });
     }
     if (indFeats.length) {
-      for (const f of indFeats) f.properties.emoji = mapEmoji(f.properties.type);
+      for (const f of indFeats) f.properties.iconId = 'marker-' + markerType(f.properties.type);
       map.addSource('ind-markers', { type: 'geojson', data: { type: 'FeatureCollection', features: indFeats } });
-      map.addLayer({ id: 'ind-markers-bg', type: 'circle', source: 'ind-markers',
-        paint: { 'circle-radius': 13, 'circle-color': '#d97706', 'circle-stroke-width': 2.5, 'circle-stroke-color': '#fff' } });
       map.addLayer({ id: 'ind-markers', type: 'symbol', source: 'ind-markers',
-        layout: { 'text-field': ['get', 'emoji'], 'text-size': 12, 'text-allow-overlap': true } });
+        layout: { 'icon-image': ['get', 'iconId'], 'icon-size': 0.9, 'icon-allow-overlap': true } });
     }
 
     // Hover tooltips

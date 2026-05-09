@@ -239,10 +239,10 @@ async function query() {
   if (isNaN(queryLat) || isNaN(queryLng)) return;
 
   clearRoute();
-  ['poi-markers', 'query-pt-circle', 'iso-5-fill', 'iso-10-fill', 'iso-15-fill', 'iso-5-line', 'iso-10-line', 'iso-15-line'].forEach(id => {
+  ['poi-markers', 'poi-logos', 'query-pt-circle', 'iso-5-fill', 'iso-10-fill', 'iso-15-fill', 'iso-5-line', 'iso-10-line', 'iso-15-line'].forEach(id => {
     if (map.getLayer(id)) map.removeLayer(id);
   });
-  ['poi-markers', 'query-pt-circle', 'iso-5', 'iso-10', 'iso-15'].forEach(id => {
+  ['poi-markers', 'poi-logos', 'query-pt-circle', 'iso-5', 'iso-10', 'iso-15'].forEach(id => {
     if (map.getSource(id)) map.removeSource(id);
   });
   map.flyTo({ center: [queryLng, queryLat], zoom: Math.max(map.getZoom(), 15), duration: 800 });
@@ -304,14 +304,50 @@ async function query() {
       }
     } catch (e) { console.warn('Isochrone failed:', e); }
 
-    // POI markers
-    const poiFeatures = [];
+    // POI markers — brand logos on map
+    const poiPlain = [];
+    const poiLogos = [];
+    const logoLoadPromises = [];
+
     for (const [cat, info] of Object.entries(d.category_scores)) {
-      if (info.nearest) poiFeatures.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [info.nearest.lng, info.nearest.lat] }, properties: { cat } });
+      if (!info.nearest) continue;
+      const opts = info.options || [info.nearest];
+      for (const o of opts) {
+        const logo = brandLogo(o.name);
+        const feat = { type: 'Feature', geometry: { type: 'Point', coordinates: [o.lng, o.lat] }, properties: { cat, name: o.name } };
+        if (logo) {
+          const imgId = `logo-${cat}-${o.name.replace(/\W/g,'')}`.substring(0, 40);
+          feat.properties.iconId = imgId;
+          poiLogos.push(feat);
+          if (!map.hasImage(imgId)) {
+            logoLoadPromises.push(new Promise(resolve => {
+              map.loadImage(logo, (err, img) => {
+                if (!err && img) map.addImage(imgId, img, { sdf: false });
+                resolve();
+              });
+            }));
+          }
+        } else {
+          poiPlain.push(feat);
+        }
+      }
     }
-    if (poiFeatures.length) {
-      map.addSource('poi-markers', { type: 'geojson', data: { type: 'FeatureCollection', features: poiFeatures } });
-      map.addLayer({ id: 'poi-markers', type: 'circle', source: 'poi-markers', paint: { 'circle-radius': 5, 'circle-color': '#f59e0b', 'circle-stroke-width': 1.5, 'circle-stroke-color': '#fff' } });
+
+    await Promise.all(logoLoadPromises);
+
+    if (poiPlain.length) {
+      map.addSource('poi-markers', { type: 'geojson', data: { type: 'FeatureCollection', features: poiPlain } });
+      map.addLayer({ id: 'poi-markers', type: 'circle', source: 'poi-markers',
+        paint: { 'circle-radius': 5, 'circle-color': '#f59e0b', 'circle-stroke-width': 1.5, 'circle-stroke-color': '#fff' } });
+    }
+    if (poiLogos.length) {
+      if (!map.getSource('poi-logos')) {
+        map.addSource('poi-logos', { type: 'geojson', data: { type: 'FeatureCollection', features: poiLogos } });
+        map.addLayer({ id: 'poi-logos', type: 'symbol', source: 'poi-logos',
+          layout: { 'icon-image': ['get', 'iconId'], 'icon-size': 0.8, 'icon-allow-overlap': true, 'icon-anchor': 'center' } });
+      } else {
+        map.getSource('poi-logos').setData({ type: 'FeatureCollection', features: poiLogos });
+      }
     }
 
     // Scene rows grouped

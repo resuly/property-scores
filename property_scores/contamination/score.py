@@ -188,19 +188,26 @@ def _wa_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict]:
 
 INDUSTRIAL_KEYWORDS = {
     "fuel_station", "gas_station", "petrol",
-    "chemical_plant", "chemical",
+    "chemical_plant",
     "dry_cleaning",
     "recycling_center", "scrap",
     "waste_management", "waste_disposal",
     "auto_repair", "car_repair", "mechanic",
 }
 
-# Categories that LOOK industrial but aren't pollution risks
 INDUSTRIAL_EXCLUDE = {
     "business_manufacturing", "industrial_equipment",
     "painting", "laundry_service", "warehouse",
-    "commercial_industrial",
+    "commercial_industrial", "b2b_cleaning",
 }
+
+_NAME_FALSE_POSITIVES = [
+    "sneaker", "shoe clean", "tailor", "alteration", "sewing",
+    "end of lease", "carpet clean", "office clean", "house clean",
+    "window clean", "oven clean", "bond clean",
+    "ironing", "pressing", "mending",
+    "skip bin", "bin hire", "rubbish removal",
+]
 
 
 def _industrial_proximity(lat: float, lng: float) -> dict:
@@ -216,7 +223,14 @@ def _industrial_proximity(lat: float, lng: float) -> dict:
             cat_lower = cat.lower()
             if any(ex in cat_lower for ex in INDUSTRIAL_EXCLUDE):
                 continue
-            if any(kw in cat_lower for kw in INDUSTRIAL_KEYWORDS):
+            if not any(kw in cat_lower for kw in INDUSTRIAL_KEYWORDS):
+                continue
+            name_lower = (pname or "").lower()
+            if any(fp in name_lower for fp in _NAME_FALSE_POSITIVES):
+                continue
+            if cat_lower == "dry_cleaning" and not any(w in name_lower for w in ["dry clean", "launder"]):
+                continue
+            if True:
                 industrial.append({
                     "type": cat.replace("_", " "),
                     "name": pname or cat.replace("_", " "),

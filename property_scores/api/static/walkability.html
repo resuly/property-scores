@@ -149,14 +149,19 @@ function clearRoute() {
   document.querySelectorAll('.route-time').forEach(el => el.textContent = '');
 }
 
-async function showRoute(cat) {
+function showRouteOpt(cat, idx) {
   const info = lastData?.category_scores?.[cat];
-  if (!info?.nearest) return;
+  const opts = info?.options;
+  if (!opts || !opts[idx]) return;
+  const dest = opts[idx];
+  _drawRoute(cat, dest, info.distance_m);
+}
+
+async function _drawRoute(cat, dest, straightDist) {
   document.querySelectorAll('.scene-row').forEach(c => c.classList.remove('active'));
   document.querySelector(`[data-cat="${cat}"]`)?.classList.add('active');
   clearRoute();
-  const dest = info.nearest;
-  const c = distColor(info.distance_m);
+  const c = distColor(straightDist);
   try {
     const resp = await fetch(`https://api.mapbox.com/directions/v5/mapbox/walking/${queryLng},${queryLat};${dest.lng},${dest.lat}?geometries=geojson&access_token=${mapboxToken}`);
     const data = await resp.json();
@@ -178,13 +183,19 @@ async function showRoute(cat) {
     const mins = Math.round(route.duration / 60);
     const distM = Math.round(route.distance);
     const el = document.querySelector(`[data-cat="${cat}"] .route-time`);
-    if (el) el.innerHTML = `<span style="color:${c}">${mins} min</span> · ${distM}m walking`;
+    if (el) el.innerHTML = `<span style="color:${c}">${mins} min</span> · ${distM}m to ${dest.name || 'destination'}`;
 
     const bounds = new mapboxgl.LngLatBounds();
     route.geometry.coordinates.forEach(p => bounds.extend(p));
     bounds.extend([queryLng, queryLat]);
     map.fitBounds(bounds, { padding: { top: 60, bottom: 60, left: 60, right: 420 }, maxZoom: 17 });
   } catch (e) { console.warn('Route failed:', e); }
+}
+
+async function showRoute(cat) {
+  const info = lastData?.category_scores?.[cat];
+  if (!info?.nearest) return;
+  _drawRoute(cat, info.nearest, info.distance_m);
 }
 
 async function query() {
@@ -263,17 +274,35 @@ async function query() {
         const found = dist != null;
         const name = info.nearest?.name || '';
         const c = distColor(dist);
+        const opts = info.options || [];
+        let optsHtml = '';
+        if (opts.length > 1) {
+          optsHtml = `<div class="mt-1 ml-1 space-y-0.5">`;
+          for (let i = 0; i < opts.length; i++) {
+            const o = opts[i];
+            const oc = distColor(o.distance_m);
+            const oMin = Math.max(1, Math.round(o.distance_m / 80));
+            const active = i === 0 ? ' font-medium' : '';
+            optsHtml += `<div class="flex items-center gap-1.5 text-[11px] cursor-pointer hover:text-slate-900 rounded px-1 py-0.5 hover:bg-slate-50" data-cat="${cat}" data-opt="${i}" onclick="showRouteOpt('${cat}',${i})">
+              <span class="w-1.5 h-1.5 rounded-full flex-shrink-0" style="background:${oc}"></span>
+              <span class="truncate text-slate-500${active}">${o.name}</span>
+              <span class="ml-auto flex-shrink-0 text-slate-400">${o.distance_m}m · ${oMin}min</span>
+            </div>`;
+          }
+          optsHtml += `</div>`;
+        }
         html += `
-          <div class="scene-row ${found ? '' : 'none'}" data-cat="${cat}" ${found ? `onclick="showRoute('${cat}')"` : ''}>
+          <div class="scene-row ${found ? '' : 'none'}" data-cat="${cat}" ${found && opts.length <= 1 ? `onclick="showRoute('${cat}')"` : ''}>
             ${icon(info.icon, found ? c : '#94a3b8')}
             <div class="flex-1 min-w-0">
               <div class="flex items-center justify-between gap-2">
                 <span class="text-[13px] font-medium text-slate-800 truncate">${info.label}</span>
                 ${distPill(dist)}
               </div>
-              ${name ? `<div class="text-[11px] text-slate-400 truncate mt-0.5">${name}${info.count > 1 ? ` <span class="text-slate-300">+${info.count - 1} more</span>` : ''}</div>` : ''}
+              ${opts.length <= 1 && name ? `<div class="text-[11px] text-slate-400 truncate mt-0.5">${name}</div>` : ''}
+              ${optsHtml}
               ${info.barrier ? '<div class="text-[10px] text-amber-500 mt-0.5">Highway crossing</div>' : ''}
-              <div class="route-time text-[11px] text-green-600 mt-0.5"></div>
+              <div class="route-time text-[11px] mt-0.5"></div>
             </div>
           </div>`;
       }

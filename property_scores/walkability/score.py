@@ -243,9 +243,12 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
 
     nearest: dict[str, float] = {}
     nearest_detail: dict[str, dict] = {}
+    top_pois: dict[str, list] = {}
     cat_counts: dict[str, int] = {}
+    MAX_TOP = 3
 
     items = pois_full if detailed else [(c, d, None, None, None) for c, d in pois]
+    seen_names: dict[str, set] = {}
     for poi_cat, dist_m, plng, plat, pname in items:
         matched = _match_category(poi_cat, pname)
         if matched:
@@ -257,6 +260,20 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
                         "lng": round(plng, 6), "lat": round(plat, 6),
                         "name": pname or poi_cat,
                     }
+            if plng is not None and matched not in seen_names:
+                seen_names[matched] = set()
+            if plng is not None:
+                norm = (pname or "").lower().strip()
+                if norm not in seen_names.get(matched, set()):
+                    if matched not in top_pois:
+                        top_pois[matched] = []
+                    if len(top_pois[matched]) < MAX_TOP:
+                        top_pois[matched].append({
+                            "lng": round(plng, 6), "lat": round(plat, 6),
+                            "name": pname or poi_cat,
+                            "distance_m": round(dist_m),
+                        })
+                        seen_names.setdefault(matched, set()).add(norm)
 
     def _effective_distance(poi_dist_m: float) -> float:
         """Check if a highway barrier lies between property and POI.
@@ -302,6 +319,8 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
             }
             if scenario in nearest_detail:
                 cs["nearest"] = nearest_detail[scenario]
+            if scenario in top_pois:
+                cs["options"] = top_pois[scenario]
             category_scores[scenario] = cs
         else:
             d = 0.0

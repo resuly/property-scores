@@ -106,6 +106,33 @@ const SVGS = {
 
 const GROUP_LABELS = { essential: 'Daily Essentials', lifestyle: 'Lifestyle', extra: 'Nice to Have' };
 
+const BRAND_DOMAINS = {
+  'woolworths': 'woolworths.com.au', 'coles': 'coles.com.au', 'aldi': 'aldi.com.au',
+  'iga': 'iga.com.au', 'costco': 'costco.com.au', 'foodworks': 'foodworks.com.au',
+  '7-eleven': '7eleven.com.au', '7eleven': '7eleven.com.au', 'ezymart': 'ezymart.com.au',
+  "mcdonald": 'mcdonalds.com.au', 'kfc': 'kfc.com.au', 'subway': 'subway.com',
+  'hungry jack': 'hungryjacks.com.au', 'domino': 'dominos.com.au',
+  'starbucks': 'starbucks.com', 'gloria jean': 'gloriajeanscoffees.com.au',
+  'priceline': 'priceline.com.au', 'chemist warehouse': 'chemistwarehouse.com.au',
+  'terry white': 'terrywhitechemmart.com.au', 'amcal': 'amcal.com.au',
+  'anytime fitness': 'anytimefitness.com.au', 'f45': 'f45training.com.au',
+  'fitness first': 'fitnessfirst.com.au', 'snap fitness': 'snapfitness.com.au',
+  'nab': 'nab.com.au', 'commonwealth bank': 'commbank.com.au', 'commbank': 'commbank.com.au',
+  'anz': 'anz.com.au', 'westpac': 'westpac.com.au', 'bendigo bank': 'bendigobank.com.au',
+  'australia post': 'auspost.com.au',
+  'bunnings': 'bunnings.com.au', 'kmart': 'kmart.com.au', 'target': 'target.com.au',
+  'big w': 'bigw.com.au', 'officeworks': 'officeworks.com.au',
+};
+
+function brandLogo(name) {
+  if (!name) return null;
+  const lower = name.toLowerCase();
+  for (const [key, domain] of Object.entries(BRAND_DOMAINS)) {
+    if (lower.includes(key)) return `https://www.google.com/s2/favicons?domain=${domain}&sz=32`;
+  }
+  return null;
+}
+
 function icon(key, color) {
   return `<div class="scene-icon" style="background:${color}15"><svg viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${SVGS[key] || SVGS.convenience}</svg></div>`;
 }
@@ -315,15 +342,18 @@ async function query() {
         const opts = info.options || [];
         let optsHtml = '';
         if (opts.length > 1) {
-          optsHtml = `<div class="mt-1 ml-1 space-y-0.5">`;
+          optsHtml = `<div class="mt-1.5 ml-1 space-y-1">`;
           for (let i = 0; i < opts.length; i++) {
             const o = opts[i];
             const oc = distColor(o.distance_m);
             const oMin = Math.max(1, Math.round(o.distance_m / 80));
-            const active = i === 0 ? ' font-medium' : '';
+            const logo = brandLogo(o.name);
+            const logoHtml = logo
+              ? `<img src="${logo}" width="16" height="16" class="flex-shrink-0 rounded" style="image-rendering:crisp-edges" onerror="this.style.display='none'">`
+              : `<span class="w-1.5 h-1.5 rounded-full flex-shrink-0" style="background:${oc}"></span>`;
             optsHtml += `<div class="flex items-center gap-1.5 text-[11px] cursor-pointer hover:text-slate-900 rounded px-1 py-0.5 hover:bg-slate-50" data-cat="${cat}" data-opt="${i}" onclick="showRouteOpt('${cat}',${i})">
-              <span class="w-1.5 h-1.5 rounded-full flex-shrink-0" style="background:${oc}"></span>
-              <span class="truncate text-slate-500${active}">${o.name}</span>
+              ${logoHtml}
+              <span class="truncate text-slate-500${i === 0 ? ' font-medium' : ''}">${o.name}</span>
               <span class="ml-auto flex-shrink-0 text-slate-400">${o.distance_m}m · ${oMin}min</span>
             </div>`;
           }

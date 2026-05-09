@@ -114,11 +114,62 @@ async function initMap() {
   map.on('click', e => { document.getElementById('lat').value = e.lngLat.lat.toFixed(6); document.getElementById('lng').value = e.lngLat.lng.toFixed(6); query(); });
 }
 
-function clearMap() {
-  ['epa-markers', 'epa-markers-stroke', 'ind-markers', 'query-pt', 'radius-circle'].forEach(id => {
-    if (map.getLayer(id)) map.removeLayer(id);
+function svgToImg(svgStr, size, bg, stroke) {
+  return new Promise(resolve => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+      <circle cx="${size/2}" cy="${size/2}" r="${size/2-1}" fill="${bg}" stroke="#fff" stroke-width="2"/>
+      <g transform="translate(${size/4},${size/4}) scale(${size/2/24})" fill="none" stroke="${stroke}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">${svgStr}</g>
+    </svg>`;
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = size; c.height = size;
+      c.getContext('2d').drawImage(img, 0, 0);
+      resolve(c.getContext('2d').getImageData(0, 0, size, size));
+    };
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
   });
+}
+
+const MAP_ICONS = {
+  epa:       '<path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+  fuel:      '<path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h8a2 2 0 002-2V4a2 2 0 00-2-2z"/><path d="M16 10h2a2 2 0 012 2v2"/><path d="M4 12h12"/>',
+  recycle:   '<path d="M7 19H4.815a1.83 1.83 0 01-1.57-.881l-1.5-2.5A1.83 1.83 0 012.5 13.5L4 11"/><path d="M11 19h5.185a1.83 1.83 0 001.57-.881l1.5-2.5a1.83 1.83 0 00-.755-2.619L17 11"/><path d="M14 16l3 3 3-3"/><path d="M4 5l3-3 3 3"/><path d="M12 22V5"/><path d="M7 5h10"/>',
+  wrench:    '<path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/>',
+  chemical:  '<path d="M10 2v7.527a2 2 0 01-.211.896L4.72 20.55a1 1 0 00.9 1.45h12.76a1 1 0 00.9-1.45l-5.069-10.127A2 2 0 0114 9.527V2"/><path d="M8.5 2h7"/>',
+  waste:     '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>',
+};
+
+function mapIconType(type) {
+  const t = (type || '').toLowerCase();
+  if (t.includes('fuel') || t.includes('petrol') || t.includes('gas station')) return 'fuel';
+  if (t.includes('recycl') || t.includes('scrap')) return 'recycle';
+  if (t.includes('auto') || t.includes('mechanic') || t.includes('car repair')) return 'wrench';
+  if (t.includes('chemical')) return 'chemical';
+  if (t.includes('waste') || t.includes('dry clean')) return 'waste';
+  return 'waste';
+}
+
+async function loadMapIcons() {
+  const entries = [
+    ['icon-epa', MAP_ICONS.epa, 32, '#dc2626', '#fff'],
+    ['icon-fuel', MAP_ICONS.fuel, 28, '#d97706', '#fff'],
+    ['icon-recycle', MAP_ICONS.recycle, 28, '#d97706', '#fff'],
+    ['icon-wrench', MAP_ICONS.wrench, 28, '#d97706', '#fff'],
+    ['icon-chemical', MAP_ICONS.chemical, 28, '#d97706', '#fff'],
+    ['icon-waste', MAP_ICONS.waste, 28, '#d97706', '#fff'],
+  ];
+  for (const [id, svg, size, bg, stroke] of entries) {
+    if (!map.hasImage(id)) {
+      const imgData = await svgToImg(svg, size, bg, stroke);
+      map.addImage(id, imgData, { pixelRatio: 2 });
+    }
+  }
+}
+
+function clearMap() {
   ['epa-markers', 'ind-markers', 'query-pt', 'radius-circle'].forEach(id => {
+    if (map.getLayer(id)) map.removeLayer(id);
     if (map.getSource(id)) map.removeSource(id);
   });
 }
@@ -226,15 +277,19 @@ async function query() {
     html += `<div style="font-size:10px;color:var(--text-3);margin-top:12px;padding-top:8px;border-top:1px solid var(--border)">${d.disclaimer}</div>`;
     details.innerHTML = html;
 
-    // Plot markers on map
+    // Plot markers on map with icons
+    await loadMapIcons();
     if (epaFeats.length) {
+      for (const f of epaFeats) f.properties.iconId = 'icon-epa';
       map.addSource('epa-markers', { type: 'geojson', data: { type: 'FeatureCollection', features: epaFeats } });
-      map.addLayer({ id: 'epa-markers-stroke', type: 'circle', source: 'epa-markers', paint: { 'circle-radius': 10, 'circle-color': '#fff', 'circle-opacity': .9 } });
-      map.addLayer({ id: 'epa-markers', type: 'circle', source: 'epa-markers', paint: { 'circle-radius': 7, 'circle-color': '#dc2626', 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' } });
+      map.addLayer({ id: 'epa-markers', type: 'symbol', source: 'epa-markers',
+        layout: { 'icon-image': 'icon-epa', 'icon-size': 1, 'icon-allow-overlap': true } });
     }
     if (indFeats.length) {
+      for (const f of indFeats) f.properties.iconId = 'icon-' + mapIconType(f.properties.type);
       map.addSource('ind-markers', { type: 'geojson', data: { type: 'FeatureCollection', features: indFeats } });
-      map.addLayer({ id: 'ind-markers', type: 'circle', source: 'ind-markers', paint: { 'circle-radius': 5, 'circle-color': '#d97706', 'circle-stroke-width': 1.5, 'circle-stroke-color': '#fff' } });
+      map.addLayer({ id: 'ind-markers', type: 'symbol', source: 'ind-markers',
+        layout: { 'icon-image': ['get', 'iconId'], 'icon-size': 1, 'icon-allow-overlap': true } });
     }
 
     // Hover tooltips

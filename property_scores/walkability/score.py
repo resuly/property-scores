@@ -58,11 +58,29 @@ CATEGORY_MAP: dict[str, tuple[str, str]] = {
     "drugstore": ("pharmacy", "drugstore"),
     # Park / green space
     "park": ("park", "park"),
-    "playground": ("park", "playground"),
+    "memorial_park": ("park", "memorial"),
     "garden": ("park", "garden"),
     "botanical_garden": ("park", "botanical"),
     "recreation_area": ("park", "recreation"),
     "nature_reserve": ("park", "nature"),
+    "national_park": ("park", "national"),
+    # Playground / kids
+    "playground": ("playground", "playground"),
+    "skate_park": ("playground", "skate"),
+    "kids_recreation_and_party": ("playground", "kids"),
+    # Dog park
+    "dog_park": ("dog_park", "dog"),
+    # Sports / oval
+    "sports_and_recreation_venue": ("sports", "venue"),
+    "soccer_field": ("sports", "soccer"),
+    "sports_club_and_league": ("sports", "club"),
+    # Walking trails
+    "hiking_trail": ("walking_trail", "hiking"),
+    "mountain_bike_trails": ("walking_trail", "trail"),
+    # Water / beach
+    "beach": ("beach", "beach"),
+    "lake": ("beach", "lake"),
+    "swimming_pool": ("pool", "pool"),
     # Cafe
     "cafe": ("cafe", "cafe"),
     "coffee_shop": ("cafe", "coffee"),
@@ -72,7 +90,6 @@ CATEGORY_MAP: dict[str, tuple[str, str]] = {
     # Gym / fitness
     "gym": ("fitness", "gym"),
     "fitness_center": ("fitness", "fitness"),
-    "swimming_pool": ("fitness", "pool"),
     "recreation_center": ("fitness", "recreation"),
     # Shopping
     "shopping_center": ("shopping", "mall"),
@@ -96,6 +113,12 @@ SCENARIO_CONFIG: dict[str, dict] = {
     "primary_school":  {"weight": 2.5, "icon": "school",         "label": "Primary School",       "group": "essential"},
     "gp_clinic":       {"weight": 2.5, "icon": "medical",        "label": "GP / Medical Clinic",  "group": "essential"},
     "park":            {"weight": 2.0, "icon": "park",           "label": "Park / Green Space",   "group": "essential"},
+    "playground":      {"weight": 1.5, "icon": "playground",     "label": "Playground",           "group": "essential"},
+    "dog_park":        {"weight": 1.0, "icon": "dog",            "label": "Dog Park",             "group": "lifestyle"},
+    "walking_trail":   {"weight": 1.0, "icon": "trail",          "label": "Walking / Hiking Trail","group": "lifestyle"},
+    "beach":           {"weight": 1.0, "icon": "beach",          "label": "Beach / Lake",         "group": "lifestyle"},
+    "sports":          {"weight": 1.0, "icon": "sports",         "label": "Sports Oval / Field",  "group": "lifestyle"},
+    "pool":            {"weight": 0.5, "icon": "pool",           "label": "Swimming Pool",        "group": "extra"},
     "childcare":       {"weight": 2.0, "icon": "childcare",      "label": "Childcare / Preschool","group": "essential"},
     "pharmacy":        {"weight": 2.0, "icon": "pharmacy",       "label": "Pharmacy",             "group": "lifestyle"},
     "tram_bus":        {"weight": 2.0, "icon": "bus",            "label": "Tram / Bus Stop",      "group": "essential"},

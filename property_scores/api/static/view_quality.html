@@ -3,106 +3,345 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>View Quality Score - Property Scores</title>
-<link rel="stylesheet" href="/css/styles.css">
+<title>View Quality - Property Scores</title>
+<link rel="stylesheet" href="/css/styles.css?v=3">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.21.0/mapbox-gl.css" rel="stylesheet">
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.21.0/mapbox-gl.js"></script>
+<style>
+  :root { --sidebar-w: 380px; --violet: #7c3aed; --violet-light: #a78bfa; --violet-bg: #f5f3ff; --text-1: #1a1f2b; --text-2: #4a5568; --text-3: #8b95a5; --border: #e8ecf1; --surface: #fafbfc; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'DM Sans', system-ui, sans-serif; color: var(--text-1); -webkit-font-smoothing: antialiased; }
+  #map { position: absolute; top: 0; left: 0; right: var(--sidebar-w); bottom: 0; }
+  #sidebar { position: absolute; top: 0; right: 0; bottom: 0; width: var(--sidebar-w); background: #fff; border-left: 1px solid var(--border); overflow-y: auto; }
+  .mapboxgl-ctrl-bottom-left, .mapboxgl-ctrl-bottom-right { display: none; }
+  .sb { padding: 20px; }
+  .sb-title { font-size: 15px; font-weight: 700; letter-spacing: -0.02em; margin-top: 8px; }
+  .sb-desc { font-size: 12px; color: var(--text-3); margin: 4px 0 14px; line-height: 1.5; }
+  .input-row { display: flex; gap: 6px; margin-bottom: 8px; }
+  .input-row input { flex: 1; min-width: 0; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; font-family: inherit; background: var(--surface); outline: none; }
+  .input-row input:focus { border-color: var(--violet); }
+  .input-row button { padding: 7px 16px; border: none; border-radius: 6px; background: var(--text-1); color: #fff; font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer; }
+  .presets { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 16px; }
+  .presets button { padding: 3px 10px; border: 1px solid var(--border); border-radius: 100px; background: #fff; font-size: 11px; font-weight: 500; color: var(--text-2); cursor: pointer; font-family: inherit; }
+  .presets button:hover { border-color: var(--violet); color: var(--violet); }
+  .score-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 12px; }
+  .score-num { font-size: 36px; font-weight: 700; line-height: 1; letter-spacing: -0.03em; }
+  .section-hdr { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--text-3); padding: 14px 0 6px; border-top: 1px solid var(--border); margin-top: 2px; }
+  .factor-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 12px; }
+  .factor-icon { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .factor-name { flex: 1; min-width: 0; color: var(--text-2); }
+  .factor-detail { font-size: 10px; color: var(--text-3); }
+  .factor-bar-bg { width: 60px; height: 4px; border-radius: 2px; background: #f1f5f9; flex-shrink: 0; }
+  .factor-bar-fill { height: 100%; border-radius: 2px; }
+  .factor-pct { width: 28px; text-align: right; font-weight: 600; font-size: 11px; flex-shrink: 0; }
+  .horizon-card { background: var(--violet-bg); border: 1px solid #e9e5f5; border-radius: 10px; padding: 14px; margin-bottom: 12px; text-align: center; }
+  .horizon-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--violet); margin-bottom: 8px; }
+  .metric-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; font-size: 12px; border-bottom: 1px solid #f1f5f9; }
+  .metric-label { color: var(--text-3); }
+  .metric-value { font-weight: 600; color: var(--text-1); }
+  .hidden { display: none !important; }
+</style>
 </head>
-<body class="bg-slate-50 font-sans text-slate-900">
-<div class="max-w-3xl mx-auto px-6 py-10">
-  <a href="/" class="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-brand-600 mb-8">&larr; All Scores</a>
-
-  <div class="text-center mb-12">
-    <span class="inline-block px-3 py-1 rounded-full badge-view text-xs font-semibold mb-4">Property Scores</span>
-    <h1 class="text-3xl font-bold mb-3"><span class="text-violet-600">View Quality</span> Score</h1>
-    <p class="text-slate-500 max-w-xl mx-auto text-sm">Estimates visual amenity potential using ocean proximity, elevation, greenery, and building density from open satellite data.</p>
-  </div>
-
-  <div class="card p-6 mb-10">
-    <h2 class="text-lg font-semibold mb-4">Try It</h2>
-    <div class="flex gap-2 flex-wrap">
-      <input id="lat" type="number" step="any" placeholder="Latitude" value="-37.8676" class="input-field w-36">
-      <input id="lng" type="number" step="any" placeholder="Longitude" value="144.9785" class="input-field w-36">
-      <button onclick="compute()" class="btn-primary">Check View Quality</button>
+<body>
+<div id="map"></div>
+<div id="sidebar">
+  <div class="sb">
+    <a href="/" style="font-size:12px;color:var(--text-3);text-decoration:none">&larr; All Scores</a>
+    <div class="sb-title">View Quality</div>
+    <div class="sb-desc">Visual amenity from ocean proximity, elevation, greenery, building density, and horizon openness. 100 = best views.</div>
+    <div class="input-row">
+      <input id="lat" type="number" step="any" placeholder="Latitude" value="-37.8676">
+      <input id="lng" type="number" step="any" placeholder="Longitude" value="144.9785">
+      <button onclick="query()">Go</button>
     </div>
-    <div id="result" class="hidden mt-4 p-4 bg-slate-50 rounded-lg"></div>
-  </div>
-
-  <div class="prose-scores">
-    <h2>What It Measures</h2>
-    <p>The View Quality Score estimates how good the visual outlook is from a location. It combines five factors from open satellite datasets, each measuring a different aspect of visual amenity.</p>
-
-    <div class="flex rounded-lg overflow-hidden text-xs text-center mb-6">
-      <div class="flex-1 py-3 bg-violet-200 text-violet-800"><span class="block text-sm font-bold">85+</span>Exceptional</div>
-      <div class="flex-1 py-3 bg-violet-100 text-violet-700"><span class="block text-sm font-bold">70-84</span>Great</div>
-      <div class="flex-1 py-3 bg-blue-100 text-blue-700"><span class="block text-sm font-bold">55-69</span>Good</div>
-      <div class="flex-1 py-3 bg-slate-100 text-slate-600"><span class="block text-sm font-bold">40-54</span>Average</div>
-      <div class="flex-1 py-3 bg-slate-200 text-slate-500"><span class="block text-sm font-bold">25-39</span>Limited</div>
-      <div class="flex-1 py-3 bg-slate-300 text-slate-600"><span class="block text-sm font-bold">0-24</span>Obstructed</div>
+    <div class="presets">
+      <button onclick="setPoint(-37.8676,144.9785)">St Kilda</button>
+      <button onclick="setPoint(-37.8136,144.9631)">CBD</button>
+      <button onclick="setPoint(-37.7650,145.0160)">Kew</button>
+      <button onclick="setPoint(-37.7880,145.2270)">Dandenong Ranges</button>
+      <button onclick="setPoint(-37.8550,144.9810)">Albert Park</button>
+      <button onclick="setPoint(-38.3380,144.7530)">Torquay</button>
     </div>
-
-    <h2>Five Factors</h2>
-    <table>
-      <tr><th>Factor</th><th>Weight</th><th>Data Source</th><th>What It Measures</th></tr>
-      <tr><td>Ocean Proximity</td><td>3.0</td><td>Overture Maps Water</td><td>Distance to nearest ocean, bay, or strait</td></tr>
-      <tr><td>Inland Water</td><td>1.5</td><td>Overture Maps Water</td><td>Distance to nearest river, lake, reservoir</td></tr>
-      <tr><td>Elevation Advantage</td><td>2.5</td><td>Open-Meteo DEM</td><td>Height above surrounding terrain</td></tr>
-      <tr><td>Green Space</td><td>2.0</td><td>Overture Maps POIs</td><td>Parks, gardens, reserves within 1km</td></tr>
-      <tr><td>Building Openness</td><td>2.0</td><td>Overture Maps Buildings</td><td>Inverse of building density within 300m</td></tr>
-    </table>
-
-    <h3>Adaptive Weighting</h3>
-    <p>Factors without available data are excluded from the weighted average rather than penalized. Inland locations are scored on 4 factors instead of 5.</p>
-
-    <h2>API</h2>
-    <p><code>GET /scores/view-quality?lat=-37.8676&amp;lng=144.9785</code></p>
-  </div>
-
-  <div class="mt-16 pt-6 border-t border-slate-100 text-center text-xs text-slate-400">
-    Built by <a href="https://daleads.com.au" class="text-brand-500 hover:text-brand-600 no-underline">DA Leads</a> | Data: Overture Maps, Open-Meteo
+    <div id="loading" class="hidden" style="text-align:center;padding:24px 0;font-size:13px;color:var(--violet);font-weight:500">Analysing view quality&hellip;</div>
+    <div id="score-box" class="hidden"></div>
+    <div id="horizon-box" class="hidden"></div>
+    <div id="factors-box" class="hidden"></div>
+    <div id="details-box" class="hidden"></div>
+    <details style="margin-top:20px">
+      <summary style="font-size:11px;font-weight:600;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;cursor:pointer">Methodology</summary>
+      <div style="font-size:12px;color:var(--text-2);line-height:1.6;margin-top:8px">
+        <p><strong>6 factors</strong> weighted by importance: Ocean (3.0), Elevation (2.5), Horizon (2.5), Green Space (2.0), Building Openness (2.0), Inland Water (1.5). Missing factors excluded, not penalized.</p>
+        <p style="margin-top:6px"><strong>Horizon:</strong> DEM elevation sampled at 5 distances in 8 directions. Low angle = open views. Negative = downhill (bonus).</p>
+        <p style="margin-top:6px"><strong>Limitation:</strong> Based on terrain and proximity, not actual line-of-sight. Does not model individual building obstructions.</p>
+      </div>
+    </details>
   </div>
 </div>
 
 <script>
-async function compute() {
-  const lat = document.getElementById('lat').value;
-  const lng = document.getElementById('lng').value;
-  const el = document.getElementById('result');
-  el.classList.remove('hidden');
-  el.innerHTML = '<div class="text-brand-500 text-sm">Computing view quality...</div>';
+let map;
+
+const FACTOR_META = {
+  ocean_proximity:    { label: 'Ocean Proximity', color: '#3b82f6', icon: 'water' },
+  inland_water:       { label: 'Inland Water', color: '#06b6d4', icon: 'river' },
+  elevation_advantage:{ label: 'Elevation', color: '#8b5cf6', icon: 'mountain' },
+  green_space:        { label: 'Green Space', color: '#22c55e', icon: 'tree' },
+  building_openness:  { label: 'Building Openness', color: '#f59e0b', icon: 'building' },
+  horizon_openness:   { label: 'Horizon Openness', color: '#7c3aed', icon: 'eye' },
+};
+
+function setPoint(lat, lng) {
+  document.getElementById('lat').value = lat.toFixed(4);
+  document.getElementById('lng').value = lng.toFixed(4);
+  query();
+}
+
+function scoreColor(s) {
+  if (s >= 85) return '#7c3aed';
+  if (s >= 70) return '#8b5cf6';
+  if (s >= 55) return '#3b82f6';
+  if (s >= 40) return '#64748b';
+  if (s >= 25) return '#94a3b8';
+  return '#cbd5e1';
+}
+
+async function initMap() {
+  const cfg = await fetch('/api/config').then(r => r.json());
+  mapboxgl.accessToken = cfg.mapbox_token;
+  map = new mapboxgl.Map({
+    container: 'map',
+    style: 'mapbox://styles/mapbox/light-v11',
+    center: [144.9785, -37.8676],
+    zoom: 15,
+    pitch: 50,
+    bearing: -10,
+    antialias: true,
+  });
+  map.addControl(new mapboxgl.NavigationControl(), 'top-right');
+  map.on('load', () => add3DBuildings());
+  map.on('click', e => {
+    document.getElementById('lat').value = e.lngLat.lat.toFixed(6);
+    document.getElementById('lng').value = e.lngLat.lng.toFixed(6);
+    query();
+  });
+}
+
+function add3DBuildings() {
+  const layers = map.getStyle().layers;
+  let labelLayerId;
+  for (const layer of layers) {
+    if (layer.type === 'symbol' && layer.layout && layer.layout['text-field']) { labelLayerId = layer.id; break; }
+  }
+  if (map.getLayer('3d-buildings')) return;
+  map.addLayer({
+    id: '3d-buildings', source: 'composite', 'source-layer': 'building',
+    filter: ['==', 'extrude', 'true'], type: 'fill-extrusion', minzoom: 14,
+    paint: {
+      'fill-extrusion-color': ['interpolate', ['linear'], ['get', 'height'],
+        0, '#e2e8f0', 10, '#c4b5fd', 25, '#a78bfa', 50, '#7c3aed', 100, '#5b21b6'],
+      'fill-extrusion-height': ['get', 'height'],
+      'fill-extrusion-base': ['get', 'min_height'],
+      'fill-extrusion-opacity': 0.7,
+    },
+  }, labelLayerId);
+}
+
+function plotQueryPoint(lng, lat, score) {
+  const color = score != null ? scoreColor(score) : '#a78bfa';
+  const ptData = { type: 'Feature', geometry: { type: 'Point', coordinates: [lng, lat] } };
+  if (map.getSource('query-pt')) {
+    map.getSource('query-pt').setData(ptData);
+    map.setPaintProperty('query-pt-glow', 'circle-color', color);
+    map.setPaintProperty('query-pt', 'circle-color', color);
+  } else {
+    map.addSource('query-pt', { type: 'geojson', data: ptData });
+    map.addLayer({ id: 'query-pt-glow', type: 'circle', source: 'query-pt', paint: { 'circle-radius': 16, 'circle-color': color, 'circle-opacity': 0.15, 'circle-blur': 0.6 } });
+    map.addLayer({ id: 'query-pt', type: 'circle', source: 'query-pt', paint: { 'circle-radius': 7, 'circle-color': color, 'circle-stroke-width': 2.5, 'circle-stroke-color': '#fff' } });
+  }
+}
+
+async function query() {
+  const lat = parseFloat(document.getElementById('lat').value);
+  const lng = parseFloat(document.getElementById('lng').value);
+  if (isNaN(lat) || isNaN(lng)) return;
+
+  map.flyTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), 15), pitch: 50, duration: 800 });
+  plotQueryPoint(lng, lat, null);
+
+  const loading = document.getElementById('loading');
+  const scoreBox = document.getElementById('score-box');
+  const horizonBox = document.getElementById('horizon-box');
+  const factorsBox = document.getElementById('factors-box');
+  const detailsBox = document.getElementById('details-box');
+
+  loading.classList.remove('hidden');
+  scoreBox.classList.add('hidden');
+  horizonBox.classList.add('hidden');
+  factorsBox.classList.add('hidden');
+  detailsBox.classList.add('hidden');
+
   try {
     const resp = await fetch(`/scores/view-quality?lat=${lat}&lng=${lng}`);
     const d = await resp.json();
-    if (d.error) { el.innerHTML = `<div class="text-red-500 text-sm">${d.error}</div>`; return; }
-    const color = d.score >= 70 ? '#16a34a' : d.score >= 40 ? '#d97706' : '#dc2626';
-    const factorNames = { ocean_proximity: 'Ocean', inland_water: 'Inland Water', elevation_advantage: 'Elevation', green_space: 'Green Space', building_openness: 'Openness' };
-    let factors = '';
-    for (const [key, label] of Object.entries(factorNames)) {
-      const f = (d.factors || {})[key];
-      const val = f ? f.value : 0;
-      const pct = Math.round(val * 100);
-      let detail = '';
-      if (f) {
-        if (f.distance_m != null) detail = `${f.distance_m}m`;
-        else if (f.advantage_m != null) detail = `+${f.advantage_m}m`;
-        else if (f.count != null) detail = `${f.count} POIs`;
-        else if (f.buildings_300m != null) detail = `${f.buildings_300m} bldgs`;
-      }
-      const barColor = pct >= 70 ? 'bg-green-500' : pct >= 40 ? 'bg-amber-500' : 'bg-red-400';
-      factors += `
-        <div class="flex items-center gap-3 mb-2">
-          <span class="w-32 text-xs text-slate-500 shrink-0">${label}${detail ? ' (' + detail + ')' : ''}</span>
-          <div class="flex-1 h-2 rounded-full bg-slate-200"><div class="${barColor} h-full rounded-full transition-all" style="width:${pct}%"></div></div>
-          <span class="w-10 text-right text-xs font-semibold" style="color:${pct >= 70 ? '#16a34a' : pct >= 40 ? '#d97706' : '#dc2626'}">${pct}%</span>
-        </div>`;
+    loading.classList.add('hidden');
+
+    if (d.error || d.score === null) {
+      scoreBox.classList.remove('hidden');
+      scoreBox.innerHTML = `<div class="score-card" style="color:#dc2626">${d.error || 'Data unavailable'}</div>`;
+      return;
     }
-    el.innerHTML = `
-      <div class="text-5xl font-bold" style="color:${color}">${d.score}<span class="text-xl text-slate-400">/100</span></div>
-      <div class="text-sm text-slate-500 mb-4">${d.label} (${d.active_factors}/5 factors)</div>
-      <div>${factors}</div>`;
-  } catch (e) { el.innerHTML = `<div class="text-red-500 text-sm">Error: ${e.message}</div>`; }
+
+    plotQueryPoint(lng, lat, d.score);
+    renderScore(d);
+    renderHorizon(d);
+    renderFactors(d);
+    renderDetails(d);
+  } catch (e) {
+    loading.classList.add('hidden');
+    scoreBox.classList.remove('hidden');
+    scoreBox.innerHTML = `<div class="score-card" style="color:#dc2626">Error: ${e.message}</div>`;
+  }
 }
+
+function renderScore(d) {
+  const el = document.getElementById('score-box');
+  el.classList.remove('hidden');
+  const color = scoreColor(d.score);
+  el.innerHTML = `<div class="score-card">
+    <div style="display:flex;align-items:baseline;gap:6px">
+      <div class="score-num" style="color:${color}">${d.score}</div>
+      <div style="font-size:14px;font-weight:600;color:var(--text-3)">/100</div>
+      <div style="margin-left:auto;font-size:11px;color:var(--text-3)">${d.active_factors}/6 factors</div>
+    </div>
+    <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-top:2px">${d.label}</div>
+  </div>`;
+}
+
+function renderHorizon(d) {
+  const hz = d.factors?.horizon_openness;
+  if (!hz || !hz.horizon_angles) return;
+  const el = document.getElementById('horizon-box');
+  el.classList.remove('hidden');
+
+  const angles = hz.horizon_angles;
+  const dirs = ['N','NE','E','SE','S','SW','W','NW'];
+  const cx = 90, cy = 90, r = 65;
+
+  let svg = `<svg viewBox="0 0 180 180" width="180" height="180" style="display:block;margin:0 auto">`;
+  // Grid rings
+  for (const rr of [0.33, 0.66, 1.0]) {
+    svg += `<circle cx="${cx}" cy="${cy}" r="${r * rr}" fill="none" stroke="#e2e8f0" stroke-width="0.5"/>`;
+  }
+  // Grid lines
+  for (let i = 0; i < 8; i++) {
+    const a = (i * 45 - 90) * Math.PI / 180;
+    svg += `<line x1="${cx}" y1="${cy}" x2="${cx + r * Math.cos(a)}" y2="${cy + r * Math.sin(a)}" stroke="#e2e8f0" stroke-width="0.5"/>`;
+  }
+
+  // Radar polygon — invert angles so low angle = far from center (open)
+  const maxAngle = 15;
+  const points = dirs.map((d, i) => {
+    const angle = Math.max(0, Math.min(maxAngle, angles[d] || 0));
+    const openness = 1 - angle / maxAngle;
+    const a = (i * 45 - 90) * Math.PI / 180;
+    return [cx + r * openness * Math.cos(a), cy + r * openness * Math.sin(a)];
+  });
+  const polyStr = points.map(p => p.join(',')).join(' ');
+  svg += `<polygon points="${polyStr}" fill="rgba(139,92,246,0.15)" stroke="#7c3aed" stroke-width="1.5"/>`;
+
+  // Points + labels
+  for (let i = 0; i < dirs.length; i++) {
+    const [px, py] = points[i];
+    const angle = angles[dirs[i]] || 0;
+    const open = angle < 3;
+    svg += `<circle cx="${px}" cy="${py}" r="3" fill="${open ? '#22c55e' : angle > 8 ? '#ef4444' : '#f59e0b'}"/>`;
+
+    const la = (i * 45 - 90) * Math.PI / 180;
+    const lx = cx + (r + 12) * Math.cos(la);
+    const ly = cy + (r + 12) * Math.sin(la);
+    svg += `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="central" font-size="9" font-weight="600" fill="#64748b" font-family="DM Sans,sans-serif">${dirs[i]}</text>`;
+  }
+  svg += `</svg>`;
+
+  // Summary
+  const openCount = hz.open_directions;
+  const downhill = hz.downhill_directions;
+
+  el.innerHTML = `<div class="horizon-card">
+    <div class="horizon-title">Horizon Openness</div>
+    ${svg}
+    <div style="font-size:11px;color:var(--text-2);margin-top:6px">
+      <strong style="color:${openCount >= 5 ? '#22c55e' : openCount >= 3 ? '#f59e0b' : '#ef4444'}">${openCount}/8</strong> open directions
+      ${downhill > 0 ? ` · <strong style="color:#3b82f6">${downhill}</strong> downhill` : ''}
+    </div>
+    <div style="font-size:10px;color:var(--text-3);margin-top:4px">
+      ${dirs.map(d => `${d}:${angles[d]}°`).join(' · ')}
+    </div>
+  </div>`;
+}
+
+function renderFactors(d) {
+  const el = document.getElementById('factors-box');
+  el.classList.remove('hidden');
+  let html = '<div class="section-hdr">View Factors</div>';
+
+  for (const [key, meta] of Object.entries(FACTOR_META)) {
+    const f = d.factors?.[key];
+    const val = f ? f.value : null;
+    if (val === null) continue;
+    const pct = Math.round(val * 100);
+    const barColor = pct >= 60 ? '#22c55e' : pct >= 30 ? '#f59e0b' : '#ef4444';
+
+    let detail = '';
+    if (f.distance_m != null) detail = `${f.distance_m}m`;
+    else if (f.advantage_m != null) detail = `${f.advantage_m > 0 ? '+' : ''}${f.advantage_m}m`;
+    else if (f.count != null) detail = `${f.count} nearby`;
+    else if (f.buildings_300m != null) detail = `${f.buildings_300m} bldgs`;
+    else if (f.open_directions != null) detail = `${f.open_directions}/8 open`;
+
+    html += `<div class="factor-row">
+      <span class="factor-icon" style="background:${meta.color}"></span>
+      <span class="factor-name">${meta.label} <span class="factor-detail">${detail}</span></span>
+      <span class="factor-bar-bg"><span class="factor-bar-fill" style="width:${pct}%;background:${barColor}"></span></span>
+      <span class="factor-pct" style="color:${barColor}">${pct}%</span>
+    </div>`;
+  }
+  el.innerHTML = html;
+}
+
+function renderDetails(d) {
+  const el = document.getElementById('details-box');
+  el.classList.remove('hidden');
+  let html = '<div class="section-hdr">Location Details</div>';
+
+  const elev = d.factors?.elevation_advantage;
+  if (elev) {
+    html += `<div class="metric-row"><span class="metric-label">Elevation</span><span class="metric-value">${elev.elevation_m}m</span></div>`;
+    html += `<div class="metric-row"><span class="metric-label">Near Median (500m)</span><span class="metric-value">${elev.near_median_m}m</span></div>`;
+    html += `<div class="metric-row"><span class="metric-label">Far Median (2km)</span><span class="metric-value">${elev.far_median_m}m</span></div>`;
+    html += `<div class="metric-row"><span class="metric-label">Advantage</span><span class="metric-value" style="color:${elev.advantage_m >= 0 ? '#22c55e' : '#ef4444'}">${elev.advantage_m > 0 ? '+' : ''}${elev.advantage_m}m</span></div>`;
+  }
+
+  const bldg = d.factors?.building_openness;
+  if (bldg) {
+    html += `<div class="metric-row"><span class="metric-label">Buildings (300m)</span><span class="metric-value">${bldg.buildings_300m}</span></div>`;
+    html += `<div class="metric-row"><span class="metric-label">Tall Buildings (>10m)</span><span class="metric-value">${bldg.tall_buildings}</span></div>`;
+  }
+
+  const green = d.factors?.green_space;
+  if (green) {
+    html += `<div class="metric-row"><span class="metric-label">Green Spaces (1km)</span><span class="metric-value">${green.count}</span></div>`;
+    if (green.nearest_m != null) html += `<div class="metric-row"><span class="metric-label">Nearest</span><span class="metric-value">${green.nearest_m}m</span></div>`;
+  }
+
+  html += `<div style="font-size:10px;color:var(--text-3);margin-top:12px;padding-top:8px;border-top:1px solid var(--border)">${d.caveat || ''}</div>`;
+  el.innerHTML = html;
+}
+
+initMap();
 </script>
 </body>
 </html>

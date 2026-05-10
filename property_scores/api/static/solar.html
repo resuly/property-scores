@@ -3,137 +3,580 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Solar Potential Score - Property Scores</title>
-<link rel="stylesheet" href="/css/styles.css">
+<title>Solar Potential - Property Scores</title>
+<link rel="stylesheet" href="/css/styles.css?v=3">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.21.0/mapbox-gl.css" rel="stylesheet">
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.21.0/mapbox-gl.js"></script>
+<style>
+  :root { --sidebar-w: 380px; --amber: #d97706; --amber-light: #f59e0b; --amber-dark: #92400e; --safe: #16a34a; --text-1: #1a1f2b; --text-2: #4a5568; --text-3: #8b95a5; --border: #e8ecf1; --surface: #fafbfc; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'DM Sans', system-ui, sans-serif; color: var(--text-1); -webkit-font-smoothing: antialiased; }
+  #map { position: absolute; top: 0; left: 0; right: var(--sidebar-w); bottom: 0; }
+  #sidebar { position: absolute; top: 0; right: 0; bottom: 0; width: var(--sidebar-w); background: #fff; border-left: 1px solid var(--border); overflow-y: auto; }
+  .mapboxgl-ctrl-bottom-left, .mapboxgl-ctrl-bottom-right { display: none; }
+  .sb { padding: 20px; }
+  .sb-title { font-size: 15px; font-weight: 700; letter-spacing: -0.02em; margin-top: 8px; }
+  .sb-desc { font-size: 12px; color: var(--text-3); margin: 4px 0 14px; line-height: 1.5; }
+  .input-row { display: flex; gap: 6px; margin-bottom: 8px; }
+  .input-row input { flex: 1; min-width: 0; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; font-family: inherit; background: var(--surface); outline: none; }
+  .input-row input:focus { border-color: var(--amber); }
+  .input-row button { padding: 7px 16px; border: none; border-radius: 6px; background: var(--text-1); color: #fff; font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer; }
+  .presets { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px; }
+  .presets button { padding: 3px 10px; border: 1px solid var(--border); border-radius: 100px; background: #fff; font-size: 11px; font-weight: 500; color: var(--text-2); cursor: pointer; font-family: inherit; }
+  .presets button:hover { border-color: var(--amber); color: var(--amber); }
+  .score-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 12px; }
+  .score-num { font-size: 36px; font-weight: 700; line-height: 1; letter-spacing: -0.03em; }
+  .section-hdr { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--text-3); padding: 14px 0 6px; border-top: 1px solid var(--border); margin-top: 2px; }
+  .metric-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; font-size: 12px; border-bottom: 1px solid #f1f5f9; }
+  .metric-label { color: var(--text-3); }
+  .metric-value { font-weight: 600; color: var(--text-1); }
+  .calc-section { background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+  .calc-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--amber-dark); margin-bottom: 10px; }
+  .slider-row { margin-bottom: 10px; }
+  .slider-label { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-2); margin-bottom: 4px; }
+  .slider-label span:last-child { font-weight: 600; color: var(--text-1); }
+  input[type=range] { width: 100%; height: 4px; -webkit-appearance: none; appearance: none; background: #fde68a; border-radius: 2px; outline: none; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: var(--amber); cursor: pointer; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.2); }
+  .orient-btns { display: flex; gap: 4px; margin-bottom: 10px; }
+  .orient-btn { flex: 1; padding: 5px 0; border: 1px solid var(--border); border-radius: 6px; font-size: 11px; font-weight: 500; text-align: center; cursor: pointer; background: #fff; font-family: inherit; color: var(--text-2); }
+  .orient-btn.active { background: var(--amber); color: #fff; border-color: var(--amber); }
+  .calc-result { background: #fff; border-radius: 8px; padding: 10px 12px; margin-top: 10px; }
+  .calc-result-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; font-size: 12px; }
+  .calc-result-row .val { font-weight: 700; color: var(--amber-dark); }
+  .benchmark-bar { height: 6px; border-radius: 3px; background: #f1f5f9; margin-top: 4px; position: relative; overflow: visible; }
+  .benchmark-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, #fbbf24, #f59e0b); }
+  .benchmark-marker { position: absolute; top: -3px; width: 12px; height: 12px; border-radius: 50%; background: var(--amber); border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,.2); transform: translateX(-50%); }
+  .benchmark-row { margin-bottom: 8px; }
+  .benchmark-label { display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 2px; }
+  .benchmark-label .city { color: var(--text-2); }
+  .benchmark-label .pvout { color: var(--text-3); font-size: 10px; }
+  .hidden { display: none !important; }
+  .sun-info { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: #fffbeb; border-radius: 8px; margin-bottom: 12px; font-size: 11px; color: var(--amber-dark); }
+  .sun-info svg { flex-shrink: 0; }
+  /* Sun controls */
+  .sun-ctrl { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+  .sun-ctrl-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--text-3); margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
+  .month-btns { display: flex; gap: 3px; margin-bottom: 10px; flex-wrap: wrap; }
+  .month-btn { padding: 3px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 10px; font-weight: 500; cursor: pointer; background: #fff; font-family: inherit; color: var(--text-3); }
+  .month-btn.active { background: var(--amber-light); color: #fff; border-color: var(--amber-light); }
+  .sun-readout { font-size: 11px; color: var(--text-2); line-height: 1.6; margin-top: 8px; }
+  .sun-readout strong { color: var(--text-1); }
+  /* Sun compass overlay */
+  .sun-compass { position: absolute; bottom: 16px; left: 12px; width: 120px; height: 140px; z-index: 10; }
+  .sun-compass svg { width: 100%; height: 100%; }
+  /* Play button */
+  .play-row { display: flex; align-items: center; gap: 6px; }
+  .play-row input[type=range] { flex: 1; }
+  .play-btn { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--border); background: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--amber); }
+  .play-btn:hover { background: #fffbeb; border-color: var(--amber); }
+  .play-btn svg { width: 14px; height: 14px; }
+</style>
 </head>
-<body class="bg-slate-50 font-sans text-slate-900">
-<div class="max-w-3xl mx-auto px-6 py-10">
-  <a href="/" class="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-brand-600 mb-8">&larr; All Scores</a>
-
-  <div class="text-center mb-12">
-    <span class="inline-block px-3 py-1 rounded-full badge-solar text-xs font-semibold mb-4">Property Scores</span>
-    <h1 class="text-3xl font-bold mb-3"><span class="text-amber-600">Solar Potential</span> Score</h1>
-    <p class="text-slate-500 max-w-xl mx-auto text-sm">Estimate any property's solar energy potential using Global Solar Atlas satellite data — 250m resolution, global coverage, completely free.</p>
-  </div>
-
-  <div class="card p-6 mb-10">
-    <h2 class="text-lg font-semibold mb-4">Try It</h2>
-    <div class="flex gap-2 flex-wrap">
-      <input id="lat" type="number" step="any" placeholder="Latitude" value="-37.8136" class="input-field w-36">
-      <input id="lng" type="number" step="any" placeholder="Longitude" value="144.9631" class="input-field w-36">
-      <input id="roof" type="number" step="any" placeholder="Roof m² (optional)" value="50" class="input-field w-40">
-      <button onclick="compute()" class="btn-primary">Calculate</button>
+<body>
+<div id="map"></div>
+<div id="sidebar">
+  <div class="sb">
+    <a href="/" style="font-size:12px;color:var(--text-3);text-decoration:none">&larr; All Scores</a>
+    <div class="sb-title">Solar Potential</div>
+    <div class="sb-desc">Explore sun exposure and building shadows. Drag the time slider to see how shadows move throughout the day.</div>
+    <div class="input-row">
+      <input id="lat" type="number" step="any" placeholder="Latitude" value="-37.8136">
+      <input id="lng" type="number" step="any" placeholder="Longitude" value="144.9631">
+      <button onclick="query()">Go</button>
     </div>
-    <div id="result" class="hidden mt-4 p-4 bg-slate-50 rounded-lg"></div>
-  </div>
-
-  <div class="prose-scores">
-    <h2>What It Measures</h2>
-    <p>The Solar Potential Score rates a location's suitability for rooftop solar panels on a scale of 0 to 100. It combines satellite-derived solar irradiance data with building geometry to estimate how much energy solar panels could generate at a specific address.</p>
-
-    <div class="flex rounded-lg overflow-hidden text-xs text-center mb-6">
-      <div class="flex-1 py-3 bg-red-100 text-red-700"><span class="block text-sm font-bold">0-20</span>Poor</div>
-      <div class="flex-1 py-3 bg-orange-100 text-orange-700"><span class="block text-sm font-bold">21-40</span>Low</div>
-      <div class="flex-1 py-3 bg-amber-100 text-amber-700"><span class="block text-sm font-bold">41-60</span>Moderate</div>
-      <div class="flex-1 py-3 bg-emerald-100 text-emerald-700"><span class="block text-sm font-bold">61-80</span>Good</div>
-      <div class="flex-1 py-3 bg-green-100 text-green-700"><span class="block text-sm font-bold">81-100</span>Excellent</div>
+    <div class="presets">
+      <button onclick="setPoint(-37.8136,144.9631)">Melbourne</button>
+      <button onclick="setPoint(-33.8688,151.2093)">Sydney</button>
+      <button onclick="setPoint(-27.4698,153.0251)">Brisbane</button>
+      <button onclick="setPoint(-31.9505,115.8605)">Perth</button>
+      <button onclick="setPoint(-23.6980,133.8807)">Alice Springs</button>
     </div>
 
-    <h2>Methodology</h2>
+    <!-- Sun position controls — always visible -->
+    <div class="sun-ctrl">
+      <div class="sun-ctrl-title">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--amber)" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+        Sun Position
+      </div>
+      <div class="slider-row">
+        <div class="slider-label"><span>Time of Day</span><span id="time-val">12:00</span></div>
+        <div class="play-row">
+          <button class="play-btn" id="play-btn" onclick="togglePlay()" title="Animate sun through the day">
+            <svg id="play-icon" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="6,4 20,12 6,20"/></svg>
+          </button>
+          <input type="range" id="time-slider" min="5" max="20" step="0.25" value="12" oninput="onSunChange()">
+        </div>
+      </div>
+      <div style="font-size:10px;color:var(--text-3);margin-bottom:6px">Month</div>
+      <div class="month-btns" id="month-btns">
+        <button class="month-btn" data-m="0">Jan</button>
+        <button class="month-btn" data-m="1">Feb</button>
+        <button class="month-btn" data-m="2">Mar</button>
+        <button class="month-btn" data-m="3">Apr</button>
+        <button class="month-btn" data-m="4">May</button>
+        <button class="month-btn active" data-m="5">Jun</button>
+        <button class="month-btn" data-m="6">Jul</button>
+        <button class="month-btn" data-m="7">Aug</button>
+        <button class="month-btn" data-m="8">Sep</button>
+        <button class="month-btn" data-m="9">Oct</button>
+        <button class="month-btn" data-m="10">Nov</button>
+        <button class="month-btn" data-m="11">Dec</button>
+      </div>
+      <div class="sun-readout" id="sun-readout">
+        <strong>Azimuth:</strong> — &nbsp; <strong>Altitude:</strong> —
+      </div>
+    </div>
 
-    <h3>Data Source</h3>
-    <table>
-      <tr><th>Dataset</th><th>Provider</th><th>Resolution</th><th>License</th></tr>
-      <tr><td>GHI / DNI / PVOUT</td><td>Global Solar Atlas (World Bank / Solargis)</td><td>250m</td><td>CC BY 4.0</td></tr>
-      <tr><td>Building footprints</td><td>Overture Maps Foundation</td><td>~1m</td><td>CDLA Permissive</td></tr>
-      <tr><td>Elevation / slope</td><td>Copernicus DEM GLO-30</td><td>30m</td><td>Free</td></tr>
-    </table>
-
-    <h3>Calculation Steps</h3>
-    <ol>
-      <li><strong>Solar irradiance lookup</strong> — Fetch annual GHI and PVOUT from Global Solar Atlas for the target coordinate.</li>
-      <li><strong>Score normalization</strong> — Map PVOUT to 0-100 against the global range (600-2400 kWh/kWp).</li>
-      <li><strong>Orientation adjustment</strong> — Apply a factor based on roof orientation: optimal = 1.0, east/west = 0.85, suboptimal = 0.65.</li>
-      <li><strong>Annual generation estimate</strong> — If roof area is provided: <code>kWh = roof_m2 x 0.20 x PVOUT x orientation x 0.80</code></li>
-    </ol>
-
-    <h3>Formula</h3>
-    <p><code>score = (PVOUT - 600) / (2400 - 600) x 100 x orientation_factor</code></p>
-    <p>Clamped to 0-100. A score of 50 means the location receives roughly the global median solar irradiance.</p>
-
-    <h2>Accuracy</h2>
-    <table>
-      <tr><th>Factor</th><th>Impact</th><th>Notes</th></tr>
-      <tr><td>GHI measurement</td><td>+/- 5-10%</td><td>Solargis validated against 250+ ground stations globally</td></tr>
-      <tr><td>Flat terrain</td><td>High accuracy</td><td>250m resolution matches well</td></tr>
-      <tr><td>Mountainous terrain</td><td>Lower accuracy</td><td>Local shading from hills not captured at 250m</td></tr>
-      <tr><td>Roof orientation</td><td>Estimated</td><td>Derived from building footprint long axis; actual roof pitch unknown</td></tr>
-      <tr><td>Neighboring building shade</td><td>Not yet modeled</td><td>Planned for Phase 2 using Overture building heights</td></tr>
-    </table>
-
-    <h3>What This Score Does NOT Include</h3>
-    <ul>
-      <li>Actual roof pitch angle (assumes near-optimal tilt)</li>
-      <li>Roof obstructions (chimneys, vents, HVAC units)</li>
-      <li>Tree shading (would require LiDAR or high-res imagery)</li>
-      <li>Local grid feed-in tariff or electricity pricing</li>
-      <li>Panel degradation over time</li>
-    </ul>
-
-    <h2>Reference Benchmarks</h2>
-    <table>
-      <tr><th>Location</th><th>Score</th><th>PVOUT</th><th>GHI</th></tr>
-      <tr><td>Alice Springs, AU</td><td>74</td><td>1,937 kWh/kWp</td><td>2,270 kWh/m2</td></tr>
-      <tr><td>Perth, AU</td><td>64</td><td>1,751 kWh/kWp</td><td>2,035 kWh/m2</td></tr>
-      <tr><td>Los Angeles, US</td><td>66</td><td>1,793 kWh/kWp</td><td>2,050 kWh/m2</td></tr>
-      <tr><td>Darwin, AU</td><td>62</td><td>1,708 kWh/kWp</td><td>2,094 kWh/m2</td></tr>
-      <tr><td>Brisbane, AU</td><td>55</td><td>1,598 kWh/kWp</td><td>1,813 kWh/m2</td></tr>
-      <tr><td>Sydney, AU</td><td>52</td><td>1,528 kWh/kWp</td><td>1,643 kWh/m2</td></tr>
-      <tr><td>Melbourne, AU</td><td>45</td><td>1,410 kWh/kWp</td><td>1,520 kWh/m2</td></tr>
-      <tr><td>Hobart, AU</td><td>42</td><td>1,350 kWh/kWp</td><td>1,376 kWh/m2</td></tr>
-      <tr><td>London, UK</td><td>24</td><td>1,024 kWh/kWp</td><td>1,029 kWh/m2</td></tr>
-    </table>
-
-    <h2>API</h2>
-    <p><code>GET /scores/solar?lat=-37.8136&amp;lng=144.9631&amp;roof_area=50</code></p>
-  </div>
-
-  <div class="mt-16 pt-6 border-t border-slate-100 text-center text-xs text-slate-400">
-    Built by <a href="https://daleads.com.au" class="text-brand-500 hover:text-brand-600 no-underline">DA Leads</a> | Data: <a href="https://globalsolaratlas.info" class="text-brand-500 hover:text-brand-600 no-underline">Global Solar Atlas</a> (CC BY 4.0)
+    <div id="loading" class="hidden" style="text-align:center;padding:24px 0;font-size:13px;color:var(--amber);font-weight:500">Fetching solar data&hellip;</div>
+    <div id="score-box" class="hidden"></div>
+    <div id="calc-box" class="hidden"></div>
+    <div id="benchmarks" class="hidden"></div>
+    <div id="details" class="hidden"></div>
+    <details style="margin-top:20px">
+      <summary style="font-size:11px;font-weight:600;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;cursor:pointer">Methodology</summary>
+      <div style="font-size:12px;color:var(--text-2);line-height:1.6;margin-top:8px">
+        <p><strong>Data:</strong> Global Solar Atlas (World Bank / Solargis) — 250m resolution, validated against 250+ ground stations.</p>
+        <p style="margin-top:6px"><strong>Score:</strong> PVOUT mapped to 0&ndash;100 against global range (600&ndash;2400 kWh/kWp/year).</p>
+        <p style="margin-top:6px"><strong>Shadows:</strong> Calculated from solar position algorithm using latitude, date, and time. Shadows on 3D buildings show real sun direction and altitude for the selected location.</p>
+        <p style="margin-top:6px"><strong>Limitations:</strong> Building heights from Mapbox data; tree shading, roof pitch, and obstructions not modeled.</p>
+      </div>
+    </details>
   </div>
 </div>
 
+<div class="sun-compass" id="sun-compass">
+  <svg viewBox="0 0 120 132" id="compass-svg"></svg>
+</div>
+
 <script>
-async function compute() {
-  const lat = document.getElementById('lat').value;
-  const lng = document.getElementById('lng').value;
-  const roof = document.getElementById('roof').value;
-  const el = document.getElementById('result');
-  el.classList.remove('hidden');
-  el.innerHTML = '<div class="text-brand-500 text-sm">Computing...</div>';
-  try {
-    let url = `/scores/solar?lat=${lat}&lng=${lng}`;
-    if (roof) url += `&roof_area=${roof}`;
-    const resp = await fetch(url);
-    const d = await resp.json();
-    const color = d.score >= 70 ? '#16a34a' : d.score >= 40 ? '#d97706' : '#dc2626';
-    el.innerHTML = `
-      <div class="text-5xl font-bold" style="color:${color}">${d.score}<span class="text-xl text-slate-400">/100</span></div>
-      <div class="text-sm text-slate-500 mb-3">${d.label}</div>
-      <div class="grid grid-cols-2 gap-2 text-sm">
-        <div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">GHI</span><span class="text-slate-600">${d.ghi_kwh_m2_year} kWh/m2/yr</span></div>
-        <div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">DNI</span><span class="text-slate-600">${d.dni_kwh_m2_year} kWh/m2/yr</span></div>
-        <div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">PV Output</span><span class="text-slate-600">${d.pvout_kwh_kwp_year} kWh/kWp/yr</span></div>
-        <div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Optimal Tilt</span><span class="text-slate-600">${d.optimal_tilt_deg}&deg;</span></div>
-        <div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Avg Temp</span><span class="text-slate-600">${d.temp_avg_c}&deg;C</span></div>
-        <div class="flex justify-between py-1.5 border-b border-slate-200"><span class="text-slate-400">Elevation</span><span class="text-slate-600">${d.elevation_m}m</span></div>
-        ${d.estimated_annual_kwh ? `<div class="flex justify-between py-1.5 border-b border-slate-200 col-span-2"><span class="text-slate-400">Est. Annual</span><span class="text-slate-600">${d.estimated_annual_kwh.toLocaleString()} kWh</span></div>` : ''}
-      </div>`;
-  } catch (e) { el.innerHTML = `<div class="text-red-500 text-sm">Error: ${e.message}</div>`; }
+let map, mapboxToken, currentData = null;
+let currentOrientation = 'optimal';
+let currentRoofArea = 50;
+let currentMonth = 5; // June (winter solstice in AU — worst case)
+let currentHour = 12;
+
+const AU_BENCHMARKS = [
+  { city: 'Alice Springs', pvout: 1937 },
+  { city: 'Perth', pvout: 1751 },
+  { city: 'Darwin', pvout: 1708 },
+  { city: 'Brisbane', pvout: 1598 },
+  { city: 'Sydney', pvout: 1528 },
+  { city: 'Melbourne', pvout: 1410 },
+  { city: 'Hobart', pvout: 1350 },
+];
+
+const ORIENT_FACTORS = { optimal: 1.0, east: 0.85, west: 0.85, suboptimal: 0.65 };
+const ELEC_RATE = 0.30;
+const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+// --- Solar position algorithm (simplified SPA) ---
+function sunPosition(latDeg, lngDeg, month, hour) {
+  const doy = [15, 46, 74, 105, 135, 166, 196, 227, 258, 288, 319, 349][month];
+  const toRad = d => d * Math.PI / 180;
+  const toDeg = r => r * 180 / Math.PI;
+
+  const B = toRad((360 / 365) * (doy - 81));
+  const declDeg = 23.45 * Math.sin(B);
+  const decl = toRad(declDeg);
+  const lat = toRad(latDeg);
+
+  const eot = 9.87 * Math.sin(2 * B) - 7.53 * Math.cos(B) - 1.5 * Math.sin(B);
+  const tz = Math.round(lngDeg / 15);
+  const solarTime = hour + (4 * (lngDeg - 15 * tz) + eot) / 60;
+  const ha = toRad((solarTime - 12) * 15);
+
+  const sinAlt = Math.sin(lat) * Math.sin(decl) + Math.cos(lat) * Math.cos(decl) * Math.cos(ha);
+  const altitude = toDeg(Math.asin(sinAlt));
+
+  const cosAz = (Math.sin(decl) - Math.sin(lat) * sinAlt) / (Math.cos(lat) * Math.cos(Math.asin(sinAlt)));
+  let azimuth = toDeg(Math.acos(Math.max(-1, Math.min(1, cosAz))));
+  if (ha > 0) azimuth = 360 - azimuth;
+
+  return { altitude: Math.max(0, altitude), azimuth };
 }
+
+function formatTime(h) {
+  const hh = Math.floor(h);
+  const mm = Math.round((h - hh) * 60);
+  return `${hh}:${mm.toString().padStart(2, '0')}`;
+}
+
+function azLabel(az) {
+  const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+  return dirs[Math.round(az / 22.5) % 16];
+}
+
+// --- Compass drawing ---
+function drawCompass(azimuth, altitude) {
+  const svg = document.getElementById('compass-svg');
+  const cx = 60, cy = 52, r = 38;
+  const belowHorizon = altitude <= 0;
+  const sunAngle = (azimuth - 90) * Math.PI / 180;
+  const sunR = r * (1 - Math.min(Math.max(altitude, 0), 90) / 90) * 0.85;
+  const sx = cx + sunR * Math.cos(sunAngle);
+  const sy = cy + sunR * Math.sin(sunAngle);
+
+  let html = '';
+  // Background circle
+  html += `<circle cx="${cx}" cy="${cy}" r="${r + 2}" fill="${belowHorizon ? '#f1f5f9' : '#fafbfc'}" stroke="#e2e8f0" stroke-width="1"/>`;
+  html += `<circle cx="${cx}" cy="${cy}" r="1.5" fill="#cbd5e1"/>`;
+
+  // Cardinal ticks + labels (halo for readability)
+  const cards = [{l:'N',a:0},{l:'E',a:90},{l:'S',a:180},{l:'W',a:270}];
+  for (const c of cards) {
+    const a = (c.a - 90) * Math.PI / 180;
+    const tx = cx + (r + 9) * Math.cos(a), ty = cy + (r + 9) * Math.sin(a);
+    const ix = cx + r * Math.cos(a), iy = cy + r * Math.sin(a);
+    const ox = cx + (r - 4) * Math.cos(a), oy = cy + (r - 4) * Math.sin(a);
+    html += `<line x1="${ox}" y1="${oy}" x2="${ix}" y2="${iy}" stroke="#cbd5e1" stroke-width="1"/>`;
+    html += `<text x="${tx}" y="${ty}" text-anchor="middle" dominant-baseline="central" font-size="9" font-weight="700" fill="#fff" stroke="#fff" stroke-width="3" stroke-linejoin="round" paint-order="stroke" font-family="DM Sans,sans-serif">${c.l}</text>`;
+    html += `<text x="${tx}" y="${ty}" text-anchor="middle" dominant-baseline="central" font-size="9" font-weight="700" fill="#475569" font-family="DM Sans,sans-serif">${c.l}</text>`;
+  }
+
+  if (!belowHorizon) {
+    // Dashed line from center to sun
+    html += `<line x1="${cx}" y1="${cy}" x2="${sx}" y2="${sy}" stroke="#fbbf24" stroke-width="1" stroke-dasharray="2 2" opacity="0.4"/>`;
+    // Glow + sun
+    html += `<circle cx="${sx}" cy="${sy}" r="9" fill="#fbbf24" opacity="0.15"/>`;
+    html += `<circle cx="${sx}" cy="${sy}" r="6" fill="#f59e0b"/>`;
+    html += `<circle cx="${sx}" cy="${sy}" r="6" fill="none" stroke="#fff" stroke-width="1.5"/>`;
+    // Rays
+    for (let i = 0; i < 8; i++) {
+      const ra = (i * 45) * Math.PI / 180;
+      const x1 = sx + 8 * Math.cos(ra), y1 = sy + 8 * Math.sin(ra);
+      const x2 = sx + 10.5 * Math.cos(ra), y2 = sy + 10.5 * Math.sin(ra);
+      html += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#fbbf24" stroke-width="1" stroke-linecap="round" opacity="0.5"/>`;
+    }
+    // Altitude text below compass (halo)
+    const altTxt = `${azLabel(azimuth)} · ${Math.round(altitude)}° altitude`;
+    html += `<text x="${cx}" y="${cy + r + 28}" text-anchor="middle" font-size="9" font-weight="500" fill="#fff" stroke="#fff" stroke-width="4" stroke-linejoin="round" paint-order="stroke" font-family="DM Sans,sans-serif">${altTxt}</text>`;
+    html += `<text x="${cx}" y="${cy + r + 28}" text-anchor="middle" font-size="9" font-weight="500" fill="#64748b" font-family="DM Sans,sans-serif">${altTxt}</text>`;
+  } else {
+    // Moon crescent
+    const moonX = cx, moonY = cy;
+    html += `<circle cx="${moonX}" cy="${moonY}" r="10" fill="#94a3b8" opacity="0.15"/>`;
+    html += `<circle cx="${moonX}" cy="${moonY}" r="8" fill="#cbd5e1"/>`;
+    html += `<circle cx="${moonX - 4}" cy="${moonY - 3}" r="7" fill="${belowHorizon ? '#f1f5f9' : '#fafbfc'}"/>`;
+    // Stars
+    const stars = [[cx-18,cy-14],[cx+20,cy-10],[cx+14,cy+16],[cx-12,cy+18]];
+    for (const [stx,sty] of stars) {
+      html += `<circle cx="${stx}" cy="${sty}" r="1" fill="#94a3b8" opacity="0.5"/>`;
+    }
+    html += `<text x="${cx}" y="${cy + r + 28}" text-anchor="middle" font-size="9" font-weight="500" fill="#fff" stroke="#fff" stroke-width="4" stroke-linejoin="round" paint-order="stroke" font-family="DM Sans,sans-serif">Below horizon</text>`;
+    html += `<text x="${cx}" y="${cy + r + 28}" text-anchor="middle" font-size="9" font-weight="500" fill="#64748b" font-family="DM Sans,sans-serif">Below horizon</text>`;
+  }
+  svg.innerHTML = html;
+}
+
+// --- Play animation ---
+let playInterval = null;
+function togglePlay() {
+  if (playInterval) {
+    clearInterval(playInterval);
+    playInterval = null;
+    document.getElementById('play-icon').innerHTML = '<polygon points="6,4 20,12 6,20"/>';
+    return;
+  }
+  const slider = document.getElementById('time-slider');
+  if (parseFloat(slider.value) >= 19.5) slider.value = 5;
+  document.getElementById('play-icon').innerHTML = '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>';
+  playInterval = setInterval(() => {
+    let v = parseFloat(slider.value) + 0.25;
+    if (v > 20) {
+      v = 5;
+      clearInterval(playInterval);
+      playInterval = null;
+      document.getElementById('play-icon').innerHTML = '<polygon points="6,4 20,12 6,20"/>';
+    }
+    slider.value = v;
+    onSunChange();
+  }, 150);
+}
+
+// --- Sun control handlers ---
+function onSunChange() {
+  currentHour = parseFloat(document.getElementById('time-slider').value);
+  document.getElementById('time-val').textContent = formatTime(currentHour);
+  updateSun();
+}
+
+function setMonth(m) {
+  currentMonth = m;
+  document.querySelectorAll('.month-btn').forEach(b => b.classList.toggle('active', parseInt(b.dataset.m) === m));
+  updateSun();
+}
+
+function updateSun() {
+  const lat = parseFloat(document.getElementById('lat').value) || -37.8136;
+  const lng = parseFloat(document.getElementById('lng').value) || 144.9631;
+  const sun = sunPosition(lat, lng, currentMonth, currentHour);
+
+  // Update readout
+  const readout = document.getElementById('sun-readout');
+  if (sun.altitude <= 0) {
+    readout.innerHTML = `<span style="color:var(--text-3)">Sun is below the horizon at ${formatTime(currentHour)} in ${MONTH_NAMES[currentMonth]}</span>`;
+  } else {
+    readout.innerHTML = `<strong>Direction:</strong> ${azLabel(sun.azimuth)} (${Math.round(sun.azimuth)}°) &nbsp; <strong>Altitude:</strong> ${Math.round(sun.altitude)}°`;
+  }
+
+  // Update compass
+  drawCompass(sun.azimuth, sun.altitude);
+
+  // Update map lighting
+  if (!map) return;
+  try {
+    if (sun.altitude <= 0) {
+      map.setLights([
+        { id: 'ambient_light', type: 'ambient', properties: { intensity: 0.2 } },
+        { id: 'sun_light', type: 'directional', properties: { intensity: 0, direction: [0, 1], 'cast-shadows': false, 'shadow-intensity': 0 } }
+      ]);
+    } else {
+      const warmth = sun.altitude < 15 ? '#fde68a' : sun.altitude < 30 ? '#fef3c7' : '#fffbeb';
+      const intensity = Math.min(0.8, 0.3 + sun.altitude / 90 * 0.5);
+      const ambient = 0.25 + (1 - sun.altitude / 90) * 0.2;
+      const shadowInt = Math.min(0.6, 0.2 + sun.altitude / 90 * 0.4);
+      map.setLights([
+        { id: 'ambient_light', type: 'ambient', properties: { intensity: ambient } },
+        { id: 'sun_light', type: 'directional', properties: {
+          color: warmth,
+          intensity: intensity,
+          direction: [sun.azimuth, sun.altitude],
+          'cast-shadows': true,
+          'shadow-intensity': shadowInt
+        }}
+      ]);
+    }
+  } catch (e) {}
+}
+
+// --- Map ---
+function setPoint(lat, lng) {
+  document.getElementById('lat').value = lat.toFixed(4);
+  document.getElementById('lng').value = lng.toFixed(4);
+  query();
+}
+
+function scoreColor(s) {
+  if (s >= 80) return '#16a34a';
+  if (s >= 60) return '#65a30d';
+  if (s >= 40) return '#d97706';
+  if (s >= 20) return '#ea580c';
+  return '#dc2626';
+}
+
+async function initMap() {
+  const cfg = await fetch('/api/config').then(r => r.json());
+  mapboxToken = cfg.mapbox_token;
+  mapboxgl.accessToken = mapboxToken;
+  map = new mapboxgl.Map({
+    container: 'map',
+    style: 'mapbox://styles/mapbox/light-v11',
+    center: [144.9631, -37.8136],
+    zoom: 17,
+    pitch: 45,
+    bearing: -15,
+    antialias: true,
+  });
+  map.addControl(new mapboxgl.NavigationControl(), 'top-right');
+  map.on('load', () => {
+    add3DBuildings();
+    updateSun();
+  });
+  map.on('click', e => {
+    document.getElementById('lat').value = e.lngLat.lat.toFixed(6);
+    document.getElementById('lng').value = e.lngLat.lng.toFixed(6);
+    query();
+  });
+  // Init month buttons
+  document.querySelectorAll('.month-btn').forEach(b => b.addEventListener('click', () => setMonth(parseInt(b.dataset.m))));
+  // Init compass + readout
+  updateSun();
+}
+
+function add3DBuildings() {
+  const layers = map.getStyle().layers;
+  let labelLayerId;
+  for (const layer of layers) {
+    if (layer.type === 'symbol' && layer.layout && layer.layout['text-field']) {
+      labelLayerId = layer.id;
+      break;
+    }
+  }
+  if (map.getLayer('3d-buildings')) return;
+  map.addLayer({
+    id: '3d-buildings',
+    source: 'composite',
+    'source-layer': 'building',
+    filter: ['==', 'extrude', 'true'],
+    type: 'fill-extrusion',
+    minzoom: 14,
+    paint: {
+      'fill-extrusion-color': '#d0d6e0',
+      'fill-extrusion-height': ['get', 'height'],
+      'fill-extrusion-base': ['get', 'min_height'],
+      'fill-extrusion-opacity': 0.8,
+    },
+  }, labelLayerId);
+}
+
+function clearMap() {
+  ['query-pt', 'query-pt-glow'].forEach(id => {
+    if (map.getLayer(id)) map.removeLayer(id);
+    if (map.getSource(id)) map.removeSource(id);
+  });
+}
+
+function plotQueryPoint(lng, lat) {
+  clearMap();
+  map.addSource('query-pt', { type: 'geojson', data: { type: 'Feature', geometry: { type: 'Point', coordinates: [lng, lat] } } });
+  map.addLayer({ id: 'query-pt-glow', type: 'circle', source: 'query-pt', paint: { 'circle-radius': 14, 'circle-color': '#f59e0b', 'circle-opacity': 0.15, 'circle-blur': 0.6 } });
+  map.addLayer({ id: 'query-pt', type: 'circle', source: 'query-pt', paint: { 'circle-radius': 6, 'circle-color': '#f59e0b', 'circle-stroke-width': 2.5, 'circle-stroke-color': '#fff' } });
+}
+
+async function query() {
+  const lat = parseFloat(document.getElementById('lat').value);
+  const lng = parseFloat(document.getElementById('lng').value);
+  if (isNaN(lat) || isNaN(lng)) return;
+
+  map.flyTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), 17), pitch: 45, duration: 800 });
+  plotQueryPoint(lng, lat);
+  updateSun();
+
+  const loading = document.getElementById('loading');
+  const scoreBox = document.getElementById('score-box');
+  const calcBox = document.getElementById('calc-box');
+  const benchmarks = document.getElementById('benchmarks');
+  const details = document.getElementById('details');
+
+  loading.classList.remove('hidden');
+  scoreBox.classList.add('hidden');
+  calcBox.classList.add('hidden');
+  benchmarks.classList.add('hidden');
+  details.classList.add('hidden');
+
+  try {
+    const resp = await fetch(`/scores/solar?lat=${lat}&lng=${lng}&roof_area=${currentRoofArea}&orientation=${currentOrientation}`);
+    const d = await resp.json();
+    loading.classList.add('hidden');
+    currentData = d;
+
+    if (d.error || d.score === null) {
+      scoreBox.classList.remove('hidden');
+      scoreBox.innerHTML = `<div class="score-card" style="color:#dc2626">${d.error || 'Data unavailable for this location'}</div>`;
+      return;
+    }
+
+    renderScore(d);
+    renderCalculator(d);
+    renderBenchmarks(d);
+    renderDetails(d);
+  } catch (e) {
+    loading.classList.add('hidden');
+    scoreBox.classList.remove('hidden');
+    scoreBox.innerHTML = `<div class="score-card" style="color:#dc2626">Error: ${e.message}</div>`;
+  }
+}
+
+function renderScore(d) {
+  const scoreBox = document.getElementById('score-box');
+  scoreBox.classList.remove('hidden');
+  const color = scoreColor(d.score);
+  scoreBox.innerHTML = `<div class="score-card">
+    <div style="display:flex;align-items:baseline;gap:6px">
+      <div class="score-num" style="color:${color}">${d.score}</div>
+      <div style="font-size:14px;font-weight:600;color:var(--text-3)">/100</div>
+    </div>
+    <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-top:2px">${d.label}</div>
+    <div class="sun-info" style="margin-top:10px">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+      <span>${d.pvout_kwh_kwp_year} kWh/kWp/year &mdash; ${d.score >= 60 ? 'strong' : d.score >= 40 ? 'moderate' : 'limited'} solar resource</span>
+    </div>
+  </div>`;
+}
+
+function renderCalculator(d) {
+  const calcBox = document.getElementById('calc-box');
+  calcBox.classList.remove('hidden');
+  calcBox.innerHTML = `<div class="calc-section">
+    <div class="calc-title">Energy Calculator</div>
+    <div class="slider-row">
+      <div class="slider-label"><span>Roof Area</span><span id="roof-val">${currentRoofArea} m&sup2;</span></div>
+      <input type="range" id="roof-slider" min="10" max="200" step="5" value="${currentRoofArea}" oninput="updateCalc()">
+    </div>
+    <div style="font-size:11px;color:var(--text-3);margin-bottom:8px">Panel Orientation</div>
+    <div class="orient-btns">
+      <button class="orient-btn ${currentOrientation==='optimal'?'active':''}" onclick="setOrient('optimal')">North ★</button>
+      <button class="orient-btn ${currentOrientation==='east'?'active':''}" onclick="setOrient('east')">East</button>
+      <button class="orient-btn ${currentOrientation==='west'?'active':''}" onclick="setOrient('west')">West</button>
+      <button class="orient-btn ${currentOrientation==='suboptimal'?'active':''}" onclick="setOrient('suboptimal')">South</button>
+    </div>
+    <div class="calc-result" id="calc-result"></div>
+  </div>`;
+  updateCalc();
+}
+
+function setOrient(o) {
+  currentOrientation = o;
+  document.querySelectorAll('.orient-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  updateCalc();
+}
+
+function updateCalc() {
+  if (!currentData || !currentData.pvout_kwh_kwp_year) return;
+  const slider = document.getElementById('roof-slider');
+  if (slider) currentRoofArea = parseInt(slider.value);
+  const roofVal = document.getElementById('roof-val');
+  if (roofVal) roofVal.textContent = currentRoofArea + ' m²';
+  const pvout = currentData.pvout_kwh_kwp_year;
+  const orientFactor = ORIENT_FACTORS[currentOrientation];
+  const capacityKwp = currentRoofArea * 0.20;
+  const annualKwh = Math.round(capacityKwp * pvout * orientFactor * 0.80);
+  const dailyKwh = (annualKwh / 365).toFixed(1);
+  const annualSavings = Math.round(annualKwh * ELEC_RATE);
+  const co2Tonnes = (annualKwh * 0.00079).toFixed(1);
+  const el = document.getElementById('calc-result');
+  if (!el) return;
+  el.innerHTML = `
+    <div class="calc-result-row"><span>System size</span><span class="val">${capacityKwp.toFixed(1)} kWp</span></div>
+    <div class="calc-result-row"><span>Daily average</span><span class="val">${dailyKwh} kWh</span></div>
+    <div class="calc-result-row"><span>Annual generation</span><span class="val">${annualKwh.toLocaleString()} kWh</span></div>
+    <div class="calc-result-row" style="padding-top:8px;border-top:1px solid var(--border)"><span>Est. annual savings</span><span class="val" style="font-size:14px">$${annualSavings.toLocaleString()}</span></div>
+    <div class="calc-result-row"><span>CO₂ offset</span><span class="val">${co2Tonnes} tonnes/yr</span></div>`;
+}
+
+function renderBenchmarks(d) {
+  const container = document.getElementById('benchmarks');
+  container.classList.remove('hidden');
+  const pvout = d.pvout_kwh_kwp_year;
+  const maxPvout = 2000;
+  let html = '<div class="section-hdr">Australian Comparison</div>';
+  html += `<div class="benchmark-row"><div class="benchmark-label"><span class="city" style="font-weight:600;color:var(--amber)">This Location</span><span class="pvout">${pvout} kWh/kWp</span></div><div class="benchmark-bar"><div class="benchmark-fill" style="width:${Math.min(100,pvout/maxPvout*100)}%"></div><div class="benchmark-marker" style="left:${Math.min(100,pvout/maxPvout*100)}%"></div></div></div>`;
+  for (const b of AU_BENCHMARKS) {
+    const pct = Math.min(100, b.pvout / maxPvout * 100);
+    html += `<div class="benchmark-row"><div class="benchmark-label"><span class="city">${b.city}</span><span class="pvout">${b.pvout}</span></div><div class="benchmark-bar"><div class="benchmark-fill" style="width:${pct}%;opacity:0.5"></div></div></div>`;
+  }
+  container.innerHTML = html;
+}
+
+function renderDetails(d) {
+  const el = document.getElementById('details');
+  el.classList.remove('hidden');
+  el.innerHTML = `
+    <div class="section-hdr">Solar Irradiance Data</div>
+    <div class="metric-row"><span class="metric-label">GHI (Global Horizontal)</span><span class="metric-value">${d.ghi_kwh_m2_year || '—'} kWh/m²/yr</span></div>
+    <div class="metric-row"><span class="metric-label">DNI (Direct Normal)</span><span class="metric-value">${d.dni_kwh_m2_year || '—'} kWh/m²/yr</span></div>
+    <div class="metric-row"><span class="metric-label">PVOUT (PV Output)</span><span class="metric-value">${d.pvout_kwh_kwp_year || '—'} kWh/kWp/yr</span></div>
+    <div class="metric-row"><span class="metric-label">Optimal Tilt</span><span class="metric-value">${d.optimal_tilt_deg || '—'}°</span></div>
+    <div class="metric-row"><span class="metric-label">Avg Temperature</span><span class="metric-value">${d.temp_avg_c || '—'}°C</span></div>
+    <div class="metric-row"><span class="metric-label">Elevation</span><span class="metric-value">${d.elevation_m || '—'} m</span></div>
+    <div style="font-size:10px;color:var(--text-3);margin-top:12px;padding-top:8px;border-top:1px solid var(--border)">${d.caveat || 'Regional estimate. Does not account for roof orientation, shading, or available roof area.'}</div>`;
+}
+
+initMap();
 </script>
 </body>
 </html>

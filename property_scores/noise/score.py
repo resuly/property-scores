@@ -491,8 +491,130 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
 
     lden = _lden(leq_day_val, leq_eve_val, leq_night_val)
 
-    # Score: 40 dB → 100, 75 dB → 0 (based on Lden)
-    score = max(0, min(100, round((75 - lden) / 35 * 100)))
+    # --- ML residual correction ---
+    # Build feature dict from already-computed physics values for XGBoost
+    ml_lden = lden  # will be overwritten if ML model is available
+    try:
+        from property_scores.noise.ml_model import predict_correction
+        import numpy as np
+
+        motor_roads_ml = [r for r in roads if r[0] not in
+                          ("footway", "path", "steps", "cycleway", "pedestrian", "track")]
+        m_per_deg = 111_320 * math.cos(math.radians(lat))
+
+        # Building features
+        heights = [h for h, _, _ in nearby_buildings] if nearby_buildings else [0]
+        inner_bldgs = [h for h, clng, clat in nearby_buildings
+                       if math.sqrt(((clng - lng) * m_per_deg) ** 2 +
+                                    ((clat - lat) * 111_320) ** 2) < 100]
+
+        # Road energy features (unscreened + screened)
+        road_energies_ml, screened_energies_ml = [], []
+        max_screening_ml = 0
+        for cls, dist_m, speed, slng, slat in motor_roads_ml:
+            aadt_est = CLASS_TO_AADT.get(cls, 400)
+            db_val = _crtn_noise(aadt_est, dist_m)
+            if db_val > 0:
+                road_energies_ml.append(db_val)
+                scr = barrier_attenuation(nearby_buildings, slng, slat, lng, lat, dist_m)
+                s_val = max(db_val - scr, 0)
+                if s_val > 0:
+                    screened_energies_ml.append(s_val)
+                max_screening_ml = max(max_screening_ml, scr)
+
+        # Directional sector features
+        sector_energy = [0.0] * NUM_FACADE_SECTORS
+        sector_width = 2 * math.pi / NUM_FACADE_SECTORS
+        for cls, dist_m, speed, slng, slat in motor_roads_ml:
+            aadt_est = CLASS_TO_AADT.get(cls, 400)
+            db_val = _crtn_noise(aadt_est, dist_m)
+            if db_val > 0:
+                bearing = _bearing(lat, lng, slat, slng)
+                sector_energy[int(bearing / sector_width) % NUM_FACADE_SECTORS] += 10 ** (db_val / 10)
+        sector_db = [10 * math.log10(e) if e > 0 else 0 for e in sector_energy]
+        active_sectors = [s for s in sector_db if s > 0]
+
+        # Rail features
+        rail_raw_ml = max((l for l, _ in rail_levels), default=0) if rail_levels else 0
+        rail_scr_ml = max((l for l, _ in top_rails), default=0) if top_rails else 0
+
+        # POI features
+        poi_noise_count, poi_noise_min_dist, poi_total_count = 0, 500, 0
+        try:
+            from property_scores.common.overture import pois_near
+            pois = pois_near(db, lat, lng, 500)
+            poi_total_count = len(pois)
+            noise_cats = {"bar", "nightclub", "pub", "restaurant", "cafe",
+                          "construction", "factory", "industrial"}
+            noise_pois = [p for p in pois if p[0] and any(c in p[0].lower() for c in noise_cats)]
+            poi_noise_count = len(noise_pois)
+            poi_noise_min_dist = min((p[1] for p in noise_pois), default=500)
+        except Exception:
+            pass
+
+        # Major road distance
+        major = ("motorway", "trunk", "primary", "secondary", "tertiary")
+        nearest_major_dist = min((r[1] for r in motor_roads_ml if r[0] in major), default=radius_m)
+
+        ml_features = {
+            "building_count": len(nearby_buildings),
+            "building_count_100m": len(inner_bldgs),
+            "building_height_100m_mean": float(np.mean(inner_bldgs)) if inner_bldgs else 0,
+            "building_height_max": max(heights),
+            "building_height_mean": float(np.mean(heights)),
+            "building_height_p75": float(np.percentile(heights, 75)) if len(heights) > 1 else heights[0],
+            "canyon_ratio": (float(np.mean(inner_bldgs)) if inner_bldgs else float(np.mean(heights))) / max(nearest_major_dist, 5),
+            "density_ratio": len(inner_bldgs) / max(len(nearby_buildings), 1),
+            "max_screening_db": max_screening_ml,
+            "nearest_major_dist": nearest_major_dist,
+            "nfdh_count": len(nfdh_stations),
+            "nfdh_max_aadt": max((n[0] for n in nfdh_stations), default=0),
+            "nfdh_nearest_dist": min((n[3] for n in nfdh_stations), default=radius_m),
+            "physics_lden": round(lden, 1),
+            "physics_max_facade": round(lden, 1),
+            "physics_min_facade": round(max(lden - (max(sector_db) - min(active_sectors) if active_sectors else 0), AMBIENT_DB), 1),
+            "physics_rail_db": round(rail_db, 1),
+            "physics_road_db": round(road_db, 1),
+            "physics_score": max(0, min(100, round((75 - lden) / 35 * 100))),
+            "poi_noise_count": poi_noise_count,
+            "poi_noise_min_dist": poi_noise_min_dist,
+            "poi_total_count": poi_total_count,
+            "rail_raw_db_max": rail_raw_ml,
+            "rail_route_count": len(gtfs_routes),
+            "rail_screened_db_max": rail_scr_ml,
+            "rail_screening_delta": rail_raw_ml - rail_scr_ml,
+            "road_count": len(motor_roads_ml),
+            "road_db_max": max(road_energies_ml) if road_energies_ml else 0,
+            "road_db_mean": float(np.mean(road_energies_ml)) if road_energies_ml else 0,
+            "road_db_sum_energy": 10 * math.log10(sum(10 ** (e / 10) for e in road_energies_ml)) if road_energies_ml else 0,
+            "road_screened_max": max(screened_energies_ml) if screened_energies_ml else 0,
+            "road_screened_sum": 10 * math.log10(sum(10 ** (e / 10) for e in sorted(screened_energies_ml, reverse=True)[:8])) if screened_energies_ml else 0,
+            "roads_with_speed_pct": roads_with_speed / max(len(motor_roads_ml), 1),
+            "sector_max_db": max(sector_db) if sector_db else 0,
+            "sector_min_db": min(active_sectors) if active_sectors else 0,
+            "sector_range_db": (max(sector_db) - min(active_sectors)) if active_sectors else 0,
+            "sector_std_db": float(np.std(active_sectors)) if active_sectors else 0,
+            "sectors_active": len(active_sectors),
+            "tram_count": sum(1 for r in gtfs_routes if r[0] == 0),
+            "tram_min_dist": nearest_tram_m if nearest_tram_m is not None else radius_m,
+            "train_count": sum(1 for r in gtfs_routes if r[0] != 0),
+            "train_max_peak_svc": max((r[3] for r in gtfs_routes if r[0] != 0), default=0),
+            "train_min_dist": nearest_train_m if nearest_train_m is not None else radius_m,
+        }
+        # Per-class road features
+        for cls in ["motorway", "trunk", "primary", "secondary", "tertiary", "residential", "service"]:
+            cls_roads = [r for r in motor_roads_ml if r[0] == cls]
+            ml_features[f"road_{cls}_count"] = len(cls_roads)
+            ml_features[f"road_{cls}_min_dist"] = min((r[1] for r in cls_roads), default=radius_m)
+
+        correction = predict_correction(ml_features)
+        if correction is not None:
+            ml_lden = lden + correction
+    except Exception:
+        pass
+
+    # Score: 40 dB → 100, 75 dB → 0 (based on ML-corrected Lden)
+    score = max(0, min(100, round((75 - ml_lden) / 35 * 100)))
 
     if score >= 80:
         label = "Very Quiet"
@@ -505,29 +627,30 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     else:
         label = "Very Loud"
 
-    # Confidence interval based on validation residuals
-    # MAE 4.63 overall; quiet <50dB areas MAE ~8; loud 60-70 areas MAE ~3.6
-    if lden < 50:
+    # Confidence interval — tighter with ML model
+    if ml_lden != lden:
+        ci_db = 5.0  # ML model CV MAE ~4.85
+    elif ml_lden < 50:
         ci_db = 8.0
-    elif lden < 60:
+    elif ml_lden < 60:
         ci_db = 5.0
     else:
         ci_db = 4.0
-    # Wider CI when no AADT data
-    if len(aadt_segments) == 0 and len(nfdh_stations) == 0:
+    if len(aadt_segments) == 0 and len(nfdh_stations) == 0 and ml_lden == lden:
         ci_db += 3.0
 
     motor_roads = [r for r in roads if r[0] not in ("footway", "path", "steps", "cycleway", "pedestrian", "track")]
 
     result = {
         "score": score,
-        "estimated_db": round(lden, 1),
+        "estimated_db": round(ml_lden, 1),
         "disclaimer": "Modelled estimate based on road/rail/aircraft data. Not a professional noise assessment. Actual noise varies with traffic, weather, and time of day.",
         "confidence_range_db": round(ci_db, 1),
-        "estimated_db_low": round(max(lden - ci_db, AMBIENT_DB), 1),
-        "estimated_db_high": round(lden + ci_db, 1),
+        "estimated_db_low": round(max(ml_lden - ci_db, AMBIENT_DB), 1),
+        "estimated_db_high": round(ml_lden + ci_db, 1),
         "leq_db": round(leq_24h, 1),
-        "lden_db": round(lden, 1),
+        "lden_db": round(ml_lden, 1),
+        "physics_lden_db": round(lden, 1),
         "leq_day_db": round(leq_day_val, 1),
         "leq_night_db": round(leq_night_val, 1),
         "label": label,

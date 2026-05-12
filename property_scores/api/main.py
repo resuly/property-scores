@@ -43,6 +43,15 @@ app = FastAPI(
     version="0.1.0",
 )
 
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:8000", "http://127.0.0.1:8000",
+                    "https://daleads.com.au", "https://www.daleads.com.au"],
+    allow_methods=["GET"],
+    allow_headers=["*"],
+)
+
 
 @app.get("/api/config")
 def get_config():

@@ -14,6 +14,29 @@ from property_scores.noise.score import (
 from property_scores.noise.buildings import buildings_in_radius, barrier_attenuation
 
 
+_STOPS_FILE = "au_rail_stops.parquet"
+
+
+def _nearest_stop_name(db, lat: float, lng: float, max_dist_m: int = 500) -> str:
+    stops_path = data_path(_STOPS_FILE)
+    if not stops_path.exists():
+        return ""
+    try:
+        m_per_deg = 111_320 * math.cos(math.radians(lat))
+        delta = max_dist_m / 111_000 * 1.5
+        row = db.execute(f"""
+            SELECT stop_name,
+                   SQRT(POW((lng - {lng}) * {m_per_deg}, 2) + POW((lat - {lat}) * 111320, 2)) AS dist
+            FROM read_parquet('{stops_path}')
+            WHERE lng BETWEEN {lng - delta} AND {lng + delta}
+              AND lat BETWEEN {lat - delta} AND {lat + delta}
+            ORDER BY dist LIMIT 1
+        """).fetchone()
+        return row[0] if row else ""
+    except Exception:
+        return ""
+
+
 def _rail_shapes_near(db, lat: float, lng: float, radius_m: int = 1000) -> list[dict]:
     """Get rail route shape geometries near a point for map drawing."""
     au_path = data_path(AU_RAIL_SHAPES_FILE)
@@ -106,12 +129,14 @@ def noise_debug(lat: float, lng: float, radius_m: int = 500) -> dict:
         rail_type = "tram" if route_type == 0 else ("vline" if peak_svc < 4 else "train")
         svc_per_hr = peak_svc * 0.4 + offpeak_svc * 0.6
         l_db = _rail_noise_freq(rail_type, dist_m, svc_per_hr)
-        screening = _screening(src_lng, src_lat, dist_m) * 0.6  # rail screening factor (score.py: rail_scr_factor)
+        screening = _screening(src_lng, src_lat, dist_m) * 0.6
+        stop_name = _nearest_stop_name(db, src_lat, src_lng)
         rail_sources.append({
             "lat": src_lat, "lng": src_lng,
             "source": "gtfs",
             "type": rail_type,
             "route": route_name,
+            "stop_name": stop_name,
             "distance_m": round(dist_m),
             "db_raw": round(l_db, 1),
             "db": round(max(l_db - screening, 0), 1),

@@ -2,9 +2,12 @@
 
 import logging
 import os
+import time
+from collections import defaultdict
 from pathlib import Path
+from threading import Lock
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -23,6 +26,29 @@ from property_scores.view_quality import view_quality_score
 from property_scores.contamination import contamination_score
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Application-level rate limiter (supplements nginx 5r/s)
+# ---------------------------------------------------------------------------
+_rate_hits: dict[str, list[float]] = defaultdict(list)
+_rate_lock = Lock()
+
+
+def _check_rate(ip: str, window: int = 60, limit: int = 30) -> bool:
+    now = time.monotonic()
+    with _rate_lock:
+        hits = _rate_hits[ip]
+        cutoff = now - window
+        _rate_hits[ip] = hits = [t for t in hits if t > cutoff]
+        if len(hits) >= limit:
+            return False
+        hits.append(now)
+        if len(_rate_hits) > 5000:
+            stale = [k for k, v in _rate_hits.items() if not v or v[-1] < cutoff]
+            for k in stale:
+                del _rate_hits[k]
+    return True
+
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -129,11 +155,19 @@ def get_all_scores(
 
 @app.get("/scores/noise")
 def get_noise(
+    request: Request,
     lat: float = Query(...), lng: float = Query(...),
-    radius: int = Query(1000), source: str | None = Query(None),
+    radius: int = Query(500), source: str | None = Query(None),
     nocache: bool = Query(False),
+    detail: bool = Query(False),
 ):
+    ip = request.headers.get("x-real-ip") or request.client.host
+    limit = 10 if detail else 30
+    if not _check_rate(ip, limit=limit):
+        return JSONResponse({"error": "Rate limit exceeded."}, status_code=429)
     try:
+        if detail:
+            return noise_debug(lat, lng, radius)
         if not nocache and not source:
             cached = noise_cache_lookup(lat, lng)
             if cached:
@@ -217,18 +251,6 @@ def get_contamination(lat: float = Query(...), lng: float = Query(...)):
         return contamination_score(lat, lng)
     except Exception as e:
         logger.exception("contamination score failed")
-        return JSONResponse({"error": str(e)}, status_code=500)
-
-
-@app.get("/scores/noise/debug")
-def get_noise_debug(
-    lat: float = Query(...), lng: float = Query(...),
-    radius: int = Query(500),
-):
-    try:
-        return noise_debug(lat, lng, radius)
-    except Exception as e:
-        logger.exception("noise debug failed")
         return JSONResponse({"error": str(e)}, status_code=500)
 
 

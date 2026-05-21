@@ -16,7 +16,7 @@ import math
 
 from property_scores.common.overture import get_db, roads_near, rail_near, aadt_near, nfdh_near, gtfs_rail_near
 from property_scores.common.au_state import detect_state
-from property_scores.noise.buildings import buildings_in_radius, barrier_attenuation
+from property_scores.noise.buildings import buildings_in_radius, barrier_attenuation, buildings_to_arrays
 from property_scores.noise.aircraft import aircraft_noise_penalty
 from property_scores.noise.terrain import terrain_attenuation
 
@@ -276,6 +276,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
 
     # --- Pre-fetch buildings once for screening calculations ---
     nearby_buildings = buildings_in_radius(db, lat, lng, radius_m)
+    _bldg_arrays = buildings_to_arrays(nearby_buildings)
 
     # Collect all sources with bearing for facade analysis: (db, bearing, is_rail)
     _all_directional_sources: list[tuple[float, float, bool]] = []
@@ -297,7 +298,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
         hv_val = (hv_pct * 100) if hv_pct else 0.0
         l_db = _crtn_noise(int(aadt), dist_m, hv_pct=hv_val, speed_kmh=DEFAULT_SPEED_KMH)
         if l_db > 0:
-            screening = barrier_attenuation(nearby_buildings, src_lng, src_lat, lng, lat, dist_m)
+            screening = barrier_attenuation(nearby_buildings, src_lng, src_lat, lng, lat, dist_m, _arrays=_bldg_arrays)
             l_db_screened = max(l_db - screening, 0.0)
             if screening > building_screening_total:
                 building_screening_total = screening
@@ -322,7 +323,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
         hv_val = max(hv_pct or 0, 0)
         l_db = _crtn_noise(int(aadt), dist_m, hv_pct=hv_val, speed_kmh=DEFAULT_SPEED_KMH)
         if l_db > 0:
-            screening = barrier_attenuation(nearby_buildings, src_lng, src_lat, lng, lat, dist_m)
+            screening = barrier_attenuation(nearby_buildings, src_lng, src_lat, lng, lat, dist_m, _arrays=_bldg_arrays)
             l_db_screened = max(l_db - screening, 0.0)
             if screening > building_screening_total:
                 building_screening_total = screening
@@ -358,7 +359,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
         aadt_est = CLASS_TO_AADT.get(road_class, 400)
         l_db = _crtn_noise(aadt_est, dist_m)
         if l_db > 0:
-            screening = barrier_attenuation(nearby_buildings, src_lng, src_lat, lng, lat, dist_m)
+            screening = barrier_attenuation(nearby_buildings, src_lng, src_lat, lng, lat, dist_m, _arrays=_bldg_arrays)
             l_db = max(l_db - screening, 0.0)
             if screening > building_screening_total:
                 building_screening_total = screening
@@ -401,7 +402,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
         svc_per_hr = peak_svc * 0.4 + offpeak_svc * 0.6
         l_db = _rail_noise_freq(rail_type, dist_m, svc_per_hr)
         if l_db > 0:
-            raw_screening = barrier_attenuation(nearby_buildings, src_lng, src_lat, lng, lat, dist_m)
+            raw_screening = barrier_attenuation(nearby_buildings, src_lng, src_lat, lng, lat, dist_m, _arrays=_bldg_arrays)
             rail_scr_factor = min(dist_m / 500, 0.6)  # 0 at 0m → 0.6 at 500m
             screening = raw_screening * rail_scr_factor
             l_db_screened = max(l_db - screening, 0.0)
@@ -516,7 +517,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
             db_val = _crtn_noise(aadt_est, dist_m)
             if db_val > 0:
                 road_energies_ml.append(db_val)
-                scr = barrier_attenuation(nearby_buildings, slng, slat, lng, lat, dist_m)
+                scr = barrier_attenuation(nearby_buildings, slng, slat, lng, lat, dist_m, _arrays=_bldg_arrays)
                 s_val = max(db_val - scr, 0)
                 if s_val > 0:
                     screened_energies_ml.append(s_val)

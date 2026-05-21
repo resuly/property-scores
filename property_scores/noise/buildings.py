@@ -11,6 +11,8 @@ then compute attenuation per source-receiver pair in Python.
 
 import math
 
+import numpy as np
+
 from property_scores.common.config import data_path
 
 BUILDINGS_FILE = "overture_buildings.parquet"
@@ -49,21 +51,39 @@ def buildings_in_radius(db, lat: float, lng: float,
         return []
 
 
+def buildings_to_arrays(buildings: list[tuple[float, float, float]]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if not buildings:
+        return np.empty(0), np.empty(0), np.empty(0)
+    arr = np.array(buildings, dtype=np.float64)
+    return arr[:, 0], arr[:, 1], arr[:, 2]
+
+
 def barrier_attenuation(buildings: list[tuple[float, float, float]],
                         source_lng: float, source_lat: float,
                         receiver_lng: float, receiver_lat: float,
                         source_distance_m: float,
-                        source_height: float = SOURCE_HEIGHT_ROAD) -> float:
-    """Calculate barrier attenuation using pre-fetched buildings.
-
-    Args:
-        buildings: list of (height, centroid_lng, centroid_lat) from buildings_in_radius()
-
-    Returns attenuation in dB (positive = noise reduction).
-    """
-    if source_distance_m < 20 or not buildings:
+                        source_height: float = SOURCE_HEIGHT_ROAD,
+                        *, _arrays=None) -> float:
+    if source_distance_m < 20:
         return 0.0
+    if _arrays is not None:
+        heights, blng, blat = _arrays
+    else:
+        if not buildings:
+            return 0.0
+        heights, blng, blat = buildings_to_arrays(buildings)
+    if len(heights) == 0:
+        return 0.0
+    return _barrier_np(heights, blng, blat,
+                       source_lng, source_lat,
+                       receiver_lng, receiver_lat,
+                       source_distance_m, source_height)
 
+
+def _barrier_np(heights, blng, blat,
+                source_lng, source_lat,
+                receiver_lng, receiver_lat,
+                source_distance_m, source_height):
     m_per_deg = 111_320 * math.cos(math.radians((source_lat + receiver_lat) / 2))
 
     dx = (receiver_lng - source_lng) * m_per_deg
@@ -74,48 +94,46 @@ def barrier_attenuation(buildings: list[tuple[float, float, float]],
 
     nx, ny = dx / path_len, dy / path_len
 
-    barriers: list[tuple[float, float]] = []  # (along_position, attenuation)
-    for bldg_height, clng, clat in buildings:
-        bx = (clng - source_lng) * m_per_deg
-        by = (clat - source_lat) * 111_320
+    bx = (blng - source_lng) * m_per_deg
+    by = (blat - source_lat) * 111_320
 
-        along = bx * nx + by * ny
-        if along < 5 or along > source_distance_m - 5:
-            continue
+    along = bx * nx + by * ny
+    perp = np.abs(-bx * ny + by * nx)
 
-        perp = abs(-bx * ny + by * nx)
-        if perp > 30:
-            continue
-
-        dist_to_rcv = source_distance_m - along
-        over_src = math.sqrt(along ** 2 + (bldg_height - source_height) ** 2)
-        over_rcv = math.sqrt(dist_to_rcv ** 2 + (bldg_height - RECEIVER_HEIGHT) ** 2)
-        detour = over_src + over_rcv - source_distance_m
-
-        if detour <= 0:
-            continue
-
-        fresnel_n = 2 * detour / SOUND_WAVELENGTH
-        atten = min(10 * math.log10(3 + 20 * fresnel_n ** 2), MAX_SINGLE_BARRIER_DB)
-
-        barriers.append((along, atten))
-
-    if not barriers:
+    mask = (along > 5) & (along < source_distance_m - 5) & (perp < 30)
+    if not np.any(mask):
         return 0.0
 
-    # Multiple barriers: keep best per 20m zone, sum top barriers (diminishing)
-    barriers.sort(key=lambda x: x[1], reverse=True)
+    a = along[mask]
+    h = heights[mask]
+
+    dist_to_rcv = source_distance_m - a
+    over_src = np.sqrt(a ** 2 + (h - source_height) ** 2)
+    over_rcv = np.sqrt(dist_to_rcv ** 2 + (h - RECEIVER_HEIGHT) ** 2)
+    detour = over_src + over_rcv - source_distance_m
+
+    pos_mask = detour > 0
+    if not np.any(pos_mask):
+        return 0.0
+
+    a = a[pos_mask]
+    detour = detour[pos_mask]
+
+    fresnel_n = 2 * detour / SOUND_WAVELENGTH
+    atten = np.minimum(10 * np.log10(3 + 20 * fresnel_n ** 2), MAX_SINGLE_BARRIER_DB)
+
+    order = np.argsort(-atten)
+    a = a[order]
+    atten = atten[order]
+
     zones_used: set[int] = set()
     total = 0.0
-    for along, atten in barriers:
-        zone = int(along / 20)
+    for i in range(len(atten)):
+        zone = int(a[i] / 20)
         if zone in zones_used:
             continue
         zones_used.add(zone)
-        if not zones_used - {zone}:
-            total += atten
-        else:
-            total += atten * 0.4  # diminishing return for additional barriers
+        total += float(atten[i]) if len(zones_used) == 1 else float(atten[i]) * 0.4
         if total >= MAX_TOTAL_BARRIER_DB:
             return MAX_TOTAL_BARRIER_DB
 

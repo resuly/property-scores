@@ -22,9 +22,12 @@ from __future__ import annotations
 import json
 import logging
 import math
+from functools import lru_cache
 from typing import Any
 
 import requests
+
+_session = requests.Session()
 
 from property_scores.common.au_state import detect_state
 from property_scores.common.config import data_path
@@ -84,7 +87,7 @@ def _query_vic(lat: float, lng: float) -> dict | None:
     for layer in (27, 22):  # MAEO, AEO
         url = f"{_VICPLAN_BASE}/{layer}"
         try:
-            resp = requests.get(f"{url}/query", params={
+            resp = _session.get(f"{url}/query", params={
                 "geometry": f"{lng},{lat}",
                 "geometryType": "esriGeometryPoint",
                 "inSR": "4326",
@@ -124,7 +127,7 @@ _NSW_SEPP_URL = (
 
 def _query_nsw(lat: float, lng: float) -> dict | None:
     try:
-        resp = requests.get(f"{_NSW_SEPP_URL}/query", params={
+        resp = _session.get(f"{_NSW_SEPP_URL}/query", params={
             "geometry": f"{lng},{lat}",
             "geometryType": "esriGeometryPoint",
             "inSR": "4326",
@@ -171,7 +174,7 @@ def _load_qld_data() -> list:
     if _qld_cache is not None:
         return _qld_cache
     try:
-        resp = requests.get(_QLD_BNE_URL, timeout=15)
+        resp = _session.get(_QLD_BNE_URL, timeout=15)
         if resp.ok:
             _qld_cache = resp.json().get("features", [])
             return _qld_cache
@@ -236,7 +239,7 @@ _WA_SLIP_URL = (
 
 def _query_wa(lat: float, lng: float) -> dict | None:
     try:
-        resp = requests.get(f"{_WA_SLIP_URL}/query", params={
+        resp = _session.get(f"{_WA_SLIP_URL}/query", params={
             "geometry": f"{lng},{lat}",
             "geometryType": "esriGeometryPoint",
             "inSR": "4326",
@@ -320,11 +323,12 @@ def _query_defence(lat: float, lng: float) -> dict | None:
 # ---------------------------------------------------------------------------
 
 def aircraft_noise_penalty(lat: float, lng: float) -> dict:
-    """Query ANEF zones from all national data sources.
+    """Query ANEF zones from all national data sources."""
+    return _aircraft_cached(round(lat, 3), round(lng, 3))
 
-    Checks state-specific civilian overlays first, then Defence ANEF.
-    Returns the worst (highest penalty) match.
-    """
+
+@lru_cache(maxsize=256)
+def _aircraft_cached(lat: float, lng: float) -> dict:
     state = detect_state(lat, lng)
 
     results: list[dict] = []

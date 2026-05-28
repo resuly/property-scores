@@ -10,6 +10,7 @@ Score 0-100 where 100 = cleanest / lowest contamination risk.
 
 import logging
 import math
+import time as _time
 
 import requests
 
@@ -306,12 +307,23 @@ def _industrial_to_score(ind: dict) -> int:
 # Main scoring function
 # ---------------------------------------------------------------------------
 
+_contam_cache: dict[tuple[float, float], tuple[dict, float]] = {}
+_CONTAM_CACHE_TTL = 3600
+
+
 def contamination_score(lat: float, lng: float) -> dict:
     """Compute contamination risk score for an Australian coordinate.
 
     Combines official EPA registers (VIC/NSW/WA) with industrial POI
     proximity from Overture data for national coverage.
     """
+    key = (round(lat, 3), round(lng, 3))
+    now = _time.time()
+    if key in _contam_cache:
+        cached, ts = _contam_cache[key]
+        if now - ts < _CONTAM_CACHE_TTL:
+            return {**cached, "cached": True}
+
     state = _detect_state(lat, lng)
     if state is None:
         return {
@@ -322,19 +334,26 @@ def contamination_score(lat: float, lng: float) -> dict:
             "industrial": {},
         }
 
-    # --- Phase 1: Official EPA registers ---
-    epa_sites: list[dict] = []
-    if state == "VIC":
-        epa_sites = _vic_epa_sites(lat, lng)
-    elif state == "NSW":
-        epa_sites = _nsw_epa_sites(lat, lng)
-    elif state == "WA":
-        epa_sites = _wa_epa_sites(lat, lng)
+    # --- Both phases in parallel ---
+    from concurrent.futures import ThreadPoolExecutor
 
+    def _fetch_epa():
+        if state == "VIC":
+            return _vic_epa_sites(lat, lng)
+        elif state == "NSW":
+            return _nsw_epa_sites(lat, lng)
+        elif state == "WA":
+            return _wa_epa_sites(lat, lng)
+        return []
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_epa = pool.submit(_fetch_epa)
+        f_ind = pool.submit(_industrial_proximity, lat, lng)
+
+    epa_sites = f_epa.result()
     epa_score = _epa_to_score(epa_sites) if epa_sites or state in ("VIC", "NSW", "WA") else None
 
-    # --- Phase 2: Industrial POI proximity ---
-    industrial = _industrial_proximity(lat, lng)
+    industrial = f_ind.result()
     ind_score = _industrial_to_score(industrial)
 
     # --- Combine ---
@@ -369,6 +388,11 @@ def contamination_score(lat: float, lng: float) -> dict:
     }
     if not epa_sites and state not in ("VIC", "NSW", "WA"):
         result["note"] = f"No EPA register API for {state}. Score based on industrial POI proximity only."
+
+    _contam_cache[key] = (result, _time.time())
+    if len(_contam_cache) > 2000:
+        oldest = min(_contam_cache, key=lambda k: _contam_cache[k][1])
+        del _contam_cache[oldest]
 
     return result
 

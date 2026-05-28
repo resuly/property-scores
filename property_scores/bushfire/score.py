@@ -605,8 +605,16 @@ def bushfire_score(lat: float, lng: float, *, quick: bool = False) -> dict:
             "category": None,
         }
 
-    # --- Phase 1: Overlay (ArcGIS REST, ~0.3s) ---
-    worst_severity, hits, worst_category = _overlay_check(state, lat, lng)
+    # --- All phases in parallel ---
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        f_overlay = pool.submit(_overlay_check, state, lat, lng)
+        f_veg = None if quick else pool.submit(_vegetation_fuel, lat, lng)
+        f_slope = None if quick else pool.submit(_terrain_slope, lat, lng)
+        f_fire = None if quick else pool.submit(_fire_history_local, state, lat, lng)
+
+    worst_severity, hits, worst_category = f_overlay.result()
 
     overlay_score: int | None = None
     if worst_severity:
@@ -615,11 +623,9 @@ def bushfire_score(lat: float, lng: float, *, quick: bool = False) -> dict:
     elif ENDPOINTS.get(state):
         overlay_score = 90
 
-    # --- Phase 2: Local data (Overture buildings, ~50ms) + contour API (~0.5s) ---
-    veg = None if quick else _vegetation_fuel(lat, lng)
-    slope = None if quick else _terrain_slope(lat, lng)
-
-    fire = None if quick else _fire_history_local(state, lat, lng)
+    veg = f_veg.result() if f_veg else None
+    slope = f_slope.result() if f_slope else None
+    fire = f_fire.result() if f_fire else None
 
     sat_score = _satellite_to_score(veg, slope, fire)
 

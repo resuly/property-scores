@@ -13,6 +13,9 @@ excluded from the weighted average rather than penalized.
 """
 
 import math
+import time as _time
+from concurrent.futures import ThreadPoolExecutor
+
 import requests
 
 from property_scores.common.overture import (
@@ -321,65 +324,59 @@ def _horizon_openness_factor(lat: float, lng: float) -> dict | None:
 # Main scoring function
 # ---------------------------------------------------------------------------
 
+_vq_cache: dict[tuple[float, float], tuple[dict, float]] = {}
+_VQ_CACHE_TTL = 3600
+
+
 def view_quality_score(lat: float, lng: float) -> dict:
     """Compute view quality score for a coordinate.
 
     Returns dict with score (0-100), label, and per-factor details.
     Factors without data are excluded from the weighted average.
     """
-    db = get_db()
+    key = (round(lat, 3), round(lng, 3))
+    now = _time.time()
+    if key in _vq_cache:
+        cached, ts = _vq_cache[key]
+        if now - ts < _VQ_CACHE_TTL:
+            return {**cached, "cached": True}
+
+    def _run_ocean(la, ln):
+        return _ocean_proximity_factor(get_db(), la, ln)
+    def _run_water(la, ln):
+        return _inland_water_factor(get_db(), la, ln)
+    def _run_green(la, ln):
+        return _green_space_factor(get_db(), la, ln)
+    def _run_open(la, ln):
+        return _building_openness_factor(get_db(), la, ln)
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        f_ocean = pool.submit(_run_ocean, lat, lng)
+        f_water = pool.submit(_run_water, lat, lng)
+        f_elev = pool.submit(_elevation_advantage_factor, lat, lng)
+        f_green = pool.submit(_run_green, lat, lng)
+        f_open = pool.submit(_run_open, lat, lng)
+        f_horiz = pool.submit(_horizon_openness_factor, lat, lng)
+
+    factor_map = {
+        "ocean_proximity": f_ocean.result(),
+        "inland_water": f_water.result(),
+        "elevation_advantage": f_elev.result(),
+        "green_space": f_green.result(),
+        "building_openness": f_open.result(),
+        "horizon_openness": f_horiz.result(),
+    }
 
     factor_results: dict[str, dict] = {}
     active_weight = 0.0
     weighted_sum = 0.0
 
-    # Ocean proximity
-    ocean = _ocean_proximity_factor(db, lat, lng)
-    if ocean:
-        factor_results["ocean_proximity"] = ocean
-        w = FACTORS["ocean_proximity"]
-        weighted_sum += ocean["value"] * w
-        active_weight += w
-
-    # Inland water
-    water = _inland_water_factor(db, lat, lng)
-    if water:
-        factor_results["inland_water"] = water
-        w = FACTORS["inland_water"]
-        weighted_sum += water["value"] * w
-        active_weight += w
-
-    # Elevation advantage
-    elev = _elevation_advantage_factor(lat, lng)
-    if elev:
-        factor_results["elevation_advantage"] = elev
-        w = FACTORS["elevation_advantage"]
-        weighted_sum += elev["value"] * w
-        active_weight += w
-
-    # Green space
-    green = _green_space_factor(db, lat, lng)
-    if green:
-        factor_results["green_space"] = green
-        w = FACTORS["green_space"]
-        weighted_sum += green["value"] * w
-        active_weight += w
-
-    # Building openness
-    openness = _building_openness_factor(db, lat, lng)
-    if openness:
-        factor_results["building_openness"] = openness
-        w = FACTORS["building_openness"]
-        weighted_sum += openness["value"] * w
-        active_weight += w
-
-    # Horizon openness
-    horizon = _horizon_openness_factor(lat, lng)
-    if horizon:
-        factor_results["horizon_openness"] = horizon
-        w = FACTORS["horizon_openness"]
-        weighted_sum += horizon["value"] * w
-        active_weight += w
+    for name, result in factor_map.items():
+        if result:
+            factor_results[name] = result
+            w = FACTORS[name]
+            weighted_sum += result["value"] * w
+            active_weight += w
 
     if active_weight == 0:
         return {
@@ -404,13 +401,20 @@ def view_quality_score(lat: float, lng: float) -> dict:
     else:
         label = "Obstructed Views"
 
-    return {
+    result = {
         "score": score,
         "caveat": "Based on proximity to landscape features, not actual line-of-sight. Does not guarantee unobstructed views.",
         "label": label,
         "factors": factor_results,
         "active_factors": len(factor_results),
     }
+
+    _vq_cache[key] = (result, _time.time())
+    if len(_vq_cache) > 2000:
+        oldest = min(_vq_cache, key=lambda k: _vq_cache[k][1])
+        del _vq_cache[oldest]
+
+    return result
 
 
 if __name__ == "__main__":

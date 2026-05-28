@@ -11,6 +11,8 @@ Score 0-100 where 100 = coolest / lowest heat island effect.
 
 import math
 import time as _time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache
 
 import requests
 
@@ -215,6 +217,13 @@ def _greenspace_proxy(lat: float, lng: float) -> float | None:
 # Main scoring function
 # ---------------------------------------------------------------------------
 
+_result_cache: dict[tuple[float, float], tuple[dict, float]] = {}
+_CACHE_TTL = 3600
+
+def _cache_key(lat: float, lng: float) -> tuple[float, float]:
+    return (round(lat, 3), round(lng, 3))
+
+
 def heat_island_score(lat: float, lng: float) -> dict:
     """Compute urban heat island score for a coordinate.
 
@@ -222,11 +231,24 @@ def heat_island_score(lat: float, lng: float) -> dict:
     Open-Meteo ERA5 25km air temperature. Adjusted by building density
     and greenspace factors.
     """
-    # --- MODIS LST (1km satellite surface temp) ---
-    modis = _modis_lst(lat, lng)
+    key = _cache_key(lat, lng)
+    now = _time.time()
+    if key in _result_cache:
+        cached, ts = _result_cache[key]
+        if now - ts < _CACHE_TTL:
+            cached_copy = {**cached, "cached": True}
+            return cached_copy
 
-    # --- Open-Meteo ERA5 fallback ---
-    mean_temp, p90_temp = _fetch_summer_temp(lat, lng)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        f_modis = pool.submit(_modis_lst, lat, lng)
+        f_temp = pool.submit(_fetch_summer_temp, lat, lng)
+        f_density = pool.submit(_building_density_proxy, lat, lng)
+        f_green = pool.submit(_greenspace_proxy, lat, lng)
+
+    modis = f_modis.result()
+    mean_temp, p90_temp = f_temp.result()
+    building_density = f_density.result()
+    greenspace = f_green.result()
 
     if modis and modis["point_lst_c"] > 0:
         # MODIS-based scoring: use actual surface temperature
@@ -255,11 +277,8 @@ def heat_island_score(lat: float, lng: float) -> dict:
             "error": "Could not fetch temperature data",
         }
 
-    # --- Local adjustments ---
-    building_density = _building_density_proxy(lat, lng)
+    # --- Local adjustments (already fetched in parallel) ---
     density_penalty = building_density * 12 if building_density is not None else 0.0
-
-    greenspace = _greenspace_proxy(lat, lng)
     green_bonus = greenspace * 5 if greenspace is not None else 0.0
 
     score = max(0, min(100, round(temp_score - uhi_penalty - density_penalty + green_bonus)))
@@ -294,6 +313,11 @@ def heat_island_score(lat: float, lng: float) -> dict:
         result["building_density"] = round(building_density, 2)
     if greenspace is not None:
         result["greenspace_factor"] = round(greenspace, 2)
+
+    _result_cache[key] = (result, _time.time())
+    if len(_result_cache) > 2000:
+        oldest = min(_result_cache, key=lambda k: _result_cache[k][1])
+        del _result_cache[oldest]
 
     return result
 

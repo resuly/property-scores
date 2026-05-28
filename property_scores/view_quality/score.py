@@ -14,6 +14,7 @@ excluded from the weighted average rather than penalized.
 
 import math
 import time as _time
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
@@ -324,7 +325,8 @@ def _horizon_openness_factor(lat: float, lng: float) -> dict | None:
 # Main scoring function
 # ---------------------------------------------------------------------------
 
-_vq_cache: dict[tuple[float, float], tuple[dict, float]] = {}
+_vq_cache: OrderedDict[tuple[float, float], tuple[dict, float]] = OrderedDict()
+_VQ_CACHE_MAX = 2000
 _VQ_CACHE_TTL = 3600
 
 
@@ -334,12 +336,16 @@ def view_quality_score(lat: float, lng: float) -> dict:
     Returns dict with score (0-100), label, and per-factor details.
     Factors without data are excluded from the weighted average.
     """
-    key = (round(lat, 3), round(lng, 3))
+    # Elevation + proximity factors are coarse; round(2) gives ~1.1km grid
+    key = (round(lat, 2), round(lng, 2))
     now = _time.time()
     if key in _vq_cache:
         cached, ts = _vq_cache[key]
         if now - ts < _VQ_CACHE_TTL:
+            _vq_cache.move_to_end(key)
             return {**cached, "cached": True}
+        else:
+            del _vq_cache[key]
 
     def _run_ocean(la, ln):
         return _ocean_proximity_factor(get_db(), la, ln)
@@ -410,9 +416,8 @@ def view_quality_score(lat: float, lng: float) -> dict:
     }
 
     _vq_cache[key] = (result, _time.time())
-    if len(_vq_cache) > 2000:
-        oldest = min(_vq_cache, key=lambda k: _vq_cache[k][1])
-        del _vq_cache[oldest]
+    if len(_vq_cache) > _VQ_CACHE_MAX:
+        _vq_cache.popitem(last=False)
 
     return result
 

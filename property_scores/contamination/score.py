@@ -11,6 +11,7 @@ Score 0-100 where 100 = cleanest / lowest contamination risk.
 import logging
 import math
 import time as _time
+from collections import OrderedDict
 
 import requests
 
@@ -307,7 +308,8 @@ def _industrial_to_score(ind: dict) -> int:
 # Main scoring function
 # ---------------------------------------------------------------------------
 
-_contam_cache: dict[tuple[float, float], tuple[dict, float]] = {}
+_contam_cache: OrderedDict[tuple[float, float], tuple[dict, float]] = OrderedDict()
+_CONTAM_CACHE_MAX = 2000
 _CONTAM_CACHE_TTL = 3600
 
 
@@ -317,12 +319,16 @@ def contamination_score(lat: float, lng: float) -> dict:
     Combines official EPA registers (VIC/NSW/WA) with industrial POI
     proximity from Overture data for national coverage.
     """
+    # EPA sites have specific locations; round(3) gives ~111m grid
     key = (round(lat, 3), round(lng, 3))
     now = _time.time()
     if key in _contam_cache:
         cached, ts = _contam_cache[key]
         if now - ts < _CONTAM_CACHE_TTL:
+            _contam_cache.move_to_end(key)
             return {**cached, "cached": True}
+        else:
+            del _contam_cache[key]
 
     state = _detect_state(lat, lng)
     if state is None:
@@ -390,9 +396,8 @@ def contamination_score(lat: float, lng: float) -> dict:
         result["note"] = f"No EPA register API for {state}. Score based on industrial POI proximity only."
 
     _contam_cache[key] = (result, _time.time())
-    if len(_contam_cache) > 2000:
-        oldest = min(_contam_cache, key=lambda k: _contam_cache[k][1])
-        del _contam_cache[oldest]
+    if len(_contam_cache) > _CONTAM_CACHE_MAX:
+        _contam_cache.popitem(last=False)
 
     return result
 

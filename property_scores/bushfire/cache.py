@@ -6,10 +6,12 @@ Cache full score results keyed by rounded coordinates.
 
 import math
 import threading
+from collections import OrderedDict
 
 _lock = threading.Lock()
-_cache: dict[tuple[float, float], dict] = {}
-_GRID = 0.003  # ~330m grid cells (WorldCover 10m, DEM 30m — safe margin)
+_cache: OrderedDict[tuple[int, int], dict] = OrderedDict()
+_CACHE_MAX = 5000
+_GRID = 0.003  # ~330m grid cells (WorldCover 10m, DEM 30m -- safe margin)
 
 
 def _key(lat: float, lng: float) -> tuple[int, int]:
@@ -17,8 +19,11 @@ def _key(lat: float, lng: float) -> tuple[int, int]:
 
 
 def get(lat: float, lng: float) -> dict | None:
+    k = _key(lat, lng)
     with _lock:
-        cached = _cache.get(_key(lat, lng))
+        cached = _cache.get(k)
+        if cached is not None:
+            _cache.move_to_end(k)
     if cached is None:
         return None
     result = dict(cached)
@@ -29,7 +34,8 @@ def get(lat: float, lng: float) -> dict | None:
 def put(lat: float, lng: float, result: dict):
     if result.get("score") is None:
         return
+    k = _key(lat, lng)
     with _lock:
-        if len(_cache) > 5000:
-            _cache.clear()
-        _cache[_key(lat, lng)] = dict(result)
+        _cache[k] = dict(result)
+        if len(_cache) > _CACHE_MAX:
+            _cache.popitem(last=False)

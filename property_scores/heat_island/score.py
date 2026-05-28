@@ -11,6 +11,7 @@ Score 0-100 where 100 = coolest / lowest heat island effect.
 
 import math
 import time as _time
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 
@@ -217,11 +218,13 @@ def _greenspace_proxy(lat: float, lng: float) -> float | None:
 # Main scoring function
 # ---------------------------------------------------------------------------
 
-_result_cache: dict[tuple[float, float], tuple[dict, float]] = {}
+_cache: OrderedDict[tuple[float, float], tuple[dict, float]] = OrderedDict()
+_CACHE_MAX = 2000
 _CACHE_TTL = 3600
 
 def _cache_key(lat: float, lng: float) -> tuple[float, float]:
-    return (round(lat, 3), round(lng, 3))
+    # MODIS is 1km resolution; round(2) gives ~1.1km grid
+    return (round(lat, 2), round(lng, 2))
 
 
 def heat_island_score(lat: float, lng: float) -> dict:
@@ -233,11 +236,13 @@ def heat_island_score(lat: float, lng: float) -> dict:
     """
     key = _cache_key(lat, lng)
     now = _time.time()
-    if key in _result_cache:
-        cached, ts = _result_cache[key]
+    if key in _cache:
+        cached, ts = _cache[key]
         if now - ts < _CACHE_TTL:
-            cached_copy = {**cached, "cached": True}
-            return cached_copy
+            _cache.move_to_end(key)
+            return {**cached, "cached": True}
+        else:
+            del _cache[key]
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         f_modis = pool.submit(_modis_lst, lat, lng)
@@ -314,10 +319,9 @@ def heat_island_score(lat: float, lng: float) -> dict:
     if greenspace is not None:
         result["greenspace_factor"] = round(greenspace, 2)
 
-    _result_cache[key] = (result, _time.time())
-    if len(_result_cache) > 2000:
-        oldest = min(_result_cache, key=lambda k: _result_cache[k][1])
-        del _result_cache[oldest]
+    _cache[key] = (result, _time.time())
+    if len(_cache) > _CACHE_MAX:
+        _cache.popitem(last=False)
 
     return result
 

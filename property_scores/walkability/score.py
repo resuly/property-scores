@@ -313,13 +313,22 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
                         })
                         seen_names.setdefault(matched, set()).add(norm)
 
-    def _effective_distance(poi_dist_m: float) -> float:
+    def _effective_distance(poi_dist_m: float, scenario: str = "") -> float:
         """Check if a highway barrier lies between property and POI.
 
         Barrier must be at 20-80% of the distance (not at the property's
         feet or beyond the POI) to count as a genuine crossing obstacle.
+
+        Transit destinations (train / tram / bus) sit on or across the road
+        and rail corridors by nature, and crossing a main road to reach them
+        is a normal, signalised part of the walk. Applying the full errand
+        barrier penalty there is a systematic false negative (e.g. a station
+        695 m away gets pushed past the decay cutoff and zeroed out), so
+        transit is exempt from the penalty.
         """
         if not barrier_segments or poi_dist_m < 100:
+            return poi_dist_m
+        if scenario in ("train", "tram_bus"):
             return poi_dist_m
         lo = poi_dist_m * 0.15
         hi = poi_dist_m * 0.85
@@ -337,7 +346,7 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
         weight = cfg["weight"]
         if scenario in nearest:
             raw_dist = nearest[scenario]
-            eff_dist = _effective_distance(raw_dist)
+            eff_dist = _effective_distance(raw_dist, scenario)
             if eff_dist > raw_dist:
                 barriers_crossed += 1
             d = _decay(eff_dist)

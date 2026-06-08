@@ -1,120 +1,97 @@
-"""Download Main Roads WA traffic digest data and append to NFDH national AADT."""
+"""Download Main Roads WA "Traffic Digest" AADT and write data/aadt_wa.parquet.
+
+Source: Main Roads WA OpenData RoadAssets_DataPortal, layer 27 (Traffic Digest),
+public ArcGIS MapServer, no auth. Point sites with Mon-Sun average daily traffic
+(MON_SUN = AADT) and heavy-vehicle percent (PCT_HEAVY_MON_SUN).
+
+Consumed by aadt_near()'s aadt_*.parquet glob. Latest year kept per site.
+(Was previously appended into nfdh_aadt_national.parquet; now a first-class
+measured-AADT layer like VIC.)
+"""
 
 import json
-import sys
 import os
+import sys
 import time
+import urllib.parse
+import urllib.request
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from property_scores.common.aadt_build import write_aadt_parquet, data_out, clamp_hv  # noqa: E402
 
-import pyarrow as pa
-import pyarrow.parquet as pq
-import requests
-
-WA_ENDPOINT = (
-    "https://gisservices.mainroads.wa.gov.au/arcgis/rest/services"
-    "/OpenData/RoadAssets_DataPortal/MapServer/27/query"
-)
-
-NFDH_PATH = os.path.join(os.environ.get("DATA_DIR", "D:/property-scores-data"),
-                          "nfdh_aadt_national.parquet")
+LAYER = ("https://gisservices.mainroads.wa.gov.au/arcgis/rest/services/OpenData/"
+         "RoadAssets_DataPortal/MapServer/27/query")
+PAGE = 2000
 
 
-def download_wa_aadt():
-    all_features = []
+def _get(params, retries=4):
+    url = LAYER + "?" + urllib.parse.urlencode(params)
+    last = None
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "property-scores/wa-aadt"})
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except Exception as e:  # noqa: BLE001
+            last = e
+            time.sleep(2 * (attempt + 1))
+    raise RuntimeError(f"WA request failed: {last}")
+
+
+def fetch_all():
+    # one record per site, keep highest TRAFFIC_YEAR
+    best = {}
     offset = 0
-    batch_size = 2000
-
     while True:
-        params = {
-            "where": "TRAFFIC_YEAR='2024/25'",
-            "outFields": "SITE_NO,ROAD_NAME,LOCATION_DESC,MON_SUN,PCT_HEAVY_MON_SUN,LG_NAME",
-            "returnGeometry": "true",
+        d = _get({
+            "where": "MON_SUN > 0",
+            "outFields": "SITE_NO,ROAD_NAME,MON_SUN,PCT_HEAVY_MON_SUN,TRAFFIC_YEAR",
             "outSR": "4326",
-            "f": "json",
+            "orderByFields": "OBJECTID",
             "resultOffset": offset,
-            "resultRecordCount": batch_size,
-        }
-        resp = requests.get(WA_ENDPOINT, params=params, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-
-        features = data.get("features", [])
-        if not features:
-            break
-        all_features.extend(features)
-        print(f"  Downloaded {len(all_features)} WA stations...")
-        offset += batch_size
-
-        if len(features) < batch_size:
-            break
-
-    print(f"Total WA stations (2024/25): {len(all_features)}")
-    return all_features
-
-
-def features_to_rows(features):
-    rows = []
-    for feat in features:
-        attrs = feat.get("attributes", {})
-        geom = feat.get("geometry", {})
-
-        aadt = attrs.get("MON_SUN")
-        if not aadt or aadt <= 0:
-            continue
-
-        rows.append({
-            "station_id": str(attrs.get("SITE_NO", "")),
-            "station_name": attrs.get("LOCATION_DESC", ""),
-            "road_name": attrs.get("ROAD_NAME", ""),
-            "state": "WA",
-            "lon": geom.get("x"),
-            "lat": geom.get("y"),
-            "geometry_wkt": f"POINT ({geom.get('x')} {geom.get('y')})" if geom.get("x") else None,
-            "aadt": float(aadt),
-            "heavy_vehicle_pct": float(attrs.get("PCT_HEAVY_MON_SUN") or 0),
-            "year": 2025,
-            "counter_type": "Class",
-            "direction": None,
-            "source_data": "mainroads_wa",
-            "clientid": "mainroads_wa",
-            "ctr_id": 0,
+            "resultRecordCount": PAGE,
+            "f": "geojson",
         })
-    return rows
+        feats = d.get("features", [])
+        if not feats:
+            break
+        for ft in feats:
+            a = ft.get("properties", {})
+            geom = ft.get("geometry") or {}
+            coords = geom.get("coordinates")
+            if not coords or len(coords) < 2:
+                continue
+            aadt = a.get("MON_SUN")
+            if not aadt or aadt <= 0:
+                continue
+            site = a.get("SITE_NO")
+            yr = a.get("TRAFFIC_YEAR") or 0
+            key = site if site is not None else (round(coords[0], 6), round(coords[1], 6))
+            if key in best and best[key][0] >= yr:
+                continue
+            best[key] = (yr, {
+                "aadt": int(aadt),
+                "hv_pct": clamp_hv(a.get("PCT_HEAVY_MON_SUN")),
+                "road_name": (a.get("ROAD_NAME") or "").strip() or None,
+                "wkt": f"POINT ({coords[0]} {coords[1]})",
+            })
+        offset += PAGE
+        print(f"  fetched {offset} ({len(best)} sites)", flush=True)
+        if len(feats) < PAGE:
+            break
+    return [v[1] for v in best.values()]
 
 
-def merge_with_nfdh(wa_rows):
-    existing = pq.read_table(NFDH_PATH)
-    existing_states = set(existing.column("state").to_pylist())
-    print(f"Existing NFDH: {len(existing)} rows, states: {existing_states}")
-
-    if "WA" in existing_states:
-        print("WA data already in NFDH — removing old WA rows first")
-        mask = pa.compute.not_equal(existing.column("state"), "WA")
-        existing = existing.filter(mask)
-        print(f"After removing old WA: {len(existing)} rows")
-
-    wa_dict = {col: [r[col] for r in wa_rows] for col in existing.column_names}
-    wa_table = pa.table(wa_dict).cast(existing.schema)
-    combined = pa.concat_tables([existing, wa_table])
-    pq.write_table(combined, NFDH_PATH)
-    print(f"Combined: {len(combined)} rows")
-
-    state_counts = {}
-    for s in combined.column("state").to_pylist():
-        state_counts[s] = state_counts.get(s, 0) + 1
-    for s, n in sorted(state_counts.items()):
-        print(f"  {s}: {n}")
+def main():
+    rows = fetch_all()
+    if not rows:
+        print("ERROR: no WA rows", file=sys.stderr)
+        return 2
+    out = data_out("aadt_wa.parquet")
+    n = write_aadt_parquet(rows, out)
+    print(f"wrote {n} rows -> {out}")
+    return 0
 
 
 if __name__ == "__main__":
-    print("Downloading Main Roads WA AADT (2024/25)...")
-    features = download_wa_aadt()
-
-    print("Converting to rows...")
-    rows = features_to_rows(features)
-    print(f"Valid WA rows: {len(rows)}")
-
-    print("Merging with NFDH national dataset...")
-    merge_with_nfdh(rows)
-    print("Done.")
+    raise SystemExit(main())

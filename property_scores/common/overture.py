@@ -1,5 +1,7 @@
 """Overture Maps data loading helpers via DuckDB."""
 
+import glob
+
 import duckdb
 
 from property_scores.common.config import data_path
@@ -9,7 +11,12 @@ import threading
 ROADS_FILE = "overture_roads.parquet"
 POIS_FILE = "overture_pois.parquet"
 WATER_FILE = "overture_water.parquet"
-AADT_FILE = "vicroads_aadt_2019.parquet"
+# Measured per-segment AADT ground truth, one parquet per state
+# (aadt_vic.parquet, aadt_nsw.parquet, ...). Each file shares the schema
+# aadt_near() expects (aadt, hv_pct, road_name, geometry, xmin, ymin) so they
+# can be read together with a single glob. Drop a new state's parquet in and it
+# is picked up automatically — no code change needed.
+AADT_GLOB = "aadt_*.parquet"
 NFDH_FILE = "nfdh_aadt_national.parquet"
 PTV_SHAPES_FILE = "ptv_rail_shapes.parquet"
 PTV_FREQ_FILE = "ptv_rail_frequency.parquet"
@@ -87,14 +94,16 @@ def rail_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
 
 def aadt_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
               radius_m: int = 500) -> list[tuple]:
-    """Find VicRoads AADT segments within radius.
+    """Find measured AADT segments within radius, across all state parquets.
 
-    Returns (aadt, hv_pct, road_name, dist_m, nearest_lng, nearest_lat).
+    Reads every data/aadt_*.parquet (one per state) together. Returns
+    (aadt, hv_pct, road_name, dist_m, nearest_lng, nearest_lat).
     """
-    aadt_path = data_path(AADT_FILE)
-    if not aadt_path.exists():
+    files = sorted(glob.glob(str(data_path(AADT_GLOB))))
+    if not files:
         return []
-    table = f"read_parquet('{aadt_path}')"
+    file_list = "[" + ", ".join(f"'{f}'" for f in files) + "]"
+    table = f"read_parquet({file_list}, union_by_name=true)"
     delta = radius_m / 111_000 * 1.5
     import math
     m_per_deg = 111_320 * math.cos(math.radians(lat))

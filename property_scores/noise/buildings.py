@@ -21,8 +21,15 @@ RECEIVER_HEIGHT = 1.5  # ear height
 SOURCE_HEIGHT_ROAD = 0.5  # tire noise height
 SOURCE_HEIGHT_RAIL = 1.0  # rail noise height
 SOUND_WAVELENGTH = 0.34  # ~1 kHz (dominant traffic noise frequency)
-MAX_SINGLE_BARRIER_DB = 20.0  # physical limit for single thin barrier
-MAX_TOTAL_BARRIER_DB = 25.0  # practical limit for multiple barriers
+# Insertion-loss limits. The old 20/25 dB caps with a 30 m corridor saturated at
+# ~25 dB almost everywhere (2-3 footprints anywhere in a wide corridor maxed it),
+# which crushed every source beyond ~100 m to ambient and flattened city vs
+# country. Real single-row building/facade shielding is ~5-15 dB; multiple rows
+# add little beyond that. Tightened to realistic values + a narrow corridor so
+# only footprints actually on the source→receiver line screen the source.
+MAX_SINGLE_BARRIER_DB = 15.0  # realistic single-row facade/barrier insertion loss
+MAX_TOTAL_BARRIER_DB = 15.0   # building rows rarely shield more than ~15 dB
+CORRIDOR_HALF_WIDTH_M = 12.0  # only footprints near the direct line-of-sight count
 
 
 def buildings_in_radius(db, lat: float, lng: float,
@@ -100,7 +107,7 @@ def _barrier_np(heights, blng, blat,
     along = bx * nx + by * ny
     perp = np.abs(-bx * ny + by * nx)
 
-    mask = (along > 5) & (along < source_distance_m - 5) & (perp < 30)
+    mask = (along > 5) & (along < source_distance_m - 5) & (perp < CORRIDOR_HALF_WIDTH_M)
     if not np.any(mask):
         return 0.0
 

@@ -35,6 +35,15 @@ _ML_CORRECTION_ENABLED = os.environ.get("NOISE_ML_CORRECTION", "0") == "1"
 # to physics on any failure or when DEM/landcover coverage is missing.
 _TRANSFER_ENABLED = os.environ.get("NOISE_TRANSFER", "0") == "1"
 
+# Quiet-end physics anchor: the per-state affine is fit on urban facade samples
+# (~46-78 dB Lden) and extrapolates badly below that support, lifting genuinely
+# quiet low-traffic areas by ~10 dB. Where the motor-road network is sparse AND
+# transfer reads louder than physics, blend toward physics. road_count gates out
+# dense inner-city false-quiet (occlusion-suppressed but road-dense -> no trigger).
+_QUIET_ROAD_LO = 150   # motor-road count below which the affine is out of urban support
+_QUIET_W_MAX = 0.7     # max physics weight at zero road density
+_NON_MOTOR = ("footway", "path", "steps", "cycleway", "pedestrian", "track")
+
 
 class _MLDisabled(Exception):
     """Internal sentinel to skip the ML block without logging a warning."""
@@ -534,6 +543,15 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
             t_lden, t_raw, raster_ok = transfer_lden(db, lat, lng, state)
             if not raster_ok:
                 raise ValueError("raster miss -> physics")
+            # Quiet-end physics anchor for sparse, low-density road networks where
+            # the per-state affine extrapolates out of its urban support (see the
+            # _QUIET_* constants). Applied to the road-only Lden before aircraft is
+            # re-mixed. EU truth shows the RF itself over-predicts the quiet end by
+            # only ~3.6 dB, so most of the excess is affine extrapolation.
+            n_motor = sum(1 for r in roads if r[0] not in _NON_MOTOR)
+            if n_motor < _QUIET_ROAD_LO and t_lden > physics_lden:
+                w = _QUIET_W_MAX * (_QUIET_ROAD_LO - n_motor) / _QUIET_ROAD_LO
+                t_lden = (1.0 - w) * t_lden + w * physics_lden
             if aircraft_db > 0:
                 t_lden = _energy_sum(t_lden, aircraft_db)
             lden = t_lden

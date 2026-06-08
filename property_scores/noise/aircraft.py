@@ -5,6 +5,7 @@ Three data layers, queried by state:
 1. VIC — VicPlan ArcGIS (MAEO/AEO overlays, Melbourne + regional airports)
 2. NSW — ePlanning SEPP layer 280 (Western Sydney Airport)
 3. QLD — Brisbane Open Data API (Brisbane + Archerfield airports)
+        + Gold Coast City Plan v13 FeatureServer layer 94 (Gold Coast / OOL)
 4. WA  — SLIP MapServer layer 77 (Perth Airport SPP 5.1)
 5. ALL — Defence ANEF GeoJSON (14 military airfields nationally, via DuckDB)
 
@@ -228,6 +229,54 @@ def _query_qld(lat: float, lng: float) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
+# QLD — Gold Coast City Plan v13 (Gold Coast / OOL airport)
+# ---------------------------------------------------------------------------
+# Layer 94 = Special Overlay "Sensitive Use" — Airport Noise Exposure Area.
+# Single polygon: Gold Coast Airport ANEF 25 contour (trimmed to GC boundary).
+# Geometry SR is EPSG:28356; we pass inSR=4326 and let the server reproject.
+# ANEF value lives in BUFFER_DISTANCE free text ("ANEF 25 value countour ...").
+
+_QLD_GC_URL = (
+    "https://services-ap1.arcgis.com/lnVW0dLI3fvST2hd/arcgis/rest/services"
+    "/City_Plan_Version_13_Open_Data/FeatureServer/94"
+)
+
+
+def _query_gold_coast(lat: float, lng: float) -> dict | None:
+    try:
+        resp = _session.get(f"{_QLD_GC_URL}/query", params={
+            "geometry": f"{lng},{lat}",
+            "geometryType": "esriGeometryPoint",
+            "inSR": "4326",
+            "spatialRel": "esriSpatialRelIntersects",
+            "outFields": "SENSITIVE_USE_TYPE,BUFFER_SOURCE,BUFFER_DISTANCE",
+            "returnGeometry": "false",
+            "f": "json",
+        }, timeout=_TIMEOUT)
+        if not resp.ok:
+            return None
+        features = resp.json().get("features", [])
+        if not features:
+            return None
+        attrs = features[0]["attributes"]
+        # Only treat as ANEF if it is the airport noise overlay
+        sut = attrs.get("SENSITIVE_USE_TYPE", "") or ""
+        if "noise" not in sut.lower() and "anef" not in (attrs.get("BUFFER_DISTANCE", "") or "").lower():
+            return None
+        import re
+        match = re.search(r"ANEF\s*(\d+)", attrs.get("BUFFER_DISTANCE", "") or "", re.I)
+        anef_min = int(match.group(1)) if match else 25
+        return {
+            "anef_min": anef_min,
+            "zone_code": f"ANEF {anef_min}+",
+            "airfield": attrs.get("BUFFER_SOURCE") or "Gold Coast Airport",
+            "source": "qld_gccc",
+        }
+    except (requests.RequestException, ValueError, KeyError):
+        return None
+
+
+# ---------------------------------------------------------------------------
 # WA — SLIP Perth Airport
 # ---------------------------------------------------------------------------
 
@@ -319,6 +368,72 @@ def _query_defence(lat: float, lng: float) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
+# NSW — Sydney Kingsford Smith (SYD) ANEF (digitised from 2033 Master Plan)
+# ---------------------------------------------------------------------------
+# The NSW ePlanning SEPP layer (_query_nsw) only covers Western Sydney Airport.
+# SYD (Kingsford Smith) is the busiest airport in the country and its ANEF is not
+# published as a queryable web service, so we ship a digitised GeoJSON traced from
+# the Airservices-endorsed 2033 ANEF chart (Sydney Airport Master Plan 2013/2033).
+# Bands 20/25/30/35/40, nested polygons (high ANEF inside low ANEF).
+
+# Gate: only run the (cheap) point-in-polygon test inside the Sydney basin, so we
+# never touch this layer for the rest of NSW.
+_SYD_BBOX = (-34.1, -33.8, 151.0, 151.3)  # (lat_min, lat_max, lng_min, lng_max)
+
+_syd_loaded = False
+_syd_features: list = []
+
+
+def _load_syd():
+    global _syd_loaded, _syd_features
+    if _syd_loaded:
+        return
+    _syd_loaded = True
+    geojson_path = data_path("syd_anef.geojson")
+    if not geojson_path.exists():
+        return
+    try:
+        with open(geojson_path) as f:
+            data = json.load(f)
+        _syd_features = data.get("features", [])
+    except Exception:
+        pass
+
+
+def _query_syd(lat: float, lng: float) -> dict | None:
+    lat_min, lat_max, lng_min, lng_max = _SYD_BBOX
+    if not (lat_min <= lat <= lat_max and lng_min <= lng <= lng_max):
+        return None
+
+    _load_syd()
+    if not _syd_features:
+        return None
+
+    best_anef = 0
+    best_contour = ""
+    for feat in _syd_features:
+        geom = feat.get("geometry", {})
+        coords = geom.get("coordinates", [])
+        if not coords:
+            continue
+        if _point_in_polygon(lat, lng, coords):
+            props = feat.get("properties", {})
+            anef = props.get("anef_min", 20)
+            if anef > best_anef:
+                best_anef = anef
+                best_contour = props.get("contour", str(anef))
+
+    if best_anef == 0:
+        return None
+    return {
+        "anef_min": best_anef,
+        "zone_code": f"ANEF {best_contour}",
+        "airfield": "Sydney Kingsford Smith",
+        "source": "syd_masterplan_2033",
+    }
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -339,17 +454,30 @@ def _aircraft_cached(lat: float, lng: float) -> dict:
         if hit:
             results.append(hit)
     elif state == "NSW":
-        hit = _query_nsw(lat, lng)
+        hit = _query_nsw(lat, lng)  # Western Sydney Airport (SEPP layer)
         if hit:
             results.append(hit)
+        syd_hit = _query_syd(lat, lng)  # Sydney Kingsford Smith (digitised ANEF)
+        if syd_hit:
+            results.append(syd_hit)
     elif state == "QLD":
-        hit = _query_qld(lat, lng)
+        hit = _query_qld(lat, lng)  # Brisbane / Archerfield
         if hit:
             results.append(hit)
     elif state == "WA":
         hit = _query_wa(lat, lng)
         if hit:
             results.append(hit)
+
+    # Gold Coast / OOL airport: the ANEF 25 contour straddles the QLD/NSW
+    # border (the runway itself sits on the state line), and detect_state()'s
+    # bbox classifies the airport vicinity as NSW. Query for both QLD and NSW
+    # so the overlay actually fires near the airport. The contour is tiny and
+    # trimmed to the GC boundary, so this is a no-op everywhere else.
+    if state in ("QLD", "NSW"):
+        gc_hit = _query_gold_coast(lat, lng)
+        if gc_hit:
+            results.append(gc_hit)
 
     # Defence (all states)
     defence = _query_defence(lat, lng)

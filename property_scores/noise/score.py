@@ -12,13 +12,33 @@ Propagation: CRTN L10 + duty-cycle correction + urban excess attenuation.
 Score 0-100 where 100 = quietest.
 """
 
+import logging
 import math
+import os
 
 from property_scores.common.overture import get_db, roads_near, rail_near, aadt_near, nfdh_near, gtfs_rail_near
 from property_scores.common.au_state import detect_state
 from property_scores.noise.buildings import buildings_in_radius, barrier_attenuation, buildings_to_arrays
 from property_scores.noise.aircraft import aircraft_noise_penalty
 from property_scores.noise.terrain import terrain_attenuation
+
+logger = logging.getLogger(__name__)
+
+# ML residual correction is opt-in (see noise_score). The shipped model was
+# trained on the pre-fix physics and regresses/inverts against the corrected
+# physics, so it stays off until retrained.
+_ML_CORRECTION_ENABLED = os.environ.get("NOISE_ML_CORRECTION", "0") == "1"
+
+# EU->AU transfer RF + per-state affine calibration is opt-in. When enabled it
+# replaces the physics Lden with the transfer prediction (aircraft re-mixed in,
+# since the RF is road/geometry only) and skips the ML residual block. Falls back
+# to physics on any failure or when DEM/landcover coverage is missing.
+_TRANSFER_ENABLED = os.environ.get("NOISE_TRANSFER", "0") == "1"
+
+
+class _MLDisabled(Exception):
+    """Internal sentinel to skip the ML block without logging a warning."""
+
 
 # --- Calibrated AADT mappings (from VicRoads 2019 ground truth) ---
 # VicRoads monitors arterials/highways, so these are MEDIAN values for
@@ -281,14 +301,22 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     # Collect all sources with bearing for facade analysis: (db, bearing, is_rail)
     _all_directional_sources: list[tuple[float, float, bool]] = []
 
-    # --- Measured AADT: VicRoads (VIC) + NFDH (national) ---
+    # --- Measured AADT: per-state aadt_*.parquet ---
     aadt_segments_raw = aadt_near(db, lat, lng, radius_m)
-    # Dedup directional counts: same road + 10m distance bucket → keep max AADT
+    # Collapse to ONE source per road, keeping the NEAREST point. A road must
+    # contribute once (from its closest approach), not once per sample point —
+    # otherwise dense point datasets (e.g. QLD has a point every ~10 m along the
+    # same road) get summed as many independent sources and inflate the level by
+    # 10-20 dB. Roads without a name fall back to a coarse location bucket.
     _seen: dict[tuple, tuple] = {}
     for row in aadt_segments_raw:
-        aadt_val, _, road_name, dist_m, _, _ = row
-        key = (road_name, round(dist_m, -1))
-        if key not in _seen or aadt_val > _seen[key][0]:
+        aadt_val, _, road_name, dist_m, near_lng, near_lat = row
+        if road_name:
+            key = ("name", road_name)
+        else:
+            key = ("loc", round(near_lng, 3), round(near_lat, 3))
+        cur = _seen.get(key)
+        if cur is None or dist_m < cur[3]:  # keep nearest approach of this road
             _seen[key] = row
     aadt_segments = list(_seen.values())
 
@@ -492,10 +520,47 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
 
     lden = _lden(leq_day_val, leq_eve_val, leq_night_val)
 
+    # --- EU->AU transfer RF + per-state affine calibration (opt-in) ---
+    # Replaces the physics Lden with the geometry-trained transfer prediction.
+    # The RF is road/geometry only (no aircraft), so any aircraft penalty is
+    # re-mixed on top. Falls back to physics if the model is unavailable, the
+    # point is outside DEM/landcover coverage, or anything raises.
+    physics_lden = lden
+    lden_source = "physics"
+    transfer_raw = None
+    if _TRANSFER_ENABLED:
+        try:
+            from property_scores.noise.transfer import transfer_lden
+            t_lden, t_raw, raster_ok = transfer_lden(db, lat, lng, state)
+            if not raster_ok:
+                raise ValueError("raster miss -> physics")
+            if aircraft_db > 0:
+                t_lden = _energy_sum(t_lden, aircraft_db)
+            lden = t_lden
+            transfer_raw = round(t_raw, 1)
+            lden_source = "transfer"
+        except Exception:
+            logger.warning("transfer fallback to physics", exc_info=True)
+            lden = physics_lden  # explicit: keep physics value
+
     # --- ML residual correction ---
+    # Disabled by default. The XGBoost residual model (noise_ml_model_la50.pkl)
+    # was trained on the OLD physics outputs (no VicRoads AADT, 25 dB screening
+    # cap). Against the corrected physics its residual is miscalibrated: it
+    # regresses every location toward ~52-57 dB Lden, which flattens and even
+    # inverts the city-vs-country ordering (validated 2026-06-06: separation gap
+    # 30 -> ~0 with ML on). Production was already running raw physics (the live
+    # service returned lden == physics_lden), so this keeps current behaviour and
+    # blocks the broken correction from activating on restart. Re-enable with
+    # NOISE_ML_CORRECTION=1 only after retraining the model on the corrected
+    # physics + fresh field measurements.
     # Build feature dict from already-computed physics values for XGBoost
-    ml_lden = lden  # will be overwritten if ML model is available
+    ml_lden = lden  # raw physics Lden unless ML correction is enabled
     try:
+        # Transfer and ML are mutually exclusive: if the transfer RF already
+        # produced lden, skip the ML residual block entirely.
+        if lden_source == "transfer" or not _ML_CORRECTION_ENABLED:
+            raise _MLDisabled
         from property_scores.noise.ml_model import predict_correction
         import numpy as np
 
@@ -611,8 +676,10 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
         correction = predict_correction(ml_features)
         if correction is not None:
             ml_lden = lden + correction
-    except Exception:
+    except _MLDisabled:
         pass
+    except Exception:
+        logger.warning("ML correction failed, falling back to raw physics", exc_info=True)
 
     # Score: 40 dB → 100, 75 dB → 0 (based on ML-corrected Lden)
     score = max(0, min(100, round((75 - ml_lden) / 35 * 100)))
@@ -651,7 +718,8 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
         "estimated_db_high": round(ml_lden + ci_db, 1),
         "leq_db": round(leq_24h, 1),
         "lden_db": round(ml_lden, 1),
-        "physics_lden_db": round(lden, 1),
+        "physics_lden_db": round(physics_lden, 1),
+        "lden_source": lden_source,
         "leq_day_db": round(leq_day_val, 1),
         "leq_night_db": round(leq_night_val, 1),
         "label": label,
@@ -662,6 +730,9 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
         "roads_with_speed_limit": roads_with_speed,
         "road_db": round(road_db, 1),
     }
+
+    if transfer_raw is not None:
+        result["transfer_raw"] = transfer_raw
 
     if rail_db > 0:
         result["rail_db"] = round(rail_db, 1)

@@ -16,22 +16,33 @@ if os.path.isdir(_proj):
     os.environ.setdefault("PROJ_LIB", _proj)
     os.environ.setdefault("PROJ_DATA", _proj)
 
+import threading  # noqa: E402
+
 import numpy as np  # noqa: E402
 from rasterio.warp import transform as _rio_transform  # noqa: E402
 
-_OPEN = {}
+# Per-thread open-handle cache. rasterio/GDAL DatasetReader objects are NOT
+# thread-safe for concurrent read()/sample()/index(); a shared handle read by
+# many threads (FastAPI threadpool + per-request ThreadPoolExecutor) corrupts
+# GDAL band-cache/cursor state. Each thread keeps its own handle dict, so reads
+# never race and the check-then-open is confined to a single thread (no leak).
+_LOCAL = threading.local()
 
 
 def _src(path):
-    if path not in _OPEN:
+    cache = getattr(_LOCAL, "open", None)
+    if cache is None:
+        cache = {}
+        _LOCAL.open = cache
+    if path not in cache:
         if not (path.startswith("/vsi") or os.path.exists(path)):
-            _OPEN[path] = None
+            cache[path] = None
         else:
             try:
-                _OPEN[path] = rasterio.open(path)
+                cache[path] = rasterio.open(path)
             except Exception:
-                _OPEN[path] = None
-    return _OPEN[path]
+                cache[path] = None
+    return cache[path]
 
 
 def _to_raster_xy(src, lat, lng):

@@ -180,3 +180,19 @@ def transfer_lden(db, lat: float, lng: float, state: str | None) -> tuple[float,
     cal = (_CALIB["states"].get(state) if state else None) or _CALIB["global_affine"]
     lden = cal["slope"] * raw + cal["intercept"]
     return max(lden, MIN_LDEN), raw, raster_ok
+
+
+def state_low_confidence(state: str | None) -> bool:
+    """True when the per-state calibration is flagged low-confidence (weak or no
+    SoundPLAN sample: NSW/NT/WA/QLD under the unified constrained-slope scheme).
+    Reads only the calibration JSON (no RF load), so it is safe on the physics
+    fallback path too."""
+    if not state:
+        return False
+    cal = _CALIB
+    if cal is None:
+        try:
+            cal = json.loads(CALIB_PATH.read_text())
+        except Exception:
+            return False
+    return bool(cal.get("states", {}).get(state, {}).get("low_confidence", False))

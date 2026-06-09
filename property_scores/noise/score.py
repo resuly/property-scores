@@ -40,9 +40,38 @@ _TRANSFER_ENABLED = os.environ.get("NOISE_TRANSFER", "0") == "1"
 # quiet low-traffic areas by ~10 dB. Where the motor-road network is sparse AND
 # transfer reads louder than physics, blend toward physics. road_count gates out
 # dense inner-city false-quiet (occlusion-suppressed but road-dense -> no trigger).
-_QUIET_ROAD_LO = 150   # motor-road count below which the affine is out of urban support
-_QUIET_W_MAX = 0.7     # max physics weight at zero road density
+# Quiet-end physics anchor. The per-state affine is fit on urban facade samples
+# (~46-78 dB) and over-predicts below that support. The correction weights physics
+# in by how far the RF's OWN raw (EU-scale, pre-affine) sits into its quiet range
+# — a smooth, geometry-averaged signal, so neighbouring overlay cells transition
+# smoothly instead of flipping on an integer road count. road_count is only a
+# binary veto, excluding road-dense occlusion-suppressed false-quiet (which must
+# keep the transfer lift, e.g. Southbank). City raw ~60-66, rural raw ~47-49.
+_QUIET_RAW_FLOOR = 58.0    # RF raw below which it is in its quiet, extrapolation-prone range
+_QUIET_RAW_RANGE = 14.0    # ramp width from floor to full weight
+_QUIET_W_MAX = 0.7         # max physics weight (deepest into the quiet range)
+_QUIET_VETO_ROAD = 150     # road-dense => occlusion false-quiet, veto the correction
 _NON_MOTOR = ("footway", "path", "steps", "cycleway", "pedestrian", "track")
+
+# Human-friendly labels for dominant_source so the frontend never shows a bare
+# Overture class ("tertiary") or a leaked numeric AADT station id ("05610").
+_ROAD_CLASS_LABEL = {
+    "motorway": "motorway", "trunk": "highway", "primary": "main road",
+    "secondary": "main road", "tertiary": "local road",
+    "residential": "residential street", "living_street": "residential street",
+    "service": "minor road", "unclassified": "minor road", "track": "minor road",
+    "pedestrian": "pedestrian way",
+}
+_RAIL_TYPE_LABEL = {"train": "railway", "tram": "tram", "vline": "regional railway", "rail": "railway"}
+
+
+def _road_label(info: dict) -> str:
+    """Real street name if present, else a readable class label. Suppresses
+    numeric station ids that leak from some state AADT parquets into road_name."""
+    name = info.get("road_name")
+    if name and not str(name).strip().isdigit():
+        return str(name)
+    return _ROAD_CLASS_LABEL.get(info.get("class"), "road")
 
 
 class _MLDisabled(Exception):
@@ -268,7 +297,7 @@ def _facade_lden(sources: list[tuple[float, float]], aircraft_db: float) -> dict
             aircraft_leq), AMBIENT_DB)
         leq_n = max(_energy_sum(
             road_leq + _NIGHT_ADJ if road_leq > 0 else 0,
-            0, aircraft_leq), AMBIENT_DB)
+            max(rail_leq - 10, 0) if rail_leq > 0 else 0, aircraft_leq), AMBIENT_DB)
 
         sector_ldens.append(round(_lden(leq_d, leq_e, leq_n), 1))
 
@@ -422,12 +451,36 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
 
     # --- Rail/tram (PTV GTFS with real frequencies) ---
     gtfs_routes = gtfs_rail_near(db, lat, lng, radius_m)
+    gtfs_found = len(gtfs_routes) > 0
+    # Aggregate GTFS fragments by physical route before classifying/summing.
+    # GTFS splits one line into many sub-shapes (express, short-workings); each
+    # carries only a fraction of the true frequency, so a per-fragment peak_svc
+    # would (a) mis-classify a busy line as low-frequency 'vline' off one quiet
+    # fragment and (b) double-count the same line when rail sources are energy-
+    # summed. Collapse to one entry per (route_name, route_type): nearest fragment
+    # for distance/geometry, max frequency across fragments for classification.
+    _agg: dict = {}
+    for route_type, route_name, dist_m, peak_svc, offpeak_svc, src_lng, src_lat in gtfs_routes:
+        key = (route_name, route_type)
+        cur = _agg.get(key)
+        if cur is None:
+            _agg[key] = {"route_type": route_type, "route_name": route_name,
+                         "dist_m": dist_m, "src_lng": src_lng, "src_lat": src_lat,
+                         "peak": peak_svc, "offpeak": offpeak_svc}
+        else:
+            if dist_m < cur["dist_m"]:
+                cur["dist_m"], cur["src_lng"], cur["src_lat"] = dist_m, src_lng, src_lat
+            cur["peak"] = max(cur["peak"], peak_svc)
+            cur["offpeak"] = max(cur["offpeak"], offpeak_svc)
+
     rail_levels: list[tuple[float, dict]] = []
     nearest_tram_m = None
     nearest_train_m = None
-    gtfs_found = len(gtfs_routes) > 0
 
-    for route_type, route_name, dist_m, peak_svc, offpeak_svc, src_lng, src_lat in gtfs_routes:
+    for r in _agg.values():
+        route_type, route_name, dist_m = r["route_type"], r["route_name"], r["dist_m"]
+        peak_svc, offpeak_svc = r["peak"], r["offpeak"]
+        src_lng, src_lat = r["src_lng"], r["src_lat"]
         if route_type == 0:
             rail_type = "tram"
             if nearest_tram_m is None or dist_m < nearest_tram_m:
@@ -510,6 +563,12 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     road_leq = (road_db - L10_TO_LEQ_DB) if road_db > 0 else 0.0
     rail_leq = rail_db
     aircraft_leq = aircraft_db
+    # Night rail level by type: train/vline carry overnight freight (-10 dB);
+    # trams largely stop overnight (-20 dB), so a tram-only facade isn't
+    # over-credited at night. Built per source from the selected rail levels.
+    _rn_e = sum(10 ** ((_l - (20 if _i.get("type") == "tram" else 10)) / 10)
+                for _l, _i in top_rails)
+    rail_night_leq = 10 * math.log10(_rn_e) if _rn_e > 0 else 0.0
 
     leq_24h = max(_energy_sum(road_leq, rail_leq, aircraft_leq), AMBIENT_DB)
 
@@ -522,9 +581,11 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
         road_leq + _EVE_ADJ if road_leq > 0 else 0,
         max(rail_leq - 5, 0) if rail_leq > 0 else 0,
         aircraft_leq), AMBIENT_DB)
+    # Rail night uses rail_night_leq (per-type: train/vline freight-active,
+    # trams mostly stop); Lden then applies its +10 dB night penalty.
     leq_night_val = max(_energy_sum(
         road_leq + _NIGHT_ADJ if road_leq > 0 else 0,
-        0,  # no passenger rail at night
+        rail_night_leq,
         aircraft_leq), AMBIENT_DB)
 
     lden = _lden(leq_day_val, leq_eve_val, leq_night_val)
@@ -537,25 +598,56 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     physics_lden = lden
     lden_source = "physics"
     transfer_raw = None
+    _quiet_w = 0.0  # >0 when the quiet-end out-of-support correction is active
     if _TRANSFER_ENABLED:
         try:
             from property_scores.noise.transfer import transfer_lden
-            t_lden, t_raw, raster_ok = transfer_lden(db, lat, lng, state)
+            # The RF predicts road-only Lden. Replace ONLY the road contribution and
+            # keep rail/tram + aircraft on their exact physics time-of-day mix, so a
+            # point near a railway/tram (or under a flight path) is not under-counted.
+            t_road_lden, t_raw, raster_ok = transfer_lden(db, lat, lng, state)
             if not raster_ok:
                 raise ValueError("raster miss -> physics")
-            # Quiet-end physics anchor for sparse, low-density road networks where
-            # the per-state affine extrapolates out of its urban support (see the
-            # _QUIET_* constants). Applied to the road-only Lden before aircraft is
-            # re-mixed. EU truth shows the RF itself over-predicts the quiet end by
-            # only ~3.6 dB, so most of the excess is affine extrapolation.
+            # Road-only physics Lden (blend anchor + transfer delta basis).
+            rd_only_lden = _lden(
+                road_leq + _DAY_ADJ, road_leq + _EVE_ADJ, road_leq + _NIGHT_ADJ,
+            ) if road_leq > 0 else 0.0
+            # Quiet-end physics anchor (smooth, out-of-support correction). Weight
+            # physics in by how far the RF's own raw sits into its quiet range
+            # (_QUIET_RAW_FLOOR/RANGE) — a continuous geometry-averaged signal, so
+            # adjacent overlay cells transition smoothly. road_count is only a binary
+            # veto excluding road-dense occlusion-suppressed false-quiet. Compared
+            # road-vs-road so rail/aircraft are untouched. quiet_w>0 marks an
+            # out-of-support extrapolation => low confidence (surfaced below).
             n_motor = sum(1 for r in roads if r[0] not in _NON_MOTOR)
-            if n_motor < _QUIET_ROAD_LO and t_lden > physics_lden:
-                w = _QUIET_W_MAX * (_QUIET_ROAD_LO - n_motor) / _QUIET_ROAD_LO
-                t_lden = (1.0 - w) * t_lden + w * physics_lden
-            if aircraft_db > 0:
-                t_lden = _energy_sum(t_lden, aircraft_db)
-            lden = t_lden
+            quiet_w = 0.0
+            if n_motor < _QUIET_VETO_ROAD and t_road_lden > rd_only_lden:
+                below = _QUIET_RAW_FLOOR - t_raw
+                quiet_w = _QUIET_W_MAX * max(0.0, min(1.0, below / _QUIET_RAW_RANGE))
+                if quiet_w > 0:
+                    t_road_lden = (1.0 - quiet_w) * t_road_lden + quiet_w * rd_only_lden
+            if road_leq > 0:
+                # Shift the road time-of-day Leqs by the transfer adjustment, then
+                # recombine with the exact rail + aircraft mix (same period logic as
+                # physics above), so rail/tram and aircraft are fully preserved.
+                road_leq_t = road_leq + (t_road_lden - rd_only_lden)
+                leq_day_t = max(_energy_sum(
+                    road_leq_t + _DAY_ADJ, rail_leq, aircraft_leq), AMBIENT_DB)
+                leq_eve_t = max(_energy_sum(
+                    road_leq_t + _EVE_ADJ,
+                    max(rail_leq - 5, 0) if rail_leq > 0 else 0,
+                    aircraft_leq), AMBIENT_DB)
+                leq_night_t = max(_energy_sum(
+                    road_leq_t + _NIGHT_ADJ,
+                    rail_night_leq,
+                    aircraft_leq), AMBIENT_DB)
+                lden = _lden(leq_day_t, leq_eve_t, leq_night_t)
+            else:
+                # No road contribution: rail + aircraft (+ ambient) only; the RF's
+                # road prediction is moot, so keep the physics rail/aircraft mix.
+                lden = physics_lden
             transfer_raw = round(t_raw, 1)
+            _quiet_w = quiet_w
             lden_source = "transfer"
         except Exception:
             logger.warning("transfer fallback to physics", exc_info=True)
@@ -725,6 +817,27 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     if len(aadt_segments) == 0 and len(nfdh_stations) == 0 and ml_lden == lden:
         ci_db += 3.0
 
+    # Low-confidence flags. NSW's per-state affine compresses dynamic range
+    # (worst in-sample fit); the quiet-end correction means the model is
+    # extrapolating below its calibrated urban support. Either widens the
+    # interval and surfaces a note so the estimate is not presented as precise.
+    low_confidence = False
+    confidence_note = None
+    try:
+        from property_scores.noise.transfer import state_low_confidence as _slc
+    except Exception:
+        _slc = lambda s: False
+    if lden_source == "transfer" and _slc(state):
+        low_confidence = True
+        confidence_note = (f"Lower model confidence in {state} (limited local "
+                           "calibration data). Verify on site before relying on this estimate.")
+        ci_db += 2.0
+    if _quiet_w > 0:
+        low_confidence = True
+        confidence_note = ("Quiet, low-density area below the model's calibrated "
+                           "range; this estimate is extrapolated. Verify on site.")
+        ci_db += round(_quiet_w * 4.0, 1)
+
     motor_roads = [r for r in roads if r[0] not in ("footway", "path", "steps", "cycleway", "pedestrian", "track")]
 
     result = {
@@ -738,6 +851,8 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
         "lden_db": round(ml_lden, 1),
         "physics_lden_db": round(physics_lden, 1),
         "lden_source": lden_source,
+        "low_confidence": low_confidence,
+        "confidence_note": confidence_note,
         "leq_day_db": round(leq_day_val, 1),
         "leq_night_db": round(leq_night_val, 1),
         "label": label,
@@ -765,7 +880,16 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
         result["dominant_road"] = top_roads[0][1]
     if top_rails:
         result["dominant_rail"] = top_rails[0][1]
-    result["dominant_source"] = top_roads[0][1].get("road_name") or top_roads[0][1].get("class") if top_roads else None
+    # dominant_source = the loudest of road / rail / aircraft, not always the road,
+    # rendered as a human-friendly label (never a bare class or numeric station id).
+    _dom = []
+    if top_roads and road_db > 0:
+        _dom.append((road_db, _road_label(top_roads[0][1])))
+    if top_rails and rail_db > 0:
+        _dom.append((rail_db, _RAIL_TYPE_LABEL.get(top_rails[0][1].get("type"), "railway")))
+    if aircraft_db > 0:
+        _dom.append((aircraft_db, "aircraft"))
+    result["dominant_source"] = max(_dom, key=lambda x: x[0])[1] if _dom else None
     if building_screening_total > 0:
         result["max_building_screening_db"] = round(building_screening_total, 1)
     if terrain_screening > 0:

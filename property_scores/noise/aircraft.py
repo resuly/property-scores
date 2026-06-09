@@ -206,10 +206,17 @@ def _query_qld(lat: float, lng: float) -> dict | None:
     best_desc = ""
     for feat in features:
         geom = feat.get("geometry", {})
-        if geom.get("type") != "Polygon":
-            continue
+        gtype = geom.get("type")
         coords = geom.get("coordinates", [])
-        if _point_in_polygon(lat, lng, coords):
+        # Brisbane Open Data ANEF is 100% MultiPolygon — handle both so the
+        # airport noise actually fires (was silently skipped before).
+        if gtype == "Polygon":
+            polys = [coords]
+        elif gtype == "MultiPolygon":
+            polys = coords  # [[[ring],[hole]...], ...]
+        else:
+            continue
+        if any(_point_in_polygon(lat, lng, poly) for poly in polys):
             props = feat.get("properties", {})
             desc = props.get("ovl2_desc", "")
             import re

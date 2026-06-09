@@ -24,18 +24,31 @@ AU_RAIL_SHAPES_FILE = "au_rail_shapes.parquet"
 AU_RAIL_FREQ_FILE = "au_rail_frequency.parquet"
 
 _install_lock = threading.Lock()
-_installed = False
+_base_db = None
 
 
 def get_db() -> duckdb.DuckDBPyConnection:
-    global _installed
-    db = duckdb.connect()
-    with _install_lock:
-        if not _installed:
-            db.install_extension("spatial")
-            _installed = True
-    db.load_extension("spatial")
-    return db
+    """Return a per-call cursor off one shared, spatial-loaded base connection.
+
+    The base connection is created once (install + load_extension('spatial'),
+    ~47ms) and reused. Each call gets a cheap independent ``.cursor()`` that
+    shares the loaded extension and parquet metadata. A single DuckDB connection
+    is not safe to drive concurrently from multiple threads, but separate cursors
+    off one database instance are — the supported multi-thread pattern — so the
+    FastAPI threadpool workers share one warm connection instead of paying the
+    connect + extension reload on every score call. All runtime queries are
+    read-only (read_parquet, no temp tables / SET state), so cursors cannot
+    collide on shared catalog state.
+    """
+    global _base_db
+    if _base_db is None:
+        with _install_lock:
+            if _base_db is None:
+                db = duckdb.connect()
+                db.install_extension("spatial")
+                db.load_extension("spatial")
+                _base_db = db
+    return _base_db.cursor()
 
 
 def _local_or_fail(filename: str) -> str:
@@ -185,26 +198,43 @@ def gtfs_rail_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
             return []
 
     import math
-    m_per_deg = 111_320 * math.cos(math.radians(lat))
-    delta = radius_m / 111_000 * 1.5
+    cos_lat = math.cos(math.radians(lat))
+    M_PER_DEG = 111_320.0
+    # Measure distance to the rail LINE (interpolated between vertices), not to
+    # the nearest stored vertex. NSW rail shapes are decimated (median vertex
+    # spacing ~244m, gaps up to ~6km), so a property right beside a line can sit
+    # far from any vertex and be missed. Use a generous bbox so sparse-vertex
+    # shapes whose nearest vertex is outside the radius are still captured,
+    # rebuild each candidate shape's linestring (ordered by sequence), and take
+    # ST_Distance to it. Longitudes are scaled by cos(lat) so the planar metric
+    # is in metres on both axes.
+    buf_m = radius_m + 3000
+    dlat = buf_m / M_PER_DEG
+    dlng = buf_m / (M_PER_DEG * cos_lat)
+    qx = lng * cos_lat
 
     sql = f"""
-        WITH pts AS (
-            SELECT shape_id, route_type, lng AS pt_lng, lat AS pt_lat,
-                   SQRT(POW((lng - {lng}) * {m_per_deg}, 2) +
-                        POW((lat - {lat}) * 111320, 2)) AS dist_m
+        WITH cand AS (
+            SELECT DISTINCT shape_id
             FROM read_parquet('{shapes_path}')
-            WHERE lng BETWEEN {lng - delta} AND {lng + delta}
-              AND lat BETWEEN {lat - delta} AND {lat + delta}
+            WHERE lng BETWEEN {lng - dlng} AND {lng + dlng}
+              AND lat BETWEEN {lat - dlat} AND {lat + dlat}
+        ),
+        lines AS (
+            SELECT s.shape_id, ANY_VALUE(s.route_type) AS route_type,
+                   ST_MakeLine(LIST(ST_Point(s.lng * {cos_lat}, s.lat)
+                                    ORDER BY s.sequence)) AS geom
+            FROM read_parquet('{shapes_path}') s
+            JOIN cand c ON s.shape_id = c.shape_id
+            GROUP BY s.shape_id
+            HAVING COUNT(*) >= 2
         ),
         nearest AS (
             SELECT shape_id, route_type,
-                   MIN(dist_m) AS dist_m,
-                   ARG_MIN(pt_lng, dist_m) AS near_lng,
-                   ARG_MIN(pt_lat, dist_m) AS near_lat
-            FROM pts
-            GROUP BY shape_id, route_type
-            HAVING dist_m < {radius_m}
+                   ST_Distance(geom, ST_Point({qx}, {lat})) * {M_PER_DEG} AS dist_m,
+                   ST_X(ST_ClosestPoint(geom, ST_Point({qx}, {lat}))) / {cos_lat} AS near_lng,
+                   ST_Y(ST_ClosestPoint(geom, ST_Point({qx}, {lat}))) AS near_lat
+            FROM lines
         )
         SELECT n.route_type, f.route_name, n.dist_m,
                f.peak_services_per_hour, f.offpeak_services_per_hour,
@@ -212,6 +242,7 @@ def gtfs_rail_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
         FROM nearest n
         JOIN read_parquet('{freq_path}') f
           ON n.shape_id = f.shape_id
+        WHERE n.dist_m < {radius_m}
         ORDER BY n.dist_m
     """
     return db.sql(sql).fetchall()

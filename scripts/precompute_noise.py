@@ -12,7 +12,7 @@ import time
 import numpy as np
 import pandas as pd
 
-from property_scores.noise.score import noise_score, NOISE_MODEL_VERSION
+from property_scores.noise.score import cell_score, NOISE_MODEL_VERSION
 from property_scores.common.config import data_path
 
 REGIONS = {
@@ -43,13 +43,24 @@ def main():
     cfg = REGIONS[args.region]
     lats = np.arange(cfg["lat_min"], cfg["lat_max"], cfg["step"])
     lngs = np.arange(cfg["lng_min"], cfg["lng_max"], cfg["step"])
+    cell_m = cfg["step"] * 111_320  # grid step in metres → quincunx span
     total = len(lats) * len(lngs)
     print(f"Region: {args.region}")
-    print(f"Grid: {len(lats)} x {len(lngs)} = {total} points (step={cfg['step']})")
-    print(f"Estimated time: {total * 0.8 / 60:.0f} minutes")
+    print(f"Grid: {len(lats)} x {len(lngs)} = {total} points (step={cfg['step']}, cell~{cell_m:.0f}m)")
+    print(f"Estimated time: {total * 0.8 * 5 / 60:.0f} minutes (quincunx = 5x per cell)")
+
+    # Optional CPU throttle: cap DuckDB worker threads so a background precompute
+    # leaves cores free for interactive work (e.g. PRECOMPUTE_THREADS=8 on a
+    # 10-core box ≈ 80%). Pair with `nice -n 19`.
+    import os
+    _thr = os.environ.get("PRECOMPUTE_THREADS")
+    if _thr:
+        from property_scores.common.overture import get_db
+        get_db().execute(f"SET threads TO {int(_thr)}")
+        print(f"DuckDB threads capped at {_thr}")
 
     # Warm up
-    noise_score(lats[0], lngs[0], args.radius)
+    cell_score(lats[0], lngs[0], cell_m=cell_m)
 
     rows = []
     t0 = time.time()
@@ -59,7 +70,7 @@ def main():
     for lat in lats:
         for lng in lngs:
             try:
-                r = noise_score(float(lat), float(lng), args.radius)
+                r = cell_score(float(lat), float(lng), cell_m=cell_m)
                 rows.append({
                     "lat": round(float(lat), 6),
                     "lng": round(float(lng), 6),

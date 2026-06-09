@@ -29,7 +29,25 @@ logger = logging.getLogger(__name__)
 # cache.py refuses to serve a cache built by a different version — so a stale
 # precompute fails safe to live-compute instead of silently shadowing the live
 # model (the overlay choropleth reads cached `score`). Keep it human-dated.
-NOISE_MODEL_VERSION = "2026-06-09-loud-end"
+# AADT volume adjustment is opt-in. The transfer RF has road CLASS but no traffic
+# VOLUME, so it over-reads suburban arterials whose measured AADT sits below their
+# class implies (validated on 199 EIS measured points: residual vs log(actual/
+# class-expected AADT) r=-0.42). When on, we pull the transfer road Lden DOWN
+# (only) by K*log(measured_AADT / class_expected_AADT) where the road is quieter
+# than its class — targeted, protects the genuine-loud end, leaves well-calibrated
+# states untouched. K=4 chosen on the measured set (5-fold held-out MAE 7.93->7.43).
+_AADT_ADJUST_ENABLED = os.environ.get("NOISE_AADT_ADJUST", "0") == "1"
+_AADT_ADJUST_K = float(os.environ.get("NOISE_AADT_ADJUST_K", "4.0"))
+_AADT_ADJUST_MAX_DB = 12.0   # clamp the pull-down so a tiny class-expected can't explode
+_AADT_DOM_RADIUS_M = 150     # dominant source = max AADT within this radius
+
+# Bump on any scoring change. precompute_noise.py stamps this into every cached
+# grid row and cache.py refuses to serve a cache built by a different version — so
+# a stale precompute fails safe to live-compute instead of silently shadowing the
+# live model (the overlay choropleth reads cached `score`). The AADT adjustment
+# suffix only appears when the flag is ON, so enabling it invalidates the old cache
+# (forcing regen) while default-OFF keeps the existing prod cache valid.
+NOISE_MODEL_VERSION = "2026-06-09-quincunx" + ("-aadt" if _AADT_ADJUST_ENABLED else "")
 
 # ML residual correction is opt-in (see noise_score). The shipped model was
 # trained on the pre-fix physics and regresses/inverts against the corrected
@@ -59,6 +77,7 @@ _QUIET_RAW_RANGE = 14.0    # ramp width from floor to full weight
 _QUIET_W_MAX = 0.7         # max physics weight (deepest into the quiet range)
 _QUIET_VETO_ROAD = 150     # road-dense => occlusion false-quiet, veto the correction
 _NON_MOTOR = ("footway", "path", "steps", "cycleway", "pedestrian", "track")
+_MAJOR_CLASSES = ("motorway", "trunk", "primary", "secondary", "tertiary")
 
 # Human-friendly labels for dominant_source so the frontend never shows a bare
 # Overture class ("tertiary") or a leaked numeric AADT station id ("05610").
@@ -332,6 +351,101 @@ def _lden(leq_day: float, leq_eve: float, leq_night: float) -> float:
          + 4 * 10 ** ((leq_eve + 5) / 10)
          + 8 * 10 ** ((leq_night + 10) / 10)) / 24
     )
+
+
+def _lden_to_score(lden: float) -> int:
+    """Map an Lden (dB) to the 0-100 quiet score with the loud-end re-anchor.
+    Keeps the calibrated 40-70 dB mapping exactly (where the property mass sits)
+    but spreads the >70 dB tail so 75 vs 88 dB rank-order instead of all
+    collapsing to 0. Continuous at 70 dB (both branches = 14). Single source of
+    truth for the score curve — used by noise_score, physics_score, and the
+    quincunx cell aggregator."""
+    if lden <= 70:
+        return max(0, min(100, round((75 - lden) / 35 * 100)))
+    return max(0, min(14, round(14 * (88 - lden) / 18)))
+
+
+def _score_label(score: int) -> str:
+    """Quiet-score band label. Single source of truth so the overlay cell
+    aggregator and the live score never disagree (a cell must not show
+    score=31 with label='Quiet')."""
+    if score >= 80:
+        return "Very Quiet"
+    if score >= 60:
+        return "Quiet"
+    if score >= 40:
+        return "Moderate"
+    if score >= 20:
+        return "Loud"
+    return "Very Loud"
+
+
+def _aadt_adjustment(dom_aadt: float, exp_aadt: float,
+                     k: float | None = None, max_db: float | None = None) -> float:
+    """Pull-down (<=0) dB for the transfer road Lden when the dominant nearby
+    road's MEASURED AADT is below what its OSM class implies. The transfer RF
+    sees road class but no traffic volume, so it over-reads quiet suburban
+    arterials; this corrects only that. Returns 0 for roads at/above class
+    expectation (the RF is not over-reading those, e.g. genuine freeways), and is
+    clamped to [-max_db, 0] so a tiny class-expected AADT can't explode. Validated
+    on 199 EIS measured points (K=4, 5-fold held-out MAE 7.93->7.43)."""
+    k = _AADT_ADJUST_K if k is None else k
+    max_db = _AADT_ADJUST_MAX_DB if max_db is None else max_db
+    if dom_aadt <= 0:
+        return 0.0
+    lr = math.log(dom_aadt / max(exp_aadt, 1.0))
+    return max(-max_db, min(0.0, k * lr))
+
+
+def cell_score(lat: float, lng: float, cell_m: float = 220.0,
+               *, source: str | None = None) -> dict:
+    """Overlay-cell score via a quincunx (centre + 4 corners) energy-mean.
+
+    A 220 m choropleth cell coloured by a single centre point flips colour on
+    whether that one point landed on or off a road. Sampling 5 points spread
+    across the cell and energy-averaging their Lden makes the cell reflect its
+    whole area. This is 5x noise_score so it is for the PRECOMPUTE only
+    (scripts/precompute_noise.py); the live overlay path stays single-point
+    noise_score() because 5x ~543 ms/cell is too slow interactively.
+
+    Returns the centre point's full dict with `estimated_db`/`score` replaced by
+    the quincunx energy-mean, plus `cell_quincunx`/`cell_n`.
+    """
+    off = cell_m * 0.354  # cell_m/(2√2) per axis -> sample corners at cell_m/2 diagonal (interior, ~70% toward each corner)
+    dlat = off / 111_320.0
+    dlng = off / (111_320.0 * max(math.cos(math.radians(lat)), 1e-6))
+    offsets = [(0.0, 0.0), (dlat, dlng), (dlat, -dlng), (-dlat, dlng), (-dlat, -dlng)]
+    center = None
+    ldens = []
+    for i, (oa, ob) in enumerate(offsets):
+        r = noise_score(lat + oa, lng + ob, source=source)
+        if i == 0:
+            center = r
+        ld = r.get("lden_db")
+        if ld is None:
+            ld = r.get("estimated_db")
+        if ld is not None:
+            ldens.append(ld)
+    if center is None:
+        return {}
+    if not ldens:
+        return center
+    mean_lden = 10 * math.log10(sum(10 ** (l / 10) for l in ldens) / len(ldens))
+    out = dict(center)
+    out["estimated_db"] = round(mean_lden, 1)
+    out["lden_db"] = round(mean_lden, 1)
+    out["score"] = _lden_to_score(mean_lden)
+    # Re-derive every band/CI field from the quincunx mean so the cached cell is
+    # self-consistent. Without this the row keeps the CENTRE point's label/CI
+    # (e.g. score=31 'Loud' with label='Quiet'). dominant_source/road_db stay the
+    # centre point's — they describe the representative point, not the area mean.
+    out["label"] = _score_label(out["score"])
+    ci = center.get("confidence_range_db", 5.0)
+    out["estimated_db_low"] = round(max(mean_lden - ci, AMBIENT_DB), 1)
+    out["estimated_db_high"] = round(mean_lden + ci, 1)
+    out["cell_quincunx"] = True
+    out["cell_n"] = len(ldens)
+    return out
 
 
 def noise_score(lat: float, lng: float, radius_m: int = 500,
@@ -639,6 +753,20 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
                 quiet_w = _QUIET_W_MAX * max(0.0, min(1.0, below / _QUIET_RAW_RANGE))
                 if quiet_w > 0:
                     t_road_lden = (1.0 - quiet_w) * t_road_lden + quiet_w * rd_only_lden
+            # AADT volume adjustment (opt-in): pull the road Lden DOWN where the
+            # nearby road's MEASURED AADT is below what its OSM class implies (the
+            # RF only sees class, so it over-reads quiet suburban arterials). Only
+            # the road contribution is touched (rail/aircraft re-mixed below);
+            # pull-down only, so genuine-loud roads (high AADT) are never lifted.
+            if _AADT_ADJUST_ENABLED and aadt_segments and t_road_lden > 0:
+                dom_aadt = max((seg[0] for seg in aadt_segments
+                                if seg[3] <= _AADT_DOM_RADIUS_M), default=0)
+                majors = [r for r in roads if r[0] in _MAJOR_CLASSES]
+                if dom_aadt > 0 and majors:
+                    nearest_major = min(majors, key=lambda r: r[1])[0]
+                    adj = _aadt_adjustment(dom_aadt, _estimate_aadt(nearest_major, None))
+                    if adj < 0:
+                        t_road_lden = max(t_road_lden + adj, 0.0)
             if road_leq > 0:
                 # Shift the road time-of-day Leqs by the transfer adjustment, then
                 # recombine with the exact rail + aircraft mix (same period logic as
@@ -764,8 +892,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
             "physics_min_facade": round(max(lden - (max(sector_db) - min(active_sectors) if active_sectors else 0), AMBIENT_DB), 1),
             "physics_rail_db": round(rail_db, 1),
             "physics_road_db": round(road_db, 1),
-            "physics_score": (max(0, min(100, round((75 - lden) / 35 * 100))) if lden <= 70
-                              else max(0, min(14, round(14 * (88 - lden) / 18)))),
+            "physics_score": _lden_to_score(lden),
             "poi_noise_count": poi_noise_count,
             "poi_noise_min_dist": poi_noise_min_dist,
             "poi_total_count": poi_total_count,
@@ -805,25 +932,10 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     except Exception:
         logger.warning("ML correction failed, falling back to raw physics", exc_info=True)
 
-    # Score: 40 dB → 100, 75 dB → 0 (based on ML-corrected Lden)
-    # Score re-anchor: keep the calibrated 40-70 dB mapping exactly (where the
-    # property mass sits) but spread the loud tail so >75 dB no longer all collapse
-    # to 0 and 75 vs 88 dB can rank-order. Continuous at 70 dB (both branches = 14).
-    if ml_lden <= 70:
-        score = max(0, min(100, round((75 - ml_lden) / 35 * 100)))
-    else:
-        score = max(0, min(14, round(14 * (88 - ml_lden) / 18)))
+    # Score from the ML-corrected Lden (loud-end-re-anchored; see _lden_to_score).
+    score = _lden_to_score(ml_lden)
 
-    if score >= 80:
-        label = "Very Quiet"
-    elif score >= 60:
-        label = "Quiet"
-    elif score >= 40:
-        label = "Moderate"
-    elif score >= 20:
-        label = "Loud"
-    else:
-        label = "Very Loud"
+    label = _score_label(score)
 
     # Confidence interval — tighter with ML model
     if ml_lden != lden:

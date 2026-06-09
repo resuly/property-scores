@@ -97,3 +97,92 @@ def test_adaptive_select_all_close():
 
 def test_score_range():
     pass
+
+
+# --- loud-end score re-anchor (shared _lden_to_score helper) ---
+
+def test_lden_to_score_midrange_calibrated():
+    from property_scores.noise.score import _lden_to_score
+    assert _lden_to_score(40) == 100
+    assert _lden_to_score(65) == 29  # (75-65)/35*100, the calibrated band
+    assert _lden_to_score(70) == 14
+
+
+def test_lden_to_score_loud_tail_rank_orders():
+    from property_scores.noise.score import _lden_to_score
+    # >70 dB must spread so 75 vs 88 rank-order instead of all collapsing to 0
+    assert _lden_to_score(75) > _lden_to_score(80) > _lden_to_score(85)
+    assert _lden_to_score(88) == 0
+
+
+def test_lden_to_score_continuous_at_70():
+    from property_scores.noise.score import _lden_to_score
+    # both branches meet at 70 dB (no discontinuity)
+    assert _lden_to_score(70) == 14
+
+
+# --- AADT volume post-adjustment (transfer flattening fix) ---
+
+def test_aadt_adjustment_quiet_class_pulls_down():
+    from property_scores.noise.score import _aadt_adjustment
+    # road much quieter than its class implies (5k actual vs 30k class) -> pull DOWN
+    adj = _aadt_adjustment(dom_aadt=5_000, exp_aadt=30_000, k=4.0, max_db=12.0)
+    assert adj < 0
+
+
+def test_aadt_adjustment_busy_road_untouched():
+    from property_scores.noise.score import _aadt_adjustment
+    # road at or above class expectation (genuine arterial/freeway) -> no change
+    assert _aadt_adjustment(dom_aadt=40_000, exp_aadt=30_000, k=4.0, max_db=12.0) == 0.0
+    assert _aadt_adjustment(dom_aadt=30_000, exp_aadt=30_000, k=4.0, max_db=12.0) == 0.0
+
+
+def test_aadt_adjustment_clamped():
+    from property_scores.noise.score import _aadt_adjustment
+    # extreme misclass (tiny actual vs huge expected) is clamped to -max_db, never explodes
+    adj = _aadt_adjustment(dom_aadt=50, exp_aadt=50_000, k=4.0, max_db=12.0)
+    assert adj == -12.0
+
+
+def test_aadt_adjustment_no_data_is_noop():
+    from property_scores.noise.score import _aadt_adjustment
+    assert _aadt_adjustment(dom_aadt=0, exp_aadt=30_000) == 0.0
+
+
+def test_score_label_matches_bands():
+    from property_scores.noise.score import _score_label
+    assert _score_label(85) == "Very Quiet"
+    assert _score_label(70) == "Quiet"
+    assert _score_label(50) == "Moderate"
+    assert _score_label(31) == "Loud"      # the cell_score consistency case
+    assert _score_label(10) == "Very Loud"
+
+
+# --- defence ANEF MultiPolygon handling (Darwin slivers fix) ---
+
+def _square_ring(clat, clng, half):
+    return [[clng - half, clat - half], [clng + half, clat - half],
+            [clng + half, clat + half], [clng - half, clat + half],
+            [clng - half, clat - half]]
+
+
+def test_defence_query_handles_multipolygon():
+    """A point inside the SECOND sub-polygon of a MultiPolygon must be found —
+    proves the Darwin fix (old code only saw the first/sliver piece)."""
+    from property_scores.noise import aircraft
+    feat = {
+        "properties": {"anef_min": 30, "airfield": "Test Base"},
+        "geometry": {"type": "MultiPolygon", "coordinates": [
+            [_square_ring(-12.0, 130.0, 0.001)],   # tiny first piece (a sliver)
+            [_square_ring(-12.5, 130.5, 0.02)],    # real second piece
+        ]},
+    }
+    aircraft._defence_loaded = True
+    aircraft._defence_features = [feat]
+    try:
+        hit = aircraft._query_defence(-12.5, 130.5)   # inside 2nd piece
+        assert hit is not None and hit["anef_min"] == 30
+        assert aircraft._query_defence(-20.0, 140.0) is None  # outside both
+    finally:
+        aircraft._defence_loaded = False
+        aircraft._defence_features = []

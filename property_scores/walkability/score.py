@@ -213,27 +213,43 @@ def _decay(distance_m: float) -> float:
     return 1.0 - distance_m / MAX_WALK_DISTANCE_M
 
 
+def _elevations(coords: list[tuple[float, float]]) -> list | None:
+    """Elevation at each (lat,lng). Local DEM first (fast/offline), else Open-Meteo."""
+    # 1) local Copernicus DEM (covers AU population areas)
+    try:
+        from property_scores.common import terrain
+        if terrain.available():
+            local = [terrain.elevation(la, ln) for la, ln in coords]
+            if local[0] is not None and any(e is not None for e in local[1:]):
+                return local
+    except Exception:
+        pass
+    # 2) Open-Meteo fallback (outside DEM coverage)
+    import requests
+    try:
+        resp = requests.get(OPEN_METEO_ELEV, params={
+            "latitude": ",".join(f"{la:.6f}" for la, _ in coords),
+            "longitude": ",".join(f"{ln:.6f}" for _, ln in coords),
+        }, timeout=5)
+        if not resp.ok:
+            return None
+        elevs = resp.json().get("elevation", [])
+        return elevs if len(elevs) >= len(coords) else None
+    except Exception:
+        return None
+
+
 def _slope_penalty(lat: float, lng: float) -> float:
     """Estimate average walking slope from DEM. Returns 0-1 penalty multiplier.
 
     Samples elevation at 500m in 4 cardinal directions. Steep terrain
     makes walking harder — 10%+ grade roughly doubles effective distance.
     """
-    import requests
     offset = 0.0045  # ~500m
-    lats = [lat, lat + offset, lat - offset, lat, lat]
-    lngs = [lng, lng, lng, lng + offset, lng - offset]
-    try:
-        resp = requests.get(OPEN_METEO_ELEV, params={
-            "latitude": ",".join(f"{x:.6f}" for x in lats),
-            "longitude": ",".join(f"{x:.6f}" for x in lngs),
-        }, timeout=5)
-        if not resp.ok:
-            return 1.0
-        elevs = resp.json().get("elevation", [])
-        if len(elevs) < 5:
-            return 1.0
-    except Exception:
+    coords = [(lat, lng), (lat + offset, lng), (lat - offset, lng),
+              (lat, lng + offset), (lat, lng - offset)]
+    elevs = _elevations(coords)
+    if not elevs:
         return 1.0
 
     center = elevs[0]

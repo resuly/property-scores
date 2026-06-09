@@ -42,18 +42,23 @@ _TIMEOUT = 10
 # ---------------------------------------------------------------------------
 
 def _anef_to_penalty(anef_min: int) -> float:
+    # ANEF -> dB-over-ambient penalty. The old curve capped at 15 (aircraft_db =
+    # AMBIENT_DB 35 + 15 = 50 dB), below typical loud-road Leq, so aircraft could
+    # never be named dominant even in the severest zones beside a major airport.
+    # Lifted to track AS2021 aircraft Leq: ANEF40 ~74 dB, 35 ~70, 30 ~65, 25 ~60,
+    # 20 ~55 (aircraft_db = AMBIENT_DB + penalty).
     if anef_min >= 40:
-        return 15.0
+        return 39.0
     if anef_min >= 35:
-        return 12.0
+        return 35.0
     if anef_min >= 30:
-        return 10.0
+        return 30.0
     if anef_min >= 25:
-        return 7.0
+        return 25.0
     if anef_min >= 20:
-        return 5.0
+        return 20.0
     if anef_min >= 15:
-        return 3.0
+        return 17.0
     return 0.0
 
 

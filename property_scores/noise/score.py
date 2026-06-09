@@ -589,6 +589,12 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
         aircraft_leq), AMBIENT_DB)
 
     lden = _lden(leq_day_val, leq_eve_val, leq_night_val)
+    # Physics over-call guard: the CRTN energy-sum fallback can produce
+    # implausible Lden in dense multi-arterial cells (>84 dB); real free-field
+    # road Lden plateaus ~80-82. Cap so the saturated tail can't drive an absurd
+    # fallback estimate (clips only clear artefacts; the loud truth decile <=78
+    # is untouched). Mainly the NOISE_TRANSFER=0 / raster-miss path.
+    lden = min(lden, 82.0)
 
     # --- EU->AU transfer RF + per-state affine calibration (opt-in) ---
     # Replaces the physics Lden with the geometry-trained transfer prediction.
@@ -751,7 +757,8 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
             "physics_min_facade": round(max(lden - (max(sector_db) - min(active_sectors) if active_sectors else 0), AMBIENT_DB), 1),
             "physics_rail_db": round(rail_db, 1),
             "physics_road_db": round(road_db, 1),
-            "physics_score": max(0, min(100, round((75 - lden) / 35 * 100))),
+            "physics_score": (max(0, min(100, round((75 - lden) / 35 * 100))) if lden <= 70
+                              else max(0, min(14, round(14 * (88 - lden) / 18)))),
             "poi_noise_count": poi_noise_count,
             "poi_noise_min_dist": poi_noise_min_dist,
             "poi_total_count": poi_total_count,
@@ -792,7 +799,13 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
         logger.warning("ML correction failed, falling back to raw physics", exc_info=True)
 
     # Score: 40 dB → 100, 75 dB → 0 (based on ML-corrected Lden)
-    score = max(0, min(100, round((75 - ml_lden) / 35 * 100)))
+    # Score re-anchor: keep the calibrated 40-70 dB mapping exactly (where the
+    # property mass sits) but spread the loud tail so >75 dB no longer all collapse
+    # to 0 and 75 vs 88 dB can rank-order. Continuous at 70 dB (both branches = 14).
+    if ml_lden <= 70:
+        score = max(0, min(100, round((75 - ml_lden) / 35 * 100)))
+    else:
+        score = max(0, min(14, round(14 * (88 - ml_lden) / 18)))
 
     if score >= 80:
         label = "Very Quiet"
@@ -884,7 +897,10 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     # rendered as a human-friendly label (never a bare class or numeric station id).
     _dom = []
     if top_roads and road_db > 0:
-        _dom.append((road_db, _road_label(top_roads[0][1])))
+        # Compare in one acoustic domain: road_db is a CRTN L10 level (~3 dB above
+        # its Leq); rail_db / aircraft_db are Leq. Subtract L10_TO_LEQ_DB so a road
+        # doesn't out-rank a louder aircraft/rail purely from the L10-vs-Leq gap.
+        _dom.append((road_db - L10_TO_LEQ_DB, _road_label(top_roads[0][1])))
     if top_rails and rail_db > 0:
         _dom.append((rail_db, _RAIL_TYPE_LABEL.get(top_rails[0][1].get("type"), "railway")))
     if aircraft_db > 0:

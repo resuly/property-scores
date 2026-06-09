@@ -114,15 +114,22 @@ def build_cache(feature_keys):
             np.array(y_a), np.array(ok_a), X, feature_keys)
 
 
-def cv_state(raw, y, k=5, seed=42):
+def cv_state(raw, y, k=5, seed=42, g_slope=None):
     """城内 k-fold CV: 每折在 train 上 fit 仿射, 在 test 上评估。
-    返回 pred(全量, out-of-fold), mae, r。"""
-    raw = raw.reshape(-1, 1)
+    返回 pred(全量, out-of-fold), mae, r。
+
+    g_slope 给定时 = UNIFIED constrained-slope (上线方案): 斜率固定为全局值,
+    每折只在 train 上拟合 intercept = mean(y - g_slope*raw)。这才反映部署表现。
+    g_slope=None 时退回旧的 per-state OLS (仅作对照)。"""
     pred = np.zeros_like(y, dtype=float)
     kf = KFold(n_splits=min(k, len(y)), shuffle=True, random_state=seed)
-    for tr, te in kf.split(raw):
-        lin = LinearRegression().fit(raw[tr], y[tr])
-        pred[te] = lin.predict(raw[te])
+    for tr, te in kf.split(raw.reshape(-1, 1)):
+        if g_slope is None:
+            lin = LinearRegression().fit(raw[tr].reshape(-1, 1), y[tr])
+            pred[te] = lin.predict(raw[te].reshape(-1, 1))
+        else:
+            intercept = float(np.mean(y[tr] - g_slope * raw[tr]))
+            pred[te] = g_slope * raw[te] + intercept
     mae = float(np.mean(np.abs(pred - y)))
     r = float(np.corrcoef(pred, y)[0, 1]) if len(y) > 1 else float("nan")
     return pred, mae, r
@@ -164,17 +171,31 @@ def main():
     state = np.array([CITY_STATE[c] for c in city])
 
     print("\n" + "=" * 60)
-    print("STEP 5: 全量按州仿射 (in-sample fit, 上线系数)")
+    print("STEP 5: 统一约束斜率校准 (constrained-slope, 上线系数)")
     print("=" * 60)
+    # UNIFIED RECALIBRATION (2026-06-08): per-state OLS overfit small noisy
+    # samples (NSW n338 -> slope 0.595 / intercept 33.64 = a NOISE FLOOR, 2.2x
+    # every other state's intercept; NSW/VIC/WA/NT std-ratio collapsed <0.6).
+    # Fix is NOT per-state band-aids but ONE constrained scheme: pin slope =
+    # GLOBAL slope (fit on all ~11k) for EVERY state, fit only the intercept
+    # per state (level shift). This removes the NSW intercept-floor by
+    # construction (slope can't run away), keeps std-ratio in line with global,
+    # and 5fold CV pooled r is unchanged (0.685 vs prior 0.686). See
+    # scripts/unified_calib_analysis.py for the full strategy sweep that
+    # selected this over global/shrinkage/TheilSen/Huber.
     gl = LinearRegression().fit(raw.reshape(-1, 1), y)
+    g_slope = float(gl.coef_[0])
+    g_int = float(gl.intercept_)
     new_calib = {
         "_feature_keys": feature_keys,
         "_min_lden": MIN_LDEN,
         "_note": old_calib.get("_note", ""),
-        "_coeff_kind": "in-sample fit per state (full ~11k SoundPLAN facades); "
-                       "true perf = in-city 5fold CV (see _cv block)",
-        "global_affine": {"slope": float(gl.coef_[0]),
-                          "intercept": float(gl.intercept_), "n": int(len(y))},
+        "_coeff_kind": "UNIFIED constrained-slope: global slope pinned for all "
+                       "states (fit on full ~11k SoundPLAN facades), per-state "
+                       "intercept only. Removes per-state OLS overfit "
+                       "(esp. NSW intercept-floor). True perf = in-city 5fold "
+                       "CV (see _cv block).",
+        "global_affine": {"slope": g_slope, "intercept": g_int, "n": int(len(y))},
         "states": {},
     }
     for city_name, st in CITY_STATE.items():
@@ -183,17 +204,19 @@ def main():
         if n < 10:
             print(f"  {st} ({city_name}): n={n} 不足, 跳过 -> global")
             continue
-        lin = LinearRegression().fit(raw[idx].reshape(-1, 1), y[idx])
-        pred_in = lin.predict(raw[idx].reshape(-1, 1))
+        # constrained slope = global; intercept = mean(y - g_slope * raw)
+        intercept = float(np.mean(y[idx] - g_slope * raw[idx]))
+        pred_in = g_slope * raw[idx] + intercept
         mae = float(np.mean(np.abs(pred_in - y[idx])))
         r = float(np.corrcoef(pred_in, y[idx])[0, 1])
         new_calib["states"][st] = {
-            "slope": float(lin.coef_[0]), "intercept": float(lin.intercept_),
+            "slope": g_slope, "intercept": intercept,
             "n": n, "insample_mae": round(mae, 2), "insample_r": round(r, 2),
             "city_sample": city_name,
+            "calib_kind": "constrained-slope (global slope, per-state intercept)",
         }
-        print(f"  {st} ({city_name}): n={n} slope={lin.coef_[0]:.3f} "
-              f"int={lin.intercept_:+.1f} (in-sample MAE={mae:.2f} r={r:.2f})")
+        print(f"  {st} ({city_name}): n={n} slope={g_slope:.3f} "
+              f"int={intercept:+.1f} (in-sample MAE={mae:.2f} r={r:.2f})")
     new_calib["states"]["QLD"] = {
         **new_calib["global_affine"],
         "fallback": "global (no QLD SoundPLAN sample)",
@@ -201,7 +224,7 @@ def main():
     print(f"  QLD: global 兜底 slope={gl.coef_[0]:.3f} int={gl.intercept_:+.1f}")
 
     print("\n" + "=" * 60)
-    print("STEP 6: 城内 5-fold CV (全量, 真实上线表现)")
+    print("STEP 6: 城内 5-fold CV (全量, 真实上线表现 = constrained-slope)")
     print("=" * 60)
     cv = {}
     print(f"{'state':6s} {'n':>5s} {'CV_MAE':>7s} {'CV_r':>6s}")
@@ -209,27 +232,32 @@ def main():
         idx = state == st
         if idx.sum() < 10:
             continue
-        _, mae, r = cv_state(raw[idx], y[idx])
+        _, mae, r = cv_state(raw[idx], y[idx], g_slope=g_slope)
         cv[st] = {"n": int(idx.sum()), "cv_mae": round(mae, 2), "cv_r": round(r, 3)}
         print(f"{st:6s} {int(idx.sum()):5d} {mae:7.2f} {r:6.3f}")
 
     # pooled CV (per-state affine within fold, then aggregate metrics)
     def pooled_cv(mask, label):
+        # UNIFIED constrained-slope per fold: global slope (= g_slope refit on
+        # fold train across all states) pinned, per-state intercept only.
         sub_raw = raw[mask]; sub_y = y[mask]; sub_state = state[mask]
         kf = KFold(n_splits=5, shuffle=True, random_state=42)
         pred = np.zeros_like(sub_y, dtype=float)
         idxarr = np.arange(len(sub_y))
         for tr, te in kf.split(idxarr):
+            fold_slope = float(LinearRegression()
+                               .fit(sub_raw[tr].reshape(-1, 1), sub_y[tr]).coef_[0])
+            fold_int = float(np.mean(sub_y[tr] - fold_slope * sub_raw[tr]))
             for st in np.unique(sub_state):
                 stm_tr = tr[sub_state[tr] == st]
                 stm_te = te[sub_state[te] == st]
-                if len(stm_tr) < 2 or len(stm_te) == 0:
-                    if len(stm_te):  # fallback global within fold
-                        lin = LinearRegression().fit(sub_raw[tr].reshape(-1, 1), sub_y[tr])
-                        pred[stm_te] = lin.predict(sub_raw[stm_te].reshape(-1, 1))
+                if len(stm_te) == 0:
                     continue
-                lin = LinearRegression().fit(sub_raw[stm_tr].reshape(-1, 1), sub_y[stm_tr])
-                pred[stm_te] = lin.predict(sub_raw[stm_te].reshape(-1, 1))
+                if len(stm_tr) < 2:  # fall back to fold-global intercept
+                    pred[stm_te] = fold_slope * sub_raw[stm_te] + fold_int
+                    continue
+                it = float(np.mean(sub_y[stm_tr] - fold_slope * sub_raw[stm_tr]))
+                pred[stm_te] = fold_slope * sub_raw[stm_te] + it
         mae = float(np.mean(np.abs(pred - sub_y)))
         r = float(np.corrcoef(pred, sub_y)[0, 1])
         print(f"  pooled {label}: n={len(sub_y)} CV_MAE={mae:.2f} CV_r={r:.3f}")
@@ -243,7 +271,7 @@ def main():
     print("STEP 7: NSW 验证 (排序是否被压平)")
     print("=" * 60)
     nsw = state == "NSW"
-    nsw_pred, nsw_mae, nsw_r = cv_state(raw[nsw], y[nsw])
+    nsw_pred, nsw_mae, nsw_r = cv_state(raw[nsw], y[nsw], g_slope=g_slope)
     true_std = float(np.std(y[nsw]))
     pred_std = float(np.std(nsw_pred))
     nsw_slope = float(new_calib["states"]["NSW"]["slope"])
@@ -251,13 +279,14 @@ def main():
     print(f"  CV r={nsw_r:.3f}  CV MAE={nsw_mae:.2f}")
     print(f"  真值 std={true_std:.2f}  CV预测 std={pred_std:.2f}  "
           f"(比值 pred/true={pred_std/true_std:.2f})")
-    print(f"  in-sample slope={nsw_slope:.3f} (v0=0.65; <1 表示压平)")
+    print(f"  constrained slope={nsw_slope:.3f} (= global; 旧 per-state OLS=0.595 "
+          f"+ intercept 33.6 是过拟合噪声地板, 已消除)")
     print("  对照其他城 (CV预测std/真值std 比值):")
     for st in ["VIC", "SA", "WA", "TAS", "ACT", "NT"]:
         idx = state == st
         if idx.sum() < 10:
             continue
-        p, _, _ = cv_state(raw[idx], y[idx])
+        p, _, _ = cv_state(raw[idx], y[idx], g_slope=g_slope)
         ts = np.std(y[idx]); ps = np.std(p)
         sl = new_calib["states"][st]["slope"]
         print(f"    {st:4s} pred/true_std={ps/ts:.2f}  slope={sl:.3f}")

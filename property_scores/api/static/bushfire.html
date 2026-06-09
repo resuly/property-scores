@@ -63,6 +63,7 @@
 
     <div class="card p-3 mb-4">
       <div class="text-xs font-semibold text-slate-500 mb-2 uppercase tracking-wide">Layers</div>
+      <label class="toggle-row"><input type="checkbox" id="t-fuel" checked onchange="toggleFuel()"> <span>Vegetation fuel (WorldCover 10m)</span></label>
       <label class="toggle-row"><input type="checkbox" id="t-overlay" checked onchange="toggleOverlay()"> <span>VIC Bushfire Overlay (BMO)</span></label>
     </div>
 
@@ -110,9 +111,20 @@
 
 <!-- Legend -->
 <div class="absolute bottom-5 left-3 bg-white/95 backdrop-blur rounded-lg shadow-sm border border-slate-200 px-3 py-2 text-xs text-slate-600 z-10" style="min-width:170px">
-  <div class="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Bushfire Overlays</div>
+  <div class="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Vegetation Fuel (10m)</div>
+  <div class="grid grid-cols-2 gap-x-3 gap-y-0.5 mb-1">
+    <div class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-sm inline-block" style="background:#166534"></span> Trees</div>
+    <div class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-sm inline-block" style="background:#65a30d"></span> Shrub</div>
+    <div class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-sm inline-block" style="background:#facc15"></span> Grass</div>
+    <div class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-sm inline-block" style="background:#94a3b8"></span> Built-up</div>
+    <div class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-sm inline-block" style="background:#60a5fa"></span> Water</div>
+    <div class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-sm inline-block" style="background:#d6d3d1"></span> Bare</div>
+  </div>
+  <div class="text-[9px] text-slate-400 mb-1">Greener = more fuel</div>
+  <div class="text-[10px] font-semibold text-slate-400 uppercase tracking-wide pt-1 mt-1 border-t border-slate-200 mb-1">Bushfire Overlays</div>
   <div class="flex items-center gap-2 mb-1"><span class="w-3 h-3 rounded-sm inline-block" style="background:rgba(220,38,38,0.35);border:1px solid rgba(220,38,38,0.6)"></span> BMO (VIC)</div>
-  <div class="flex items-center gap-2 pt-1 mt-1 border-t border-slate-200"><span class="w-3.5 h-3.5 rounded-full bg-orange-500 inline-block"></span> Query Point</div>
+  <div class="flex items-center gap-2"><span class="w-3.5 h-3.5 rounded-full bg-orange-500 inline-block"></span> Query Point</div>
+  <div class="flex items-center gap-2 mt-0.5"><span class="inline-block" style="width:14px;height:0;border-top:2px dashed #ea580c"></span> Fuel assessment (200m)</div>
 </div>
 
 <script>
@@ -134,6 +146,97 @@ function scoreColor(s) {
   if (s >= 40) return '#d97706';
   if (s >= 20) return '#ea580c';
   return '#dc2626';
+}
+
+// ESA WorldCover class -> RGB. Greens = woody fuel, yellow = grass,
+// grey = built-up (low fuel), blue = water. Matches the legend.
+const LC_PALETTE = {
+  10:[22,101,52], 20:[101,163,13], 30:[250,204,21], 40:[253,230,138],
+  50:[148,163,184], 60:[214,211,209], 70:[241,245,249], 80:[96,165,250],
+  90:[94,234,212], 95:[20,184,166], 100:[167,243,208],
+};
+// vegetation (fuel) opaque; built-up/water/bare recede so the basemap shows through
+const LC_ALPHA = {
+  10:240, 20:230, 30:215, 40:195, 50:105, 60:120,
+  70:80, 80:145, 90:205, 95:220, 100:120,
+};
+
+let _lcAbort = null;
+
+async function loadLandcover(lat, lng) {
+  if (_lcAbort) _lcAbort.abort();
+  _lcAbort = new AbortController();
+  const sig = _lcAbort.signal;
+  try {
+    const g = await fetch(`/scores/bushfire/landcover?lat=${lat}&lng=${lng}&radius=500`, { signal: sig }).then(r => r.json());
+    if (sig.aborted) return;
+    if (!g || g.error || !g.classes) { clearLandcover(); return; }
+    const { bbox, nrows, ncols, classes } = g;
+    const cv = document.createElement('canvas');
+    cv.width = ncols; cv.height = nrows;
+    const ctx = cv.getContext('2d');
+    const img = ctx.createImageData(ncols, nrows);
+    for (let r = 0; r < nrows; r++) {
+      for (let c = 0; c < ncols; c++) {
+        const cls = classes[r][c];
+        const p = (r * ncols + c) * 4;
+        const col = LC_PALETTE[cls];
+        if (!col || cls === 0) { img.data[p + 3] = 0; continue; }
+        img.data[p] = col[0]; img.data[p + 1] = col[1]; img.data[p + 2] = col[2];
+        img.data[p + 3] = LC_ALPHA[cls] ?? 220;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    const url = cv.toDataURL();
+    const [w, s, e, n] = bbox;
+    const coords = [[w, n], [e, n], [e, s], [w, s]];
+    if (map.getSource('lc')) {
+      map.getSource('lc').updateImage({ url, coordinates: coords });
+    } else {
+      map.addSource('lc', { type: 'image', url, coordinates: coords });
+      let before;
+      if (map.getLayer('bmo-fill')) before = 'bmo-fill';
+      else if (map.getLayer('query-pt-circle')) before = 'query-pt-circle';
+      map.addLayer({ id: 'lc-layer', type: 'raster', source: 'lc',
+        paint: { 'raster-opacity': 0.62, 'raster-resampling': 'nearest', 'raster-fade-duration': 0 } }, before);
+    }
+    const vis = document.getElementById('t-fuel').checked ? 'visible' : 'none';
+    if (map.getLayer('lc-layer')) map.setLayoutProperty('lc-layer', 'visibility', vis);
+  } catch (e) {
+    if (e.name !== 'AbortError') { console.warn('landcover failed:', e); clearLandcover(); }
+  }
+}
+
+function clearLandcover() {
+  if (map.getLayer('lc-layer')) map.setLayoutProperty('lc-layer', 'visibility', 'none');
+}
+
+function toggleFuel() {
+  const vis = document.getElementById('t-fuel').checked ? 'visible' : 'none';
+  if (map.getLayer('lc-layer')) map.setLayoutProperty('lc-layer', 'visibility', vis);
+}
+
+// 200m fuel-assessment ring (matches VEG_RADIUS_M used by the score).
+function ringPolygon(lat, lng, radiusM, steps = 72) {
+  const coords = [];
+  const dLat = radiusM / 111320;
+  const dLng = radiusM / (111320 * Math.cos(lat * Math.PI / 180));
+  for (let i = 0; i <= steps; i++) {
+    const a = (i / steps) * 2 * Math.PI;
+    coords.push([lng + dLng * Math.cos(a), lat + dLat * Math.sin(a)]);
+  }
+  return { type: 'Feature', geometry: { type: 'Polygon', coordinates: [coords] } };
+}
+
+function drawRing(lat, lng) {
+  const data = ringPolygon(lat, lng, 200);
+  if (map.getSource('fuel-ring')) {
+    map.getSource('fuel-ring').setData(data);
+  } else {
+    map.addSource('fuel-ring', { type: 'geojson', data });
+    map.addLayer({ id: 'fuel-ring-line', type: 'line', source: 'fuel-ring',
+      paint: { 'line-color': '#ea580c', 'line-width': 1.5, 'line-dasharray': [3, 2], 'line-opacity': 0.8 } });
+  }
 }
 
 function esriToGeoJSON(esri) {
@@ -325,6 +428,9 @@ async function query() {
     map.addSource('query-pt', { type: 'geojson', data: { type: 'Feature', geometry: { type: 'Point', coordinates: [lng, lat] } } });
     map.addLayer({ id: 'query-pt-circle', type: 'circle', source: 'query-pt', paint: { 'circle-radius': 10, 'circle-color': '#ea580c', 'circle-stroke-width': 3, 'circle-stroke-color': '#fff' } });
   }
+
+  loadLandcover(lat, lng);
+  drawRing(lat, lng);
 
   const loading = document.getElementById('loading');
   const scoreBox = document.getElementById('score-box');

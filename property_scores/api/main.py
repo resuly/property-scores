@@ -80,6 +80,21 @@ app.add_middleware(
 )
 
 
+@app.on_event("startup")
+def _check_bushfire_data():
+    """Warn loudly if the WorldCover mosaic is missing: bushfire fuel silently
+    falls back to the weaker Overture proxy, which monitoring would not catch."""
+    try:
+        from property_scores.bushfire.score import lc_vrt_available, _LC_VRT
+        if not lc_vrt_available():
+            logger.error("STARTUP: WorldCover lc.vrt missing at %s — bushfire fuel "
+                         "will degrade to the building-density proxy", _LC_VRT)
+        else:
+            logger.info("STARTUP: WorldCover lc.vrt present — bushfire fuel uses 10m land cover")
+    except Exception:
+        logger.exception("STARTUP: bushfire land-cover readiness check failed")
+
+
 @app.get("/api/config")
 def get_config():
     return {"mapbox_token": os.getenv("MAPBOX_TOKEN", "")}
@@ -224,6 +239,24 @@ def get_bushfire(lat: float = Query(...), lng: float = Query(...),
         return bushfire_score(lat, lng, quick=quick)
     except Exception as e:
         logger.exception("bushfire score failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/scores/bushfire/landcover")
+def get_bushfire_landcover(lat: float = Query(...), lng: float = Query(...),
+                           radius: int = Query(500)):
+    """WorldCover 10m land-cover grid around a point, for the fuel map overlay."""
+    from property_scores.bushfire.score import landcover_grid, lc_vrt_available
+    if not lc_vrt_available():
+        logger.error("bushfire landcover: WorldCover lc.vrt missing — fuel degraded to proxy")
+        return JSONResponse({"error": "land cover data unavailable"}, status_code=503)
+    try:
+        grid = landcover_grid(lat, lng, radius_m=max(100, min(radius, 1500)))
+        if not grid:
+            return JSONResponse({"error": "no coverage"}, status_code=404)
+        return grid
+    except Exception as e:
+        logger.exception("bushfire landcover failed")
         return JSONResponse({"error": str(e)}, status_code=500)
 
 

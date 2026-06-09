@@ -241,11 +241,156 @@ def _stac_find(collection: str, lat: float, lng: float, asset_key: str = "map") 
         return None
 
 
-def _vegetation_fuel(lat: float, lng: float) -> dict | None:
-    """Estimate vegetation fuel load from local Overture data.
+# ---------------------------------------------------------------------------
+# ESA WorldCover 10m land cover (local tiles, same data the noise model uses)
+# ---------------------------------------------------------------------------
+import importlib.util as _ilu  # noqa: E402
+import os as _os  # noqa: E402
+import threading as _threading  # noqa: E402
 
-    Uses building density + water proximity as proxy for land cover.
-    Dense buildings = built-up (low fuel). No buildings = vegetation (high fuel).
+from property_scores.common.config import data_path as _data_path  # noqa: E402
+
+_LC_VRT = str(_data_path("global/lc.vrt"))
+_LC_CLASSES = list(FUEL_RISK)
+
+VEG_RADIUS_M = 200            # window around the point for fuel assessment
+INTERFACE_WOODY_SLOPE = 2.5   # interface fuel floor = woody_frac * this ...
+INTERFACE_FLOOR_CAP = 0.55    # ... capped here (full bushland still scores ~0.9)
+
+_RASTER_SAMPLER = None
+_RASTER_SAMPLER_LOCK = _threading.Lock()
+
+
+def _raster_sampler():
+    """Load the generic raster sampler by file path (thread-safe singleton).
+
+    Imported standalone (not via ``property_scores.noise``) so we don't pull
+    the heavy noise package __init__ (duckdb / full noise model) into bushfire.
+    Double-checked locking avoids concurrent requests each exec'ing a separate
+    module copy (which would each get their own handle cache). Long-term home
+    for this util is ``common/``.
+    """
+    global _RASTER_SAMPLER
+    if _RASTER_SAMPLER is None:
+        with _RASTER_SAMPLER_LOCK:
+            if _RASTER_SAMPLER is None:
+                path = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)),
+                                     "noise", "raster_sample.py")
+                spec = _ilu.spec_from_file_location("_bushfire_raster_sample", path)
+                mod = _ilu.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                _RASTER_SAMPLER = mod
+    return _RASTER_SAMPLER
+
+
+def lc_vrt_available() -> bool:
+    """Whether the ESA WorldCover mosaic is present (else fuel degrades to proxy)."""
+    return _os.path.exists(_LC_VRT)
+
+
+def landcover_grid(lat: float, lng: float, radius_m: int = 500) -> dict | None:
+    """Return the WorldCover class grid + bbox around a point for map display.
+
+    Used by the bushfire map to render the actual 10m land cover surrounding a
+    property (the visible basis for the fuel-load score). Returns None outside
+    tile coverage.
+    """
+    try:
+        rs = _raster_sampler()
+        src = rs._src(_LC_VRT)
+        if src is None:
+            return None
+        import numpy as np
+        from rasterio.windows import transform as _win_transform
+
+        x, y = rs._to_raster_xy(src, lat, lng)  # WorldCover is EPSG:4326 → x=lng, y=lat
+        px = abs(src.transform.a)
+        half = max(int((radius_m / 111_320.0) / px), 1)
+        row, col = src.index(x, y)
+        r0, r1 = max(row - half, 0), row + half + 1
+        c0, c1 = max(col - half, 0), col + half + 1
+        win = ((r0, r1), (c0, c1))
+        arr = src.read(1, window=win)
+        if arr.size == 0 or not np.any(arr > 0):
+            return None
+
+        wt = _win_transform(win, src.transform)
+        h, w = arr.shape
+        west, north = wt.c, wt.f
+        east = west + w * wt.a
+        south = north + h * wt.e  # wt.e is negative
+        return {
+            "bbox": [round(west, 6), round(south, 6), round(east, 6), round(north, 6)],
+            "nrows": h,
+            "ncols": w,
+            "radius_m": radius_m,
+            "classes": arr.astype(int).tolist(),
+        }
+    except Exception as e:
+        logger.debug("landcover_grid failed: %s", e)
+        return None
+
+
+def _vegetation_fuel(lat: float, lng: float) -> dict | None:
+    """Estimate vegetation fuel load from ESA WorldCover 10m land cover.
+
+    Samples the local WorldCover mosaic in a window around the point and
+    computes an area-weighted fuel risk from the actual land-cover mix. An
+    urban-bushland interface floor lifts the risk where built-up area would
+    otherwise dilute nearby woody vegetation. Falls back to the Overture
+    building-density proxy outside tile coverage.
+    """
+    try:
+        rs = _raster_sampler()
+        frac = rs.window_stats(_LC_VRT, lat, lng, radius_m=VEG_RADIUS_M,
+                               categorical=True, classes=_LC_CLASSES)
+    except Exception as e:
+        logger.debug("WorldCover sampling failed: %s", e)
+        frac = None
+
+    if not frac:  # outside tile coverage / all nodata
+        return _vegetation_fuel_proxy(lat, lng)
+
+    fractions = {c: frac.get(f"frac_{c}", 0.0) for c in _LC_CLASSES}
+    total = sum(fractions.values())
+    if total <= 0:
+        return _vegetation_fuel_proxy(lat, lng)
+
+    # Area-weighted fuel risk over the window.
+    area_weighted = sum(fractions[c] * FUEL_RISK[c][0] for c in _LC_CLASSES) / total
+
+    woody = fractions[10] + fractions[20]   # tree + shrub = ember / radiant threat
+    flammable = woody + fractions[30]       # + grassland
+
+    # Urban-bushland interface: built-up dominant but real woody vegetation
+    # nearby. Area-weighting alone under-calls the ember risk, so floor the
+    # fuel up in proportion to how much woody vegetation is actually present.
+    interface_floor = min(INTERFACE_FLOOR_CAP, woody * INTERFACE_WOODY_SLOPE)
+    fuel_risk = round(min(max(area_weighted, interface_floor), 0.98), 3)
+
+    dom = max(_LC_CLASSES, key=lambda c: fractions[c])
+    if dom == 50 and woody >= 0.15:
+        label = "Urban-bushland interface"
+    else:
+        label = FUEL_RISK[dom][1]
+
+    return {
+        "land_cover_class": dom,
+        "land_cover_label": label,
+        "fuel_risk": fuel_risk,
+        "has_nearby_trees": fractions[10] >= 0.05,
+        "source": "esa_worldcover_10m",
+        "tree_shrub_frac": round(woody, 3),
+        "vegetated_frac": round(flammable, 3),
+    }
+
+
+def _vegetation_fuel_proxy(lat: float, lng: float) -> dict | None:
+    """Fallback: estimate vegetation fuel from local Overture data.
+
+    Used only outside WorldCover tile coverage. Uses building density + water
+    proximity as a coarse proxy for land cover: dense buildings = built-up
+    (low fuel), no buildings = vegetation (high fuel).
     """
     try:
         from property_scores.common.overture import get_db, buildings_near, water_near

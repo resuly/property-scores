@@ -1,0 +1,12 @@
+report,logger,address,meas_day,meas_night
+Lisarow,P01,"970 Pacific Highway",64.1,60.5
+Lisarow,P02,"25 Barkala Street",60.0,55.2
+Lisarow,P03,"20B Railway Crescent",54.7,50.6
+Lisarow,P04,"6/889 Pacific Highway",66.0,61.0
+Harrington,NL1,"20 Coopernook Road, Coopernook",58.0,53.0
+Harrington,NL2,"20 Coopernook Road, Coopernook",69.0,66.0
+Harrington,NL3,"173 Harrington Road, Coopernook",59.0,53.0
+M6F6,NL10,"48 President Avenue, Kogarah",66.0,63.0
+M6F6,NL12,"23 President Avenue, Kogarah",68.0,66.0
+M6F6,NL13,"63 President Avenue, Kogarah",64.0,63.0
+M6F6,NL14,"138 President Avenue, Brighton- Le-Sands",70.0,65.0

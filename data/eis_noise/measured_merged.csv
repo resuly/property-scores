@@ -1,0 +1,113 @@
+state,logger,address,meas_day,meas_night,metric
+VIC,N01,"34 Edmund Rice Parade, Watsonia",60,54,LA10
+VIC,N02,"12 Eastgate Drive, Greensborough",57,51,LA10
+VIC,N03,"43 Gillingham Street, Watsonia North",56,48,LA10
+VIC,N04,"4 Yonde Court, Greensborough",53,46,LA10
+VIC,N07,"4 Vincent Ct, Greensborough",58,52,LA10
+VIC,N09,"22 Sellars Street, Watsonia North",62,54,LA10
+VIC,N10,"21 Boyd Street, Greensborough",55,49,LA10
+VIC,N11,"1 Saxon Court, Greensborough",61,54,LA10
+VIC,N12,"1/470 Greensborough Road, Greensborough",63,56,LA10
+VIC,N13,"34 Ibbottson Street, Watsonia",56,48,LA10
+VIC,N14,"462 Greensborough Road, Watsonia",61,54,LA10
+VIC,N15,"319 Greensborough Road, Watsonia",60,54,LA10
+VIC,N16,"384 Service Road, Watsonia",58,50,LA10
+VIC,N17,"17 Watson Street, Macleod",52,45,LA10
+VIC,N18,"179 Greensborough Road, Macleod",72,63,LA10
+VIC,N19,"115 Greensborough Road, Macleod",72,64,LA10
+VIC,N20,"10 Borlase Street, Yallambie",61,55,LA10
+VIC,N20A,"3 Kay Court, Yallambie",61,54,LA10
+VIC,N21,"218 Bulleen Road, Bulleen",65,58,LA10
+VIC,N22,"2 Golden Way, Bulleen",74,65,LA10
+VIC,N23,"3 Ilma Court, Bulleen",62,55,LA10
+VIC,N24,"8 Ben Nevis Grove, Bulleen",56,50,LA10
+VIC,N25,"10 Vaughan Crescent, Kew",56,51,LA10
+VIC,N27,"32 Kilby Road, Kew East",64,58,LA10
+VIC,N29,"7 Fairway Drive, Kew East",60,54,LA10
+VIC,N30,"1549B Old Burke Road, Kew East",62,55,LA10
+VIC,N31,"21 Orion Street, Balwyn North",57,51,LA10
+VIC,N32,"52 Columba Street, Balwyn North",56,49,LA10
+VIC,N33,"150 Mountain View Road, Balwyn North",60,55,LA10
+VIC,N34,"7 Kampman Street, Bulleen",58,53,LA10
+VIC,N35,"4 Carron Street, Balwyn North",62,55,LA10
+VIC,N36,"33 Estelle Street, Bulleen",64,58,LA10
+VIC,N37,"117 Willow Bend, Bulleen",63,56,LA10
+VIC,N38,"49 Gardenia Road, Balwyn North",63,57,LA10
+VIC,N39,"3/69 Sweyn Street, Balwyn North",58,52,LA10
+VIC,N41,"15 Valda Avenue, Mont Albert North",59,53,LA10
+VIC,N42,"17 Sargent Street, Doncaster",59,53,LA10
+VIC,N43,"9/19 Paul Avenue, Box Hill North",55,50,LA10
+VIC,N44,"24 Grange Park Avenue, Doncaster",57,53,LA10
+VIC,N45,"48 Eram Road, Box Hill North",55,49,LA10
+VIC,N46,"2/46 Gedye Street, Doncaster",60,54,LA10
+VIC,N47,"21 Middlefield Drive, Blackburn North",57,52,LA10
+VIC,N48,"3/22 Boronia Grove, Doncaster East",62,54,LA10
+VIC,N49,"4/52 Bowen Road, Doncaster East",59,52,LA10
+VIC,N50,"61 Kett Street, Blackburn North",59,53,LA10
+VIC,NS01,"St Mary's Parish Primary, Greensborough",73,63,LA10
+VIC,NS02,Watsonia Primary School,59,53,LA10
+VIC,NS03,"St Martin of Tours, Rosanna",74,66,LA10
+VIC,NS04,"Belle Vue Primary School, Balwyn North",62,56,LA10
+VIC,NS05,"Kalker Montessori Centre, Bulleen",60,55,LA10
+VIC,NS06,"Marcellin College, Bulleen",67,60,LA10
+VIC,NS07,"Trinity Marles Playing Fields, Bulleen",65,58,LA10
+VIC,L1,"Cameron St, Brunswick",62.4,55,LAeq
+VIC,L2,"Orient Grove, Brunswick",56.2,50.5,LAeq
+VIC,L3,"Lux Way, Brunswick",61.6,55.3,LAeq
+VIC,L4,"Wilkinson St, Brunswick",54.8,49.4,LAeq
+VIC,L5,"Dawson Street, Brunswick",61.2,57.5,LAeq
+VIC,L6,"Wilson Ave, Brunswick",65.8,59.6,LAeq
+VIC,L7,"Brunswick Road, Brunswick",68.4,62.4,LAeq
+VIC,L8,"The Avenue, Parkville",54.7,45.4,LAeq
+QLD,Site 1,"22 Crag Road, Taringa",61,49,snapshot
+QLD,Site 2,"115 Elizabeth Street, Toowong",51,41,snapshot
+QLD,Site 3,"6 Wool Street, Toowong",56,45,snapshot
+QLD,Site 4,"128 Sylvan Road, Toowong",64,54,snapshot
+QLD,Site 5,"29 Valentine Street, Toowong",57,52,snapshot
+QLD,Site 6,"69 Frederick Street, Toowong",67,57,snapshot
+QLD,Site 7,"9 Victoria Crescent, Toowong",55,41,snapshot
+QLD,Site 8,"5 Clyde Street, Brisbane City",61,53,snapshot
+QLD,Site 9,"26 Lower Clifton Terrace, Red Hill",60,51,snapshot
+QLD,Site 10,"7 Westbury Street, Red Hill",63,50,snapshot
+QLD,Site 12,"43 Normanby Terrace, Kelvin Grove",63,52,snapshot
+QLD,Site 13,"9 Horrocks Street, Toowong",56,45,snapshot
+WA,Loc2,"199 Kelvin Road, Maddington",65.6,59.8,LA10
+WA,Loc3,"150 Victoria Road, Kenwick",63.1,60.3,LAeq
+WA,Loc4,"20 Maamba Road, Wattle Grove",53,50.4,LAeq
+WA,Loc5,"44 Maamba Road, Wattle Grove",57.8,54.2,LAeq
+WA,Loc6,"232 Hale Road, Forrestfield",59.8,54.9,LAeq
+WA,Loc7,"5 Pulchella Street, Wattle Grove",59.1,54,LAeq
+WA,Loc8,"23 Marble Place, Forrestfield",56.9,53.6,LAeq
+WA,Loc9,"39 Hardey East Road, Wattle Grove",54.5,51.8,LAeq
+WA,Site A (High St Fremantle),"78 Holland Street, Fremantle",57,48,LA10
+WA,Site B (High St Fremantle),"302 High Street, Fremantle",71,64,LA10
+WA,Site C (High St Fremantle),"332 High Street, Fremantle",72,64,LA10
+WA,Site D (High St Fremantle),"368 High Street, Fremantle",72,67,LA10
+WA,Loc1 (Margaret River),"167 Rosa Brook Road, Margaret River",44,32,LA10
+WA,Loc2 (Margaret River),"40 Riverslea Drive, Margaret River",48,38,LA10
+TAS_ACT_NT,R1,"650 Main Road, Granton TAS",59.5,55.9,LA10
+TAS_ACT_NT,R2,"5 George Street, Granton TAS",54.2,51.7,LA10
+TAS_ACT_NT,R3,"15 Dickenson Drive, Granton TAS",59.6,56.6,LA10
+TAS_ACT_NT,R4,"4 Forest Road, Granton TAS",66.9,63.6,LA10
+TAS_ACT_NT,R5,"12 Rusts Road, Granton TAS",56.8,52.9,LA10
+TAS_ACT_NT,R6,"10 Nielsen Esplanade, Bridgewater TAS",57.1,52,LA10
+TAS_ACT_NT,R7,"4 Hayton Place, Bridgewater TAS",51.9,48.6,LA10
+TAS_ACT_NT,R8,"49 Finlay Street, Bridgewater TAS",59.3,53.6,LA10
+TAS_ACT_NT,R9,"44 Old Main Road, Bridgewater TAS",54.9,50.2,LA10
+TAS_ACT_NT,R14,"2 Old Main Road, Bridgewater TAS",60.5,55.1,LA10
+TAS_ACT_NT,NL1,"Archbishops House, Parkes, Canberra ACT",63,56,LAeq
+TAS_ACT_NT,NL2,"1 London Circuit, Canberra ACT",61,54,LAeq
+TAS_ACT_NT,NL3,"Police Station and RBA, Canberra ACT",57,54,LAeq
+TAS_ACT_NT,NL4,"255 London Circuit, Canberra ACT",58,53,LAeq
+TAS_ACT_NT,NL5,"ANU School of Art, 61 Marcus Clarke Street, Canberra ACT",57,50,LAeq
+NSW,P01,"970 Pacific Highway, Lisarow",64.1,60.5,LAeq
+NSW,P02,"25 Barkala Street, Lisarow",60.0,55.2,LAeq
+NSW,P03,"20B Railway Crescent, Lisarow",54.7,50.6,LAeq
+NSW,P04,"6/889 Pacific Highway, Lisarow",66.0,61.0,LAeq
+NSW,NL1,"20 Coopernook Road, Coopernook",58.0,53.0,LAeq
+NSW,NL2,"20 Coopernook Road, Coopernook",69.0,66.0,LAeq
+NSW,NL3,"173 Harrington Road, Coopernook",59.0,53.0,LAeq
+NSW,NL10,"48 President Avenue, Kogarah",66.0,63.0,LAeq
+NSW,NL12,"23 President Avenue, Kogarah",68.0,66.0,LAeq
+NSW,NL13,"63 President Avenue, Kogarah",64.0,63.0,LAeq
+NSW,NL14,"138 President Avenue, Brighton- Le-Sands",70.0,65.0,LAeq

@@ -1,0 +1,200 @@
+state,logger,address,meas_day,meas_night,metric
+VIC,N01,"34 Edmund Rice Parade, Watsonia",60.0,54.0,LA10
+VIC,N02,"12 Eastgate Drive, Greensborough",57.0,51.0,LA10
+VIC,N03,"43 Gillingham Street, Watsonia North",56.0,48.0,LA10
+VIC,N04,"4 Yonde Court, Greensborough",53.0,46.0,LA10
+VIC,N07,"4 Vincent Ct, Greensborough",58.0,52.0,LA10
+VIC,N09,"22 Sellars Street, Watsonia North",62.0,54.0,LA10
+VIC,N10,"21 Boyd Street, Greensborough",55.0,49.0,LA10
+VIC,N11,"1 Saxon Court, Greensborough",61.0,54.0,LA10
+VIC,N12,"1/470 Greensborough Road, Greensborough",63.0,56.0,LA10
+VIC,N13,"34 Ibbottson Street, Watsonia",56.0,48.0,LA10
+VIC,N14,"462 Greensborough Road, Watsonia",61.0,54.0,LA10
+VIC,N15,"319 Greensborough Road, Watsonia",60.0,54.0,LA10
+VIC,N16,"384 Service Road, Watsonia",58.0,50.0,LA10
+VIC,N17,"17 Watson Street, Macleod",52.0,45.0,LA10
+VIC,N18,"179 Greensborough Road, Macleod",72.0,63.0,LA10
+VIC,N19,"115 Greensborough Road, Macleod",72.0,64.0,LA10
+VIC,N20,"10 Borlase Street, Yallambie",61.0,55.0,LA10
+VIC,N20A,"3 Kay Court, Yallambie",61.0,54.0,LA10
+VIC,N21,"218 Bulleen Road, Bulleen",65.0,58.0,LA10
+VIC,N22,"2 Golden Way, Bulleen",74.0,65.0,LA10
+VIC,N23,"3 Ilma Court, Bulleen",62.0,55.0,LA10
+VIC,N24,"8 Ben Nevis Grove, Bulleen",56.0,50.0,LA10
+VIC,N25,"10 Vaughan Crescent, Kew",56.0,51.0,LA10
+VIC,N27,"32 Kilby Road, Kew East",64.0,58.0,LA10
+VIC,N29,"7 Fairway Drive, Kew East",60.0,54.0,LA10
+VIC,N30,"1549B Old Burke Road, Kew East",62.0,55.0,LA10
+VIC,N31,"21 Orion Street, Balwyn North",57.0,51.0,LA10
+VIC,N32,"52 Columba Street, Balwyn North",56.0,49.0,LA10
+VIC,N33,"150 Mountain View Road, Balwyn North",60.0,55.0,LA10
+VIC,N34,"7 Kampman Street, Bulleen",58.0,53.0,LA10
+VIC,N35,"4 Carron Street, Balwyn North",62.0,55.0,LA10
+VIC,N36,"33 Estelle Street, Bulleen",64.0,58.0,LA10
+VIC,N37,"117 Willow Bend, Bulleen",63.0,56.0,LA10
+VIC,N38,"49 Gardenia Road, Balwyn North",63.0,57.0,LA10
+VIC,N39,"3/69 Sweyn Street, Balwyn North",58.0,52.0,LA10
+VIC,N41,"15 Valda Avenue, Mont Albert North",59.0,53.0,LA10
+VIC,N42,"17 Sargent Street, Doncaster",59.0,53.0,LA10
+VIC,N43,"9/19 Paul Avenue, Box Hill North",55.0,50.0,LA10
+VIC,N44,"24 Grange Park Avenue, Doncaster",57.0,53.0,LA10
+VIC,N45,"48 Eram Road, Box Hill North",55.0,49.0,LA10
+VIC,N46,"2/46 Gedye Street, Doncaster",60.0,54.0,LA10
+VIC,N47,"21 Middlefield Drive, Blackburn North",57.0,52.0,LA10
+VIC,N48,"3/22 Boronia Grove, Doncaster East",62.0,54.0,LA10
+VIC,N49,"4/52 Bowen Road, Doncaster East",59.0,52.0,LA10
+VIC,N50,"61 Kett Street, Blackburn North",59.0,53.0,LA10
+VIC,NS01,"St Mary's Parish Primary, Greensborough",73.0,63.0,LA10
+VIC,NS02,Watsonia Primary School,59.0,53.0,LA10
+VIC,NS03,"St Martin of Tours, Rosanna",74.0,66.0,LA10
+VIC,NS04,"Belle Vue Primary School, Balwyn North",62.0,56.0,LA10
+VIC,NS05,"Kalker Montessori Centre, Bulleen",60.0,55.0,LA10
+VIC,NS06,"Marcellin College, Bulleen",67.0,60.0,LA10
+VIC,NS07,"Trinity Marles Playing Fields, Bulleen",65.0,58.0,LA10
+VIC,L1,"Cameron St, Brunswick",62.4,55.0,LAeq
+VIC,L2,"Orient Grove, Brunswick",56.2,50.5,LAeq
+VIC,L3,"Lux Way, Brunswick",61.6,55.3,LAeq
+VIC,L4,"Wilkinson St, Brunswick",54.8,49.4,LAeq
+VIC,L5,"Dawson Street, Brunswick",61.2,57.5,LAeq
+VIC,L6,"Wilson Ave, Brunswick",65.8,59.6,LAeq
+VIC,L7,"Brunswick Road, Brunswick",68.4,62.4,LAeq
+VIC,L8,"The Avenue, Parkville",54.7,45.4,LAeq
+QLD,Site 1,"22 Crag Road, Taringa",61.0,49.0,snapshot
+QLD,Site 2,"115 Elizabeth Street, Toowong",51.0,41.0,snapshot
+QLD,Site 3,"6 Wool Street, Toowong",56.0,45.0,snapshot
+QLD,Site 4,"128 Sylvan Road, Toowong",64.0,54.0,snapshot
+QLD,Site 5,"29 Valentine Street, Toowong",57.0,52.0,snapshot
+QLD,Site 6,"69 Frederick Street, Toowong",67.0,57.0,snapshot
+QLD,Site 7,"9 Victoria Crescent, Toowong",55.0,41.0,snapshot
+QLD,Site 8,"5 Clyde Street, Brisbane City",61.0,53.0,snapshot
+QLD,Site 9,"26 Lower Clifton Terrace, Red Hill",60.0,51.0,snapshot
+QLD,Site 10,"7 Westbury Street, Red Hill",63.0,50.0,snapshot
+QLD,Site 12,"43 Normanby Terrace, Kelvin Grove",63.0,52.0,snapshot
+QLD,Site 13,"9 Horrocks Street, Toowong",56.0,45.0,snapshot
+WA,Loc2,"199 Kelvin Road, Maddington",65.6,59.8,LA10
+WA,Loc3,"150 Victoria Road, Kenwick",63.1,60.3,LAeq
+WA,Loc4,"20 Maamba Road, Wattle Grove",53.0,50.4,LAeq
+WA,Loc5,"44 Maamba Road, Wattle Grove",57.8,54.2,LAeq
+WA,Loc6,"232 Hale Road, Forrestfield",59.8,54.9,LAeq
+WA,Loc7,"5 Pulchella Street, Wattle Grove",59.1,54.0,LAeq
+WA,Loc8,"23 Marble Place, Forrestfield",56.9,53.6,LAeq
+WA,Loc9,"39 Hardey East Road, Wattle Grove",54.5,51.8,LAeq
+WA,Site A (High St Fremantle),"78 Holland Street, Fremantle",57.0,48.0,LA10
+WA,Site B (High St Fremantle),"302 High Street, Fremantle",71.0,64.0,LA10
+WA,Site C (High St Fremantle),"332 High Street, Fremantle",72.0,64.0,LA10
+WA,Site D (High St Fremantle),"368 High Street, Fremantle",72.0,67.0,LA10
+WA,Loc1 (Margaret River),"167 Rosa Brook Road, Margaret River",44.0,32.0,LA10
+WA,Loc2 (Margaret River),"40 Riverslea Drive, Margaret River",48.0,38.0,LA10
+TAS_ACT_NT,R1,"650 Main Road, Granton TAS",59.5,55.9,LA10
+TAS_ACT_NT,R2,"5 George Street, Granton TAS",54.2,51.7,LA10
+TAS_ACT_NT,R3,"15 Dickenson Drive, Granton TAS",59.6,56.6,LA10
+TAS_ACT_NT,R4,"4 Forest Road, Granton TAS",66.9,63.6,LA10
+TAS_ACT_NT,R5,"12 Rusts Road, Granton TAS",56.8,52.9,LA10
+TAS_ACT_NT,R6,"10 Nielsen Esplanade, Bridgewater TAS",57.1,52.0,LA10
+TAS_ACT_NT,R7,"4 Hayton Place, Bridgewater TAS",51.9,48.6,LA10
+TAS_ACT_NT,R8,"49 Finlay Street, Bridgewater TAS",59.3,53.6,LA10
+TAS_ACT_NT,R9,"44 Old Main Road, Bridgewater TAS",54.9,50.2,LA10
+TAS_ACT_NT,R14,"2 Old Main Road, Bridgewater TAS",60.5,55.1,LA10
+TAS_ACT_NT,NL1,"Archbishops House, Parkes, Canberra ACT",63.0,56.0,LAeq
+TAS_ACT_NT,NL2,"1 London Circuit, Canberra ACT",61.0,54.0,LAeq
+TAS_ACT_NT,NL3,"Police Station and RBA, Canberra ACT",57.0,54.0,LAeq
+TAS_ACT_NT,NL4,"255 London Circuit, Canberra ACT",58.0,53.0,LAeq
+TAS_ACT_NT,NL5,"ANU School of Art, 61 Marcus Clarke Street, Canberra ACT",57.0,50.0,LAeq
+NSW,P01,"970 Pacific Highway, Lisarow",64.1,60.5,LAeq
+NSW,P02,"25 Barkala Street, Lisarow",60.0,55.2,LAeq
+NSW,P03,"20B Railway Crescent, Lisarow",54.7,50.6,LAeq
+NSW,P04,"6/889 Pacific Highway, Lisarow",66.0,61.0,LAeq
+NSW,NL1,"20 Coopernook Road, Coopernook",58.0,53.0,LAeq
+NSW,NL2,"20 Coopernook Road, Coopernook",69.0,66.0,LAeq
+NSW,NL3,"173 Harrington Road, Coopernook",59.0,53.0,LAeq
+NSW,NL10,"48 President Avenue, Kogarah",66.0,63.0,LAeq
+NSW,NL12,"23 President Avenue, Kogarah",68.0,66.0,LAeq
+NSW,NL13,"63 President Avenue, Kogarah",64.0,63.0,LAeq
+NSW,NL14,"138 President Avenue, Brighton- Le-Sands",70.0,65.0,LAeq
+NSW,R.02,"22 Lilyfield Rd, Rozelle NSW 2039",57.0,54.0,LAeq
+NSW,R.03,"69 Victoria Rd, Rozelle NSW 2039",70.0,68.0,LAeq
+NSW,R.04,"27 Victoria Rd, Rozelle NSW 2039",71.0,67.0,LAeq
+NSW,R.07,"24 Chapman Rd, Annandale NSW 2038",65.0,60.0,LAeq
+NSW,R.08,"279 Johnston St, Annandale NSW 2038 (West facade)",63.0,58.0,LAeq
+NSW,R.09,"279 Johnston St, Annandale NSW 2038 (East facade)",61.0,55.0,LAeq
+NSW,I.01,"28 Warayama Pl, Rozelle NSW 2039",72.0,68.0,LAeq
+NSW,I.02,"198 Victoria Rd, Rozelle NSW 2039",73.0,69.0,LAeq
+NSW,L01,"Princes Highway, St Peters NSW 2044",75.1,72.1,LAeq
+NSW,L02,"535 Princes Highway, Tempe NSW 2044",74.9,71.9,LAeq
+NSW,L003,"18 Campbell Street, St Peters NSW 2044",68.0,61.0,LAeq
+NSW,L03,"1 Fanning Street, Tempe NSW 2044",61.0,53.0,LAeq
+NSW,L04,"Alexandra Canal, Tempe NSW 2044",63.6,58.1,LAeq
+NSW,L05,"Canal Road, St Peters NSW 2044",66.5,63.1,LAeq
+NSW,L06,"Qantas Drive, Mascot NSW 2020",72.5,70.5,LAeq
+NSW,L07,"39 Kent Road, Botany NSW 2019",71.0,67.0,LAeq
+NSW,L08,"289 King Street, Mascot NSW 2020",68.0,64.0,LAeq
+NSW,L09,"105 Baxter Road, Mascot NSW 2020",67.0,62.0,LAeq
+NSW,NL1,"498c-498d Pacific Highway, Boambee NSW 2450",54.0,51.0,LAeq
+NSW,NL2,"North Boambee Road, North Boambee Valley NSW 2450",53.0,44.0,LAeq
+NSW,NL3,"170 North Boambee Road, North Boambee Valley NSW 2450",56.0,51.0,LAeq
+NSW,NL4,"12 Tamora Close, Coffs Harbour NSW 2450",59.0,52.0,LAeq
+NSW,NL5,"20 Bennetts Road, Coffs Harbour NSW 2450",47.0,41.0,LAeq
+NSW,NL6,"263c Shephards Lane, Coffs Harbour NSW 2450",47.0,47.0,LAeq
+NSW,NL7,"191 Mackays Road, Coffs Harbour NSW 2450",45.0,40.0,LAeq
+NSW,NL8,"429a-429b Pacific Highway North, Coffs Harbour NSW 2450",75.0,71.0,LAeq
+NSW,NL9,"16 Fern Tree Place, Korora NSW 2450",57.0,54.0,LAeq
+NSW,NL10,"1 Coachmans Close, Sapphire Beach NSW 2450",68.0,65.0,LAeq
+NSW,NL11,"539 Pacific Highway, Boambee NSW 2450",65.0,61.0,LAeq
+NSW,NL17,"33-37 Carmen Drive, Carlingford NSW 2118",56.6,52.5,snapshot
+NSW,NL18A,"46 Westmore Drive, West Pennant Hills NSW 2125",54.9,49.8,snapshot
+NSW,NL1,"79 Armitage Drive, Glendenning NSW 2761",60.0,55.0,LAeq
+NSW,NL2,"20 Ridgeview Place, Oakhurst NSW 2761",60.0,48.0,LAeq
+NSW,NL11,"20 Toulouse Street, Cecil Hills NSW 2171",56.0,50.0,LAeq
+NSW,NL13,"23 Lightning Ridge Road, Hinchinbrook NSW 2168",57.0,49.0,LAeq
+NSW,NL14,"53 Hemsworth Avenue, Middleton Grange NSW 2171",61.0,58.0,LAeq
+NSW,NL17,"11 Skipton Lane, Prestons NSW 2170",59.0,58.0,LAeq
+NSW,NL18,"1A Burley Road, Horsley Park NSW 2175",55.0,60.0,LAeq
+VIC,Mord-0,"375 Old Dandenong Rd, Dingley Village VIC",53.0,45.0,LA10
+VIC,Mord-1,"11 Ridder Ct, Dingley Village VIC",49.0,42.0,LA10
+VIC,Mord-2,"14 Oploo Ct, Dingley Village VIC",49.0,40.0,LA10
+VIC,Mord-3,"8 Torquay Cl, Dingley Village VIC",51.0,43.0,LA10
+VIC,Mord-4,"2 Casco Pl, Dingley Village VIC",51.0,41.0,LA10
+VIC,Mord-5,"34 Portland Pl, Waterways VIC",50.0,41.0,LA10
+VIC,Mord-6,"5 Spoonbill Pl, Waterways VIC",49.0,43.0,LA10
+VIC,Mord-7,"22 Jackie Ct, Aspendale Gardens VIC",51.0,43.0,LA10
+VIC,Mord-8,"5 Pandan Pl, Aspendale Gardens VIC",48.0,40.0,LA10
+VIC,Mord-9,"7 Ferntree Gr, Aspendale Gardens VIC",48.0,40.0,LA10
+VIC,Mord-10,"29 Wells Rd, Aspendale Gardens VIC",59.0,53.0,LA10
+VIC,Mord-11,"21 Soden Road, Bangholme VIC",60.0,52.0,LA10
+VIC,Mord-12,"80 Soden Road, Bangholme VIC",58.0,51.0,LA10
+VIC,WHP-Cal1,"444 Barkly Street, Ararat VIC",66.0,61.0,LA10
+VIC,WHP-Cal2,"98 Buangor Road, Buangor VIC",66.0,61.0,LA10
+VIC,WHP-Cal3,"6132 Western Highway, Middle Creek VIC",65.0,59.0,LA10
+VIC,WHP-Cal4,"4919 Western Highway, Beaufort VIC",63.0,58.0,LA10
+VIC,WHP-Amen1,"844 Hillside Road, Buangor VIC",53.0,52.0,LA10
+VIC,WHP-Amen2,"70 Buangor-Ben Nevis Road, Buangor VIC",47.0,43.0,LA10
+WA,A,"2 Redlands St, Bayswater WA",54.2,48.8,LAeq
+WA,B,"16 Harvest Rd, Morley WA",58.8,54.4,LAeq
+WA,C,"28A Bruce Rd, Morley WA",58.5,53.3,LAeq
+WA,D,"2A Abbey Street, Morley WA",59.0,52.5,LAeq
+WA,E,"9 Clandon Way, Morley WA",57.9,52.9,LAeq
+WA,F,"48 Alfreda Ave, Morley WA",57.1,53.4,LAeq
+WA,G,"100 Alfreda Ave, Morley WA",56.9,54.6,LAeq
+WA,H,"8 Wells Court, Noranda WA",49.9,45.5,LAeq
+WA,I,"15 Davis Court, Morley WA",50.1,44.3,LAeq
+WA,J,"6 Acacia Court, Beechboro WA",54.9,50.9,LAeq
+WA,K,"11 Willow Place, Beechboro WA",52.2,48.0,LAeq
+WA,L,"8 Jarrah Court, Beechboro WA",50.6,45.5,LAeq
+WA,M,"43 Mitra Loop, Beechboro WA",50.1,52.8,LAeq
+WA,N,"10 Cootha Court, Ballajura WA",47.4,43.2,LAeq
+WA,O,"21 Madura Close, Ballajura WA",49.4,47.0,LAeq
+WA,P,"12 Fewson Turn, Ellenbrook WA",49.1,44.1,LAeq
+WA,Q,"32 Stock Road West, Bullsbrook WA",54.2,48.2,LAeq
+WA,R,"144 Strachan Road, Bullsbrook WA",47.7,43.2,LAeq
+WA,S,"591 Muchea South Road, Muchea WA",50.7,49.3,LAeq
+WA,1,"Lot 104 (#421) Willinge Drive, Davenport WA",59.1,54.2,LAeq
+WA,2,"Lot 100 South Western Highway, Davenport WA",59.2,53.3,LAeq
+WA,3,"Lot 500 (#538) Bussell Highway, Dalyellup WA",64.0,58.5,LAeq
+WA,4,"Lot 47 (#1213) Bussell Highway, Stratham WA",60.5,54.0,LAeq
+WA,5,"Lot 41 (#133) Woods Road, Gelorup WA",43.2,36.3,LAeq
+NSW,"Logger 1 (front yard, road-facing; RION NL-42, unattended 13-20 Dec 2022)","47 Raymond Terrace Road, East Maitland NSW",65.0,62.0,LAeq
+NSW,"Logger 1 (front yard ~20m from Gregory Hills Drive; RION NL-42EX, unattended 25 Oct-1 Nov 2022)","190 Raby Road, Gledswood Hills NSW (facade ~20m from Gregory Hills Drive)",66.0,62.0,LAeq
+NSW,"Location 1 (long-term logger near Edwin Land Parkway; fence-top, shielded)","7/36 Pannamena Crescent, Jerrabomberra NSW 2619",56.0,48.0,LAeq
+NSW,Location 2 (long-term logger near Edwin Land Parkway),"21 Macadamia Close, Jerrabomberra NSW 2619",54.0,41.0,LAeq
+NSW,"Location 3 (long-term logger near Edwin Land Parkway; fence-top, shielded)","17 Nimbus Place, Karabar NSW 2620",53.0,46.0,LAeq
+NSW,"Rear of Site (RION NL-42EX, ~10m from Raymond Terrace Rd)","37 Raymond Terrace Road, Maitland NSW",66.0,60.0,LAeq

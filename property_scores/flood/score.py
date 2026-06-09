@@ -380,51 +380,6 @@ def _query_p95(lat: float, lng: float) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# HAND (Height Above Nearest Drainage) — AWS S3 COG
-# ---------------------------------------------------------------------------
-HAND_URL = "https://glo-30-hand.s3.amazonaws.com/v1/2021/Copernicus_DSM_COG_10_{tile}_HAND.tif"
-
-
-def _hand_tile_for(lat: float, lng: float) -> str:
-    """Return HAND tile name. Tiles are 1x1 degree, named by upper-left corner."""
-    tile_lat = math.ceil(abs(lat))
-    tile_lng = math.floor(lng)
-    ns = "S" if lat < 0 else "N"
-    return f"{ns}{tile_lat:02d}_00_E{tile_lng:03d}_00"
-
-
-def _query_hand(lat: float, lng: float) -> dict | None:
-    """Read HAND value from AWS GLO-30 COG. Returns height in meters above nearest drainage."""
-    tile = _hand_tile_for(lat, lng)
-    url = HAND_URL.format(tile=tile)
-    try:
-        import rasterio
-        with rasterio.open(url) as ds:
-            val = list(ds.sample([(lng, lat)]))[0][0]
-            if val < 0 or val > 9000:
-                return None
-            return {"hand_m": round(float(val), 1)}
-    except Exception as e:
-        logger.debug("HAND query failed: %s", e)
-        return None
-
-
-def _hand_to_score(hand_m: float) -> int:
-    """Convert HAND value to a flood risk score component."""
-    if hand_m < 1:
-        return 15
-    if hand_m < 3:
-        return 30
-    if hand_m < 5:
-        return 50
-    if hand_m < 10:
-        return 70
-    if hand_m < 20:
-        return 85
-    return 95
-
-
-# ---------------------------------------------------------------------------
 # Local data alternatives (replace remote COG calls)
 # ---------------------------------------------------------------------------
 
@@ -485,9 +440,64 @@ def _water_proximity_local(lat: float, lng: float) -> dict | None:
 
 
 def _hand_local(lat: float, lng: float) -> dict | None:
-    """Approximate HAND using Overture water distance + building density.
+    """Approximate HAND (Height Above Nearest Drainage) from the local GLO-30 DEM.
 
-    HAND = height above nearest drainage. Without DEM we approximate:
+    HAND = the point's height above the local drainage line. We approximate the
+    drainage as the lowest elevation in a ring around the point (rivers/creeks sit
+    at the local minimum) and take point_elev - that minimum. This uses real
+    elevation (data/global/dem.vrt, already on disk, no extra storage) instead of
+    the old building-density proxy. Falls back to that proxy outside DEM coverage.
+    """
+    try:
+        from property_scores.common import terrain
+
+        pt = terrain.elevation(lat, lng)
+        if pt is None:
+            return _hand_local_proxy(lat, lng)  # outside DEM tile coverage
+
+        coslat = max(0.2, math.cos(math.radians(lat)))
+
+        def _ring(r_m: float, n: int) -> list:
+            dlat = r_m / 111320.0
+            dlng = r_m / (111320.0 * coslat)
+            out = []
+            for i in range(n):
+                a = 2 * math.pi * i / n
+                e = terrain.elevation(lat + dlat * math.sin(a),
+                                      lng + dlng * math.cos(a))
+                if e is not None:
+                    out.append(e)
+            return out
+
+        # Nearest-ring-first: drainage = lowest point in the NEAREST ring, so a
+        # distant gorge/escarpment can't inflate HAND. Widen only if the nearest
+        # ring is entirely outside coverage.
+        samples = _ring(300, 16) or _ring(600, 12) or _ring(1000, 8)
+        if not samples:
+            return _hand_local_proxy(lat, lng)
+
+        drainage = min(min(samples), pt)
+        relief = max(max(samples), pt) - drainage
+        hand_m = max(0.0, round(pt - drainage, 1))
+        return {
+            "hand_m": hand_m,
+            "point_elev_m": round(pt, 1),
+            "drainage_elev_m": round(drainage, 1),
+            "relief_m": round(relief, 1),
+            # GLO-30 vertical noise is ~4m; below ~5m local relief a HAND read
+            # is not trustworthy, so callers should defer to overlay/JRC.
+            "uncertain": relief < 5.0,
+            "source": "dem_relief",
+        }
+    except Exception as e:
+        logger.debug("DEM HAND failed, falling back to proxy: %s", e)
+        return _hand_local_proxy(lat, lng)
+
+
+def _hand_local_proxy(lat: float, lng: float) -> dict | None:
+    """Fallback HAND from Overture water distance + building density.
+
+    Used only outside DEM tile coverage. HAND = height above nearest drainage:
     - Close to river/stream with few buildings → low HAND (floodplain)
     - Close to river with dense buildings → moderate HAND (developed, likely raised)
     - Far from any drainage → high HAND
@@ -585,7 +595,13 @@ def flood_score(lat: float, lng: float) -> dict:
     has_flood_evidence = bool(base_scores and min(base_scores) < 80)
     if hand:
         hand_m = hand["hand_m"]
-        if hand_m < 2 and has_flood_evidence:
+        # GLO-30 relief below ~5m is within DEM noise → unreliable HAND, defer to
+        # overlay/JRC rather than (de)penalising on it.
+        hand_uncertain = hand.get("uncertain", False)
+        drainage_elev = hand.get("drainage_elev_m", 1.0)
+        if hand_uncertain:
+            pass
+        elif hand_m < 2 and has_flood_evidence:
             # Low + flood evidence = confirmed risk
             score = min(score, 55) - max(0, int((2 - hand_m) * 10))
         elif hand_m < 2:
@@ -596,8 +612,10 @@ def flood_score(lat: float, lng: float) -> dict:
         elif hand_m < 5:
             # Near drainage without satellite evidence — mild caution
             score = min(score, 80)
-        elif hand_m > 20:
-            # Well above drainage — boost confidence
+        elif hand_m > 20 and drainage_elev > 1.0:
+            # Well above a real (non sea-level) drainage — boost confidence.
+            # The drainage_elev gate blocks the coastal/bay 0m artefact from
+            # turning a waterfront property's elevation into a false safety bonus.
             score = max(score, min(score + 10, 95))
 
     # P95 rainfall modifier: high extreme rainfall + other risk = compound

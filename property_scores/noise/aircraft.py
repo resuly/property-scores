@@ -360,10 +360,19 @@ def _query_defence(lat: float, lng: float) -> dict | None:
     for feat in _defence_features:
         props = feat.get("properties", {})
         geom = feat.get("geometry", {})
+        gtype = geom.get("type")
         coords = geom.get("coordinates", [])
         if not coords:
             continue
-        if _point_in_polygon(lat, lng, coords):
+        # Defence bands are Polygon for single-piece airfields and MultiPolygon
+        # for multi-piece ones (e.g. Darwin). Test every sub-polygon.
+        if gtype == "Polygon":
+            polys = [coords]
+        elif gtype == "MultiPolygon":
+            polys = coords
+        else:
+            continue
+        if any(_point_in_polygon(lat, lng, poly) for poly in polys):
             anef = props.get("anef_min", 20)
             if anef > best_anef:
                 best_anef = anef

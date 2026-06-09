@@ -29,18 +29,26 @@ def parse_kml():
 
         for pm in folder.findall(".//kml:Placemark", ns):
             name = pm.findtext("kml:name", "", ns)
-            coords_el = pm.find(".//kml:coordinates", ns)
-            if coords_el is None:
-                continue
 
-            # Parse "lng,lat,alt lng,lat,alt ..."
-            coords_text = coords_el.text.strip()
-            ring = []
-            for pt in coords_text.split():
-                parts = pt.split(",")
-                if len(parts) >= 2:
-                    ring.append([float(parts[0]), float(parts[1])])
-            if len(ring) < 3:
+            # A Placemark may be a single <Polygon> or a <MultiGeometry> of many
+            # <Polygon>s (e.g. RAAF Base Darwin's contour bands are 2-3 disjoint
+            # polygons each). The old code grabbed only the FIRST <coordinates>
+            # block, so multi-polygon airfields collapsed to a tiny sliver
+            # fragment. Collect every Polygon's outer ring instead.
+            polygons = []
+            for poly_el in pm.findall(".//kml:Polygon", ns):
+                outer = poly_el.find(".//kml:outerBoundaryIs//kml:coordinates", ns)
+                if outer is None or not outer.text:
+                    continue
+                ring = []
+                for pt in outer.text.strip().split():
+                    parts = pt.split(",")
+                    if len(parts) >= 2:
+                        ring.append([float(parts[0]), float(parts[1])])
+                if len(ring) >= 3:
+                    polygons.append([ring])  # [outer]; holes ignored (nested
+                    # higher-ANEF bands cover them, and best_anef takes the max)
+            if not polygons:
                 continue
 
             # Extract airfield name and contour range
@@ -56,6 +64,11 @@ def parse_kml():
             anef_match = re.search(r"(\d+)", contour)
             anef_min = int(anef_match.group(1)) if anef_match else 20
 
+            if len(polygons) == 1:
+                geometry = {"type": "Polygon", "coordinates": polygons[0]}
+            else:
+                geometry = {"type": "MultiPolygon", "coordinates": polygons}
+
             features.append({
                 "type": "Feature",
                 "properties": {
@@ -64,10 +77,7 @@ def parse_kml():
                     "anef_min": anef_min,
                     "source": "defence",
                 },
-                "geometry": {
-                    "type": "Polygon",
-                    "coordinates": [ring],
-                },
+                "geometry": geometry,
             })
 
     return {"type": "FeatureCollection", "features": features}

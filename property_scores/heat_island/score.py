@@ -199,6 +199,19 @@ def _building_density_proxy(lat: float, lng: float) -> float | None:
 
 
 def _greenspace_proxy(lat: float, lng: float) -> float | None:
+    """Vegetation cover that mitigates urban heat.
+
+    Prefers the real ESA WorldCover green fraction within 500m (vegetation cover
+    is the direct UHI driver via shade + evapotranspiration). Falls back to the
+    park-POI count proxy when WorldCover is unavailable.
+    """
+    try:
+        from property_scores.common import landcover as lc
+        green = lc.green_fraction(lat, lng, radius_m=500)
+        if green is not None:
+            return green
+    except Exception:
+        pass
     try:
         from property_scores.common.overture import get_db, pois_near
         db = get_db()

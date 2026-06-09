@@ -244,9 +244,7 @@ def _stac_find(collection: str, lat: float, lng: float, asset_key: str = "map") 
 # ---------------------------------------------------------------------------
 # ESA WorldCover 10m land cover (local tiles, same data the noise model uses)
 # ---------------------------------------------------------------------------
-import importlib.util as _ilu  # noqa: E402
 import os as _os  # noqa: E402
-import threading as _threading  # noqa: E402
 
 from property_scores.common.config import data_path as _data_path  # noqa: E402
 
@@ -257,30 +255,13 @@ VEG_RADIUS_M = 200            # window around the point for fuel assessment
 INTERFACE_WOODY_SLOPE = 2.5   # interface fuel floor = woody_frac * this ...
 INTERFACE_FLOOR_CAP = 0.55    # ... capped here (full bushland still scores ~0.9)
 
-_RASTER_SAMPLER = None
-_RASTER_SAMPLER_LOCK = _threading.Lock()
-
 
 def _raster_sampler():
-    """Load the generic raster sampler by file path (thread-safe singleton).
-
-    Imported standalone (not via ``property_scores.noise``) so we don't pull
-    the heavy noise package __init__ (duckdb / full noise model) into bushfire.
-    Double-checked locking avoids concurrent requests each exec'ing a separate
-    module copy (which would each get their own handle cache). Long-term home
-    for this util is ``common/``.
-    """
-    global _RASTER_SAMPLER
-    if _RASTER_SAMPLER is None:
-        with _RASTER_SAMPLER_LOCK:
-            if _RASTER_SAMPLER is None:
-                path = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)),
-                                     "noise", "raster_sample.py")
-                spec = _ilu.spec_from_file_location("_bushfire_raster_sample", path)
-                mod = _ilu.module_from_spec(spec)
-                spec.loader.exec_module(mod)
-                _RASTER_SAMPLER = mod
-    return _RASTER_SAMPLER
+    """Shared generic raster sampler (single process-wide instance via
+    common.landcover, so bushfire / view-quality / heat-island don't each
+    double-open the WorldCover handles per thread)."""
+    from property_scores.common import landcover as _lc
+    return _lc.sampler()
 
 
 def lc_vrt_available() -> bool:

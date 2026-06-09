@@ -22,6 +22,7 @@ import requests
 from property_scores.common.overture import (
     get_db, water_near, buildings_near, pois_near,
 )
+from property_scores.common import landcover as lc
 
 OPEN_METEO_ELEV = "https://api.open-meteo.com/v1/elevation"
 
@@ -186,7 +187,13 @@ def _elevation_advantage_factor(lat: float, lng: float) -> dict | None:
 
 
 def _green_space_factor(db, lat: float, lng: float) -> dict | None:
-    """Score based on number and proximity of parks/gardens within 1km."""
+    """Greenery in the outlook: real tree canopy (ESA WorldCover) combined with
+    proximity/density of named parks & gardens.
+
+    The park-POI signal alone misses leafy streets with no tagged park, so we
+    take the better of the POI score and the actual woody-canopy fraction within
+    500m. Falls back to POI-only when WorldCover is unavailable.
+    """
     pois = pois_near(db, lat, lng, radius_m=1000)
 
     green_distances: list[float] = []
@@ -194,21 +201,37 @@ def _green_space_factor(db, lat: float, lng: float) -> dict | None:
         if cat and any(kw in cat.lower() for kw in GREEN_KEYWORDS):
             green_distances.append(dist_m)
 
-    if not green_distances:
-        return {"value": 0.0, "count": 0, "nearest_m": None}
+    if green_distances:
+        green_distances.sort()
+        count = len(green_distances)
+        nearest = green_distances[0]
+        proximity_score = max(0.0, 1.0 - nearest / 1000)
+        density_score = min(count / 15.0, 1.0)
+        poi_value = proximity_score * 0.6 + density_score * 0.4
+    else:
+        count = 0
+        nearest = None
+        poi_value = 0.0
 
-    green_distances.sort()
-    count = len(green_distances)
-    nearest = green_distances[0]
+    green = lc.green_fraction(lat, lng, radius_m=500)
+    if green is None:
+        if not green_distances:
+            return {"value": 0.0, "count": 0, "nearest_m": None, "green_pct": None}
+        return {"value": round(poi_value, 3), "count": count,
+                "nearest_m": round(nearest), "green_pct": None}
 
-    proximity_score = max(0.0, 1.0 - nearest / 1000)
-    density_score = min(count / 15.0, 1.0)
-    decay = proximity_score * 0.6 + density_score * 0.4
+    # Real vegetation cover is the honest "green outlook" signal (40% within 500m
+    # = fully green). Park POIs only act as a floor for destination parks, capped
+    # at 0.5 so a POI-dense but treeless CBD no longer maxes out greenery while a
+    # genuinely park-adjacent lot still keeps a moderate score.
+    green_value = min(green / 0.40, 1.0)
+    value = max(green_value, poi_value * 0.5)
 
     return {
-        "value": round(decay, 3),
+        "value": round(value, 3),
         "count": count,
-        "nearest_m": round(nearest),
+        "nearest_m": round(nearest) if nearest is not None else None,
+        "green_pct": round(green * 100),
     }
 
 

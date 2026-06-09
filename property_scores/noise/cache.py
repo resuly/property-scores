@@ -4,6 +4,7 @@ import math
 from pathlib import Path
 
 from property_scores.common.config import DATA_DIR
+from property_scores.noise.score import NOISE_MODEL_VERSION
 
 _cache: dict[str, list[tuple]] = {}
 _loaded = False
@@ -23,6 +24,14 @@ def _load_caches():
     for f in DATA_DIR.glob("noise_cache_*.parquet"):
         try:
             df = pd.read_parquet(f)
+            # Version guard: a precompute built by a different model version is
+            # stale — its `score` no longer matches the live model, so serving it
+            # would shadow the live model in the overlay (and disagree with the
+            # panel). Skip it; the API then live-computes (correct, just slower).
+            # Regenerate with scripts/precompute_noise.py to restore the speedup.
+            if "model_version" not in df.columns or \
+                    not (df["model_version"] == NOISE_MODEL_VERSION).all():
+                continue
             valid = df.dropna(subset=["score"])
             region = f.stem.replace("noise_cache_", "")
             _cache[region] = list(valid.itertuples(index=False))

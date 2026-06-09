@@ -24,6 +24,13 @@ from property_scores.noise.terrain import terrain_attenuation
 
 logger = logging.getLogger(__name__)
 
+# Bump whenever the score formula, calibration, or any Lden-affecting logic
+# changes. precompute_noise.py stamps this into every cached grid row and
+# cache.py refuses to serve a cache built by a different version — so a stale
+# precompute fails safe to live-compute instead of silently shadowing the live
+# model (the overlay choropleth reads cached `score`). Keep it human-dated.
+NOISE_MODEL_VERSION = "2026-06-09-loud-end"
+
 # ML residual correction is opt-in (see noise_score). The shipped model was
 # trained on the pre-fix physics and regresses/inverts against the corrected
 # physics, so it stays off until retrained.

@@ -12,7 +12,7 @@ import time
 import numpy as np
 import pandas as pd
 
-from property_scores.noise.score import noise_score
+from property_scores.noise.score import noise_score, NOISE_MODEL_VERSION
 from property_scores.common.config import data_path
 
 REGIONS = {
@@ -69,6 +69,7 @@ def main():
                     "rail_db": r.get("rail_db"),
                     "label": r.get("label"),
                     "dominant_source": r.get("dominant_source"),
+                    "model_version": NOISE_MODEL_VERSION,
                 })
             except Exception:
                 errors += 1
@@ -77,6 +78,7 @@ def main():
                     "lng": round(float(lng), 6),
                     "score": None,
                     "estimated_db": None,
+                    "model_version": NOISE_MODEL_VERSION,
                 })
 
             done += 1

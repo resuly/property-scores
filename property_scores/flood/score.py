@@ -67,9 +67,13 @@ ENDPOINTS: dict[str, list[tuple[str, str, str]]] = {
          "flood"),
     ],
     "TAS": [
-        ("Planning Overlay (Flood)",
+        # Statewide overlay layer (14). Layer 3 is the Kingborough Interim
+        # Planning Scheme only, so the old config returned zero polygons for
+        # the entire state (Invermay 1929: 4,000 homeless, scored Low Risk).
+        # CODE_NO 12 = "Flood-prone Hazard Areas Code" (16,960 polygons).
+        ("Flood-prone Hazard Areas",
          "https://services.thelist.tas.gov.au/arcgis/rest/services"
-         "/Public/PlanningOnline/MapServer/3",
+         "/Public/PlanningOnline/MapServer/14",
          "flood"),
     ],
     "ACT": [
@@ -112,10 +116,14 @@ _jrc_signed_cache: dict[str, tuple[str, float]] = {}
 # ---------------------------------------------------------------------------
 
 def _detect_state(lat: float, lng: float) -> str | None:
-    for state, min_lat, max_lat, min_lng, max_lng in STATE_BOUNDS:
-        if min_lat <= lat <= max_lat and min_lng <= lng <= max_lng:
-            return state
-    return None
+    """Shared border-true state detection (common.au_state).
+
+    The old private overlapping-bbox copy routed southern inland NSW
+    (Albury, Wagga, Goulburn, Griffith, Cooma) into VIC, so those towns
+    were checked against the wrong state register (2026-06-11 audit).
+    """
+    from property_scores.common.au_state import detect_state
+    return detect_state(lat, lng)
 
 
 def _query_layer(url: str, lat: float, lng: float,
@@ -169,7 +177,7 @@ def _overlay_check(state: str, lat: float, lng: float) -> tuple[str | None, list
     severity_rank = {"floodway": 0, "flood": 1, "moderate": 2}
 
     for layer_name, url, severity in layers:
-        where = "O_NAME LIKE '%Flood%'" if state == "TAS" else None
+        where = "CODE_NO = 12" if state == "TAS" else None
         result = _layer_has_features(url, lat, lng, where=where)
 
         if result is None:

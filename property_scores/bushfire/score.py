@@ -56,9 +56,12 @@ ENDPOINTS: dict[str, list[tuple[str, str, str]]] = {
         ("Outback",          f"{SA_PLAN_BASE}/14", "low"),
     ],
     "TAS": [
-        ("Bushfire Prone Areas",
+        # Statewide overlay layer (14); layer 3 was Kingborough-only so the
+        # whole state read "no overlay" (Fern Tree on kunanyi included).
+        # CODE_NO 13 = "Bushfire-prone Areas Code".
+        ("Bushfire-prone Areas",
          "https://services.thelist.tas.gov.au/arcgis/rest/services"
-         "/Public/PlanningOnline/MapServer/3",
+         "/Public/PlanningOnline/MapServer/14",
          "moderate"),
     ],
 }
@@ -108,20 +111,14 @@ _signed_cache: dict[str, tuple[str, float]] = {}
 # ---------------------------------------------------------------------------
 
 def _detect_state(lat: float, lng: float) -> str | None:
-    boxes = [
-        ("ACT", -35.93, -35.12, 148.76, 149.40),
-        ("VIC", -39.20, -33.98, 140.96, 149.98),
-        ("TAS", -43.65, -39.60, 143.50, 148.50),
-        ("SA",  -38.10, -25.95, 129.00, 141.00),
-        ("NSW", -37.55, -28.15, 140.99, 153.64),
-        ("QLD", -29.18, -10.05, 137.95, 153.55),
-        ("WA",  -35.13, -13.69, 112.92, 129.00),
-        ("NT",  -26.00, -10.97, 129.00, 138.00),
-    ]
-    for state, min_lat, max_lat, min_lng, max_lng in boxes:
-        if min_lat <= lat <= max_lat and min_lng <= lng <= max_lng:
-            return state
-    return None
+    """Shared border-true state detection (common.au_state).
+
+    The old private overlapping-bbox copy routed southern inland NSW
+    (Albury, Wagga, Goulburn, Griffith, Cooma) into VIC, so those towns
+    were checked against the wrong state register (2026-06-11 audit).
+    """
+    from property_scores.common.au_state import detect_state
+    return detect_state(lat, lng)
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +151,7 @@ def _check_layer(state: str, layer_name: str, url: str, severity: str,
                  lat: float, lng: float) -> tuple[str | None, str | None, bool]:
     where = None
     if state == "TAS":
-        where = "O_NAME LIKE '%ush%ire%' OR O_NAME LIKE '%Bush Fire%'"
+        where = "CODE_NO = 13"
 
     data = _query_arcgis(url, lat, lng, where=where)
     if data is None:
@@ -170,10 +167,7 @@ def _check_layer(state: str, layer_name: str, url: str, severity: str,
         return NSW_CATEGORY_MAP.get(cat, severity), cat, True
 
     if state == "TAS":
-        o_name = attrs.get("O_NAME", "")
-        if "bush" not in o_name.lower() and "fire" not in o_name.lower():
-            return None, None, True
-        return severity, o_name, True
+        return severity, attrs.get("OV_NAME") or "Bushfire-prone areas", True
 
     detail = attrs.get("ZONE_CODE") or attrs.get("classvalue") or layer_name
     return severity, str(detail), True

@@ -213,7 +213,12 @@ def _green_space_factor(db, lat: float, lng: float) -> dict | None:
         nearest = None
         poi_value = 0.0
 
-    green = lc.green_fraction(lat, lng, radius_m=500)
+    # canopy, not grass: green_fraction counts GRASS+CROP (it was written for
+    # bushfire fuel), which made a bare Hay paddock score green 1.0 vs canopy
+    # 0.008 and out-rank Dover Heights (2026-06-11 audit). Tree canopy is the
+    # honest "green outlook" signal; leafy suburbs keep their score
+    # (Warrandyte canopy 0.939).
+    green = lc.canopy_fraction(lat, lng, radius_m=500)
     if green is None:
         if not green_distances:
             return {"value": 0.0, "count": 0, "nearest_m": None, "green_pct": None}
@@ -359,8 +364,11 @@ def view_quality_score(lat: float, lng: float) -> dict:
     Returns dict with score (0-100), label, and per-factor details.
     Factors without data are excluded from the weighted average.
     """
-    # Elevation + proximity factors are coarse; round(2) gives ~1.1km grid
-    key = (round(lat, 2), round(lng, 2))
+    # round(3) = ~110 m grid. round(2) (~1.1 km) served a neighbour's whole
+    # payload: a house 96 m from the ocean showed "Ocean proximity 706m"
+    # (2026-06-11 audit, prod md5-identical across two addresses 1.06 km apart).
+    # Ocean-proximity bands are 200 m wide, so the cache cell must be smaller.
+    key = (round(lat, 3), round(lng, 3))
     now = _time.time()
     if key in _vq_cache:
         cached, ts = _vq_cache[key]

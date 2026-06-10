@@ -38,10 +38,14 @@ STATE_BOUNDS: list[tuple[str, float, float, float, float]] = [
 
 
 def _detect_state(lat: float, lng: float) -> str | None:
-    for state, min_lat, max_lat, min_lng, max_lng in STATE_BOUNDS:
-        if min_lat <= lat <= max_lat and min_lng <= lng <= max_lng:
-            return state
-    return None
+    """Shared border-true state detection (common.au_state).
+
+    The old private overlapping-bbox copy routed southern inland NSW
+    (Albury, Wagga, Goulburn, Griffith, Cooma) into VIC, so those towns
+    were checked against the wrong state register (2026-06-11 audit).
+    """
+    from property_scores.common.au_state import detect_state
+    return detect_state(lat, lng)
 
 
 # ---------------------------------------------------------------------------

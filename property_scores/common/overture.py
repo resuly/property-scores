@@ -390,6 +390,43 @@ def water_crossings(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
     return {targets[i][0] for i in hit}
 
 
+AMENITIES_FILE = "au_osm_amenities.parquet"
+
+
+def osm_amenities_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
+                       radius_m: int = 1500, *, source: str | None = None) -> list[tuple]:
+    """OSM public amenities near a point: same 5-tuple shape as the POI stream.
+
+    playground / dog_park / swimming_pool / beach from OSM polygons+nodes
+    (scripts/build_osm_amenities.py); Overture's commercial POI recall on
+    public infrastructure is 26-44% holes (2026-06-11 audit, Brunswick Baths
+    front door read "not found within 1.5km"). Categories already map via
+    CATEGORY_MAP. Returns [] when the parquet is absent.
+    """
+    path = source or data_path(AMENITIES_FILE)
+    import os
+    if not os.path.exists(str(path)):
+        return []
+    import math
+    m_per_deg = 111_320 * math.cos(math.radians(lat))
+    dlat = radius_m / 111_320
+    dlng = radius_m / m_per_deg
+    sql = f"""
+        SELECT category, dist_m, lng, lat, name
+        FROM (
+            SELECT category, name, lng, lat,
+                   sqrt(pow((lng - {lng}) * {m_per_deg}, 2)
+                        + pow((lat - {lat}) * 111320, 2)) AS dist_m
+            FROM read_parquet('{path}')
+            WHERE lat BETWEEN {lat - dlat} AND {lat + dlat}
+              AND lng BETWEEN {lng - dlng} AND {lng + dlng}
+        )
+        WHERE dist_m < {radius_m}
+        ORDER BY dist_m
+    """
+    return db.sql(sql).fetchall()
+
+
 RAIL_STOPS_FILE = "au_rail_stops.parquet"
 
 

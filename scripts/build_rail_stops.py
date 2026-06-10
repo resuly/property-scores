@@ -23,6 +23,13 @@ SOURCES = {
     "tas": "https://www.transport.tas.gov.au/__data/assets/file/0011/557615/tas_gtfs.zip",
 }
 
+def _dict_reader(f):
+    """DictReader with stripped header names (Transperth ships ' stop_id')."""
+    rdr = csv.DictReader(io.TextIOWrapper(f, encoding="utf-8-sig"))
+    rdr.fieldnames = [fn.strip() for fn in rdr.fieldnames or []]
+    return rdr
+
+
 RAIL_TYPES = {0, 1, 2}  # tram, metro, train
 
 
@@ -36,8 +43,7 @@ def _read_stops(zf, state):
 
     for sf in stop_files:
         with zf.open(sf) as f:
-            reader = csv.DictReader(io.TextIOWrapper(f, encoding="utf-8-sig"))
-            for row in reader:
+            for row in _dict_reader(f):
                 try:
                     lat = float(row.get("stop_lat", 0))
                     lng = float(row.get("stop_lon", 0))
@@ -79,7 +85,7 @@ def _filter_rail_stops(stops, zf, state):
     rail_route_ids = set()
     for rf in routes_files:
         with zf.open(rf) as f:
-            for row in csv.DictReader(io.TextIOWrapper(f, encoding="utf-8-sig")):
+            for row in _dict_reader(f):
                 rt = int(row.get("route_type", -1))
                 if rt in RAIL_TYPES:
                     rail_route_ids.add(row["route_id"])
@@ -90,14 +96,14 @@ def _filter_rail_stops(stops, zf, state):
     rail_trip_ids = set()
     for tf in trips_files:
         with zf.open(tf) as f:
-            for row in csv.DictReader(io.TextIOWrapper(f, encoding="utf-8-sig")):
+            for row in _dict_reader(f):
                 if row.get("route_id") in rail_route_ids:
                     rail_trip_ids.add(row["trip_id"])
 
     rail_stop_ids = set()
     for stf in stop_times_files:
         with zf.open(stf) as f:
-            for row in csv.DictReader(io.TextIOWrapper(f, encoding="utf-8-sig")):
+            for row in _dict_reader(f):
                 if row.get("trip_id") in rail_trip_ids:
                     rail_stop_ids.add(row["stop_id"])
 
@@ -144,6 +150,8 @@ def main():
             deduped.append(s)
 
     print(f"\nTotal: {len(all_stops)} raw, {len(deduped)} after dedup", file=sys.stderr)
+    if not deduped:
+        sys.exit("no stops extracted, refusing to overwrite the parquet (2026-06-11 guard)")
 
     import duckdb, pyarrow as pa
     db = duckdb.connect()

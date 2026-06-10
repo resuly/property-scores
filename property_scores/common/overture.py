@@ -352,6 +352,43 @@ def pois_near_detailed(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
 
 
 BUS_STOPS_FILE = "au_bus_stops.parquet"
+RAIL_STOPS_FILE = "au_rail_stops.parquet"
+
+
+def rail_stops_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
+                    radius_m: int = 1500, *, source: str | None = None) -> list[tuple]:
+    """GTFS rail/metro/tram stations near a point: same 5-tuple shape.
+
+    GTFS only contains stops with CURRENT service, so this kills both failure
+    modes of the Overture train POIs at once (2026-06-11 audit): Perth's
+    Morley-Ellenbrook line (opened 2024) was missing, while Newcastle
+    stations closed in 2014 still served as "nearest train". category is
+    "train_station" so rows merge straight into the POI stream.
+    """
+    path = source or data_path(RAIL_STOPS_FILE)
+    import os
+    if not os.path.exists(str(path)):
+        return []
+    import math
+    m_per_deg = 111_320 * math.cos(math.radians(lat))
+    dlat = radius_m / 111_320
+    dlng = radius_m / m_per_deg
+    sql = f"""
+        SELECT 'train_station' AS category, dist_m, lng, lat, stop_name AS name
+        FROM (
+            SELECT stop_name, lng, lat,
+                   sqrt(pow((lng - {lng}) * {m_per_deg}, 2)
+                        + pow((lat - {lat}) * 111320, 2)) AS dist_m
+            FROM read_parquet('{path}')
+            WHERE lat BETWEEN {lat - dlat} AND {lat + dlat}
+              AND lng BETWEEN {lng - dlng} AND {lng + dlng}
+        )
+        WHERE dist_m < {radius_m}
+        ORDER BY dist_m
+    """
+    return db.sql(sql).fetchall()
+
+
 SPORTS_FIELDS_FILE = "au_sports_fields.parquet"
 
 

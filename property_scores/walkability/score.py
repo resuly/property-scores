@@ -12,8 +12,8 @@ or OSRM) can be substituted for higher accuracy.
 import math
 
 from property_scores.common.overture import (get_db, pois_near, pois_near_detailed,
-                                              roads_near, sports_fields_near,
-                                              transit_stops_near)
+                                              rail_stops_near, roads_near,
+                                              sports_fields_near, transit_stops_near)
 
 # Exact Overture category → walkability scenario mapping.
 # Keys are exact Overture category strings; values are (scenario, sub_type).
@@ -294,6 +294,13 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
         # OSM leisure polygons: council ovals are polygons, not commercial
         # POIs, so Overture misses most of them ("no sports ovals near us").
         pois_full = pois_full + sports_fields_near(db, lat, lng, radius_m)
+        # Train stations come from GTFS EXCLUSIVELY: Overture both misses
+        # whole new lines (Perth Morley-Ellenbrook 2024) and keeps stations
+        # closed in 2014 (Newcastle) as "open", so its rail categories are
+        # dropped before the GTFS stations are merged in.
+        _ghost_train = {"train_station", "railway_station", "subway_station"}
+        pois_full = [p for p in pois_full if p[0] not in _ghost_train]
+        pois_full = pois_full + rail_stops_near(db, lat, lng, radius_m)
         pois = [(cat, dist) for cat, dist, *_ in pois_full]
         detailed = True
 

@@ -538,6 +538,25 @@ def _hand_local_proxy(lat: float, lng: float) -> dict | None:
 # Main scoring function
 # ---------------------------------------------------------------------------
 
+def _hand_discounted_jrc(jrc_score: int | None, hand: dict | None) -> int | None:
+    """Blend the JRC score toward neutral (95) as HAND rises through 10-20 m.
+
+    Physics gate on classification evidence: a point 20 m+ above its drainage
+    cannot flood from the water JRC sees nearby (or falsely sees in dark forest
+    and terrain shadow). Guards reused from the HAND boost branch: uncertain
+    DEM relief and the coastal 0 m drainage artefact leave JRC untouched, so
+    genuine floodplains (hand < 10 m) keep the full satellite evidence.
+    """
+    if jrc_score is None or not hand:
+        return jrc_score
+    if hand.get("uncertain", False) or hand.get("drainage_elev_m", 0) <= 1.0:
+        return jrc_score
+    w = max(0.0, min(1.0, (hand["hand_m"] - 10.0) / 10.0))
+    if w <= 0.0:
+        return jrc_score
+    return round(jrc_score * (1.0 - w) + 95 * w)
+
+
 def flood_score(lat: float, lng: float) -> dict:
     """Compute flood risk score for a coordinate.
 
@@ -584,7 +603,15 @@ def flood_score(lat: float, lng: float) -> dict:
     p95 = _query_p95(lat, lng)
 
     # --- Combine ---
-    # Overlay + JRC determine base risk; HAND modifies it
+    # Overlay + JRC determine base risk; HAND modifies it.
+    # JRC water occurrence is satellite classification, not physics: dense dark
+    # forest and terrain shadow read as "water" (North Wahroonga hilltop: 49 wet
+    # cells at hand 51.9 m scored 65 "Moderate"). When the point sits well above
+    # any real drainage, surface flooding is physically impossible, so JRC
+    # proximity loses its evidentiary standing: discounted from 10 m HAND,
+    # fully neutral at 20 m+. Official overlays are NOT discounted (overland
+    # flow paths can flag genuinely hilly lots).
+    jrc_score = _hand_discounted_jrc(jrc_score, hand)
     base_scores = [s for s in (overlay_score, jrc_score) if s is not None]
     if base_scores:
         score = min(base_scores)

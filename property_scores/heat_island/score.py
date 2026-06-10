@@ -268,8 +268,25 @@ def heat_island_score(lat: float, lng: float) -> dict:
     building_density = f_density.result()
     greenspace = f_green.result()
 
+    # MODIS is water-masked (sea pixels are fill), so a coastal or
+    # forest-edge point compares against only the sea-breeze/forest-cooled
+    # land pixels left in its 5x5 ring: Bondi rendered "+1.9C compared with
+    # surrounding area" and took a 3x penalty for being on the beach
+    # (2026-06-11 audit). When >30% of the 500m surrounds are water or tree,
+    # the UHI comparison is not like-for-like; skip it.
+    uhi_context_ok = True
+    try:
+        from property_scores.common import landcover as _lc
+        _fr = _lc.fractions(lat, lng, radius_m=500)
+        if _fr and (_fr.get(80, 0.0) + _fr.get(10, 0.0)) > 0.30:
+            uhi_context_ok = False  # 80=water, 10=tree (ESA WorldCover)
+    except Exception:
+        pass
+
+    source = None
     if modis and modis["point_lst_c"] > 0:
         # MODIS-based scoring: use actual surface temperature
+        source = "modis"
         lst = modis["point_lst_c"]
         uhi = modis["uhi_delta_c"]
 
@@ -277,15 +294,19 @@ def heat_island_score(lat: float, lng: float) -> dict:
         temp_score = max(0.0, min(100.0, (TEMP_HOT - lst) / (TEMP_HOT - TEMP_COOL) * 100))
 
         # UHI penalty: hotter than surroundings = urban heat island
-        uhi_penalty = max(0, uhi) * 3
+        uhi_penalty = max(0, uhi) * 3 if uhi_context_ok else 0
 
         # Night heat retention penalty: high nighttime temp = poor cooling
         if modis.get("night_lst_c") is not None and modis["night_lst_c"] > 18:
             night_penalty = min((modis["night_lst_c"] - 18) * 1.5, 10)
             uhi_penalty += night_penalty
     elif mean_temp is not None:
-        # ERA5 fallback
-        effective_temp = mean_temp * 0.4 + p90_temp * 0.6
+        # ERA5 fallback measures AIR temperature, 5-10C below summer surface
+        # LST; applying the LST scale to it silently collapsed everything to
+        # "Moderate Heat" (Penrith 2 -> 46 when MODIS dropped out). Apply a
+        # documented air->LST offset and mark the payload low-confidence.
+        source = "era5"
+        effective_temp = mean_temp * 0.4 + p90_temp * 0.6 + 6.0
         temp_score = max(0.0, min(100.0, (TEMP_HOT - effective_temp) / (TEMP_HOT - TEMP_COOL) * 100))
         uhi_penalty = 0
     else:
@@ -318,12 +339,21 @@ def heat_island_score(lat: float, lng: float) -> dict:
         "disclaimer": "Based on satellite surface temperature (1km resolution) and ERA5 climate data. Block-level variations may differ significantly.",
     }
 
+    result["source"] = source
+    if source == "era5":
+        result["confidence_note"] = ("Satellite surface temperature was "
+                                     "unavailable; estimated from climate "
+                                     "reanalysis (lower confidence).")
     if modis and modis.get("night_lst_c") is not None:
         result["night_lst_c"] = modis["night_lst_c"]
     if modis:
         result["modis_lst_c"] = modis["point_lst_c"]
         result["modis_area_c"] = modis["area_lst_c"]
-        result["uhi_delta_c"] = modis["uhi_delta_c"]
+        # The "+X.XC compared with surrounding area" sentence renders off
+        # this field; omit it where the neighbourhood is sea/forest and the
+        # comparison is meaningless.
+        if uhi_context_ok:
+            result["uhi_delta_c"] = modis["uhi_delta_c"]
     if mean_temp is not None:
         result["summer_mean_c"] = round(mean_temp, 1)
         result["summer_p90_c"] = round(p90_temp, 1)

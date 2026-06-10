@@ -53,17 +53,19 @@ ENDPOINTS: dict[str, list[tuple[str, str, str]]] = {
          "flood"),
     ],
     "SA": [
-        ("General Flooding",
-         "https://location.sa.gov.au/server6/rest/services"
-         "/ePlanningPublic/CurrentPDC_wmas/MapServer/16",
+        # SAPPA backend; old server6 service deleted upstream (2026-06-11).
+        # Requests to geohub need the SAPPA Referer (handled in _query_layer).
+        ("Hazards (Flooding)",
+         "https://lsa2.geohub.sa.gov.au/arcgis/rest/services"
+         "/SAPPA/PropertyPlanningAtlasV18/MapServer/141",
          "flood"),
-        ("Evidence Required",
-         "https://location.sa.gov.au/server6/rest/services"
-         "/ePlanningPublic/CurrentPDC_wmas/MapServer/17",
+        ("Hazards (Flooding - General)",
+         "https://lsa2.geohub.sa.gov.au/arcgis/rest/services"
+         "/SAPPA/PropertyPlanningAtlasV18/MapServer/372",
          "moderate"),
         ("Coastal Flooding",
-         "https://location.sa.gov.au/server6/rest/services"
-         "/ePlanningPublic/CurrentPDC_wmas/MapServer/51",
+         "https://lsa2.geohub.sa.gov.au/arcgis/rest/services"
+         "/SAPPA/PropertyPlanningAtlasV18/MapServer/367",
          "flood"),
     ],
     "TAS": [
@@ -144,7 +146,10 @@ def _query_layer(url: str, lat: float, lng: float,
         params["where"] = where
 
     try:
-        resp = requests.get(f"{url}/query", params=params, timeout=TIMEOUT)
+        headers = ({"Referer": "https://sappa.plan.sa.gov.au/"}
+                   if "geohub.sa.gov.au" in url else None)
+        resp = requests.get(f"{url}/query", params=params, timeout=TIMEOUT,
+                            headers=headers)
         resp.raise_for_status()
         return resp.json()
     except (requests.RequestException, ValueError):

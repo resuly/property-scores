@@ -37,16 +37,40 @@
     "active": true
   },
   {
-    "name": "SA bushfire Stirling known-positive (activate after PlanSA successor wired)",
-    "url": "PENDING-RECON",
+    "name": "SA bushfire Cleland NP edge known-positive (SAPPA V18)",
+    "url": "https://lsa2.geohub.sa.gov.au/arcgis/rest/services/SAPPA/PropertyPlanningAtlasV18/MapServer/135/query?geometry=138.6890,-34.9870&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&returnCountOnly=true&f=json",
     "assert": "count>0",
-    "active": false,
-    "note": "old CurrentPDC_wmas deleted upstream; recon agent finding successor"
+    "active": true,
+    "note": "version-pinned service; if 404s, list SAPPA folder for newer V{N}",
+    "headers": {
+      "Referer": "https://sappa.plan.sa.gov.au/"
+    }
   },
   {
-    "name": "NSW fire history reaches Black Summer (activate after NPWS source wired)",
-    "url": "PENDING-RECON",
-    "assert": "max:YEAROFFIRE>=2019",
-    "active": false
+    "name": "NSW fire history reaches Black Summer (NPWS, Bilpin)",
+    "url": "https://mapprod3.environment.nsw.gov.au/arcgis/rest/services/Fire/NPWS_Fire_History/MapServer/0/query?geometry=150.5320,-33.4990&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&where=FireType+%3D+1&outFields=FireYear&returnGeometry=false&f=json",
+    "assert": "max:FireYear>=201920",
+    "active": true
+  },
+  {
+    "name": "SA flood Mile End known-positive (SAPPA V18)",
+    "url": "https://lsa2.geohub.sa.gov.au/arcgis/rest/services/SAPPA/PropertyPlanningAtlasV18/MapServer/141/query?geometry=138.5640,-34.9330&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&returnCountOnly=true&f=json",
+    "headers": {
+      "Referer": "https://sappa.plan.sa.gov.au/"
+    },
+    "assert": "count>0",
+    "active": true
+  },
+  {
+    "name": "QLD bushfire Tamborine known-positive (QFD BPA proxy)",
+    "url": "https://utility.arcgis.com/usrsvcs/servers/8ac1ba8eccee472fbd0e7a57bf3ad320/rest/services/Hosted/BPA/FeatureServer/0/query?geometry=153.20378,-27.97564&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&returnCountOnly=true&f=json",
+    "assert": "count>0",
+    "active": true
+  },
+  {
+    "name": "WA contamination Bellevue known-positive (DWER register)",
+    "url": "https://public-services.slip.wa.gov.au/public/rest/services/SLIP_Public_Services/Environment/MapServer/5/query?geometry=116.02581,-31.91002&geometryType=esriGeometryPoint&inSR=4326&distance=300&units=esriSRUnit_Meter&spatialRel=esriSpatialRelIntersects&returnCountOnly=true&f=json",
+    "assert": "count>0",
+    "active": true
   }
 ]

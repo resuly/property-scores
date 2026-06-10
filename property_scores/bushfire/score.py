@@ -26,10 +26,15 @@ VIC_PLAN_BASE = (
     "/Planning/Vicplan_PlanningSchemeOverlays/MapServer"
 )
 
+# SAPPA backend (PlanSA Planning & Design Code overlays). The old server6
+# CurrentPDC_wmas was deleted upstream (HTTP 200 with an error body) and the
+# whole state silently scored on proxies for weeks (2026-06-11 audit).
+# CloudFront WAF on this host requires the SAPPA Referer header exactly.
 SA_PLAN_BASE = (
-    "https://location.sa.gov.au/server6/rest/services"
-    "/ePlanningPublic/CurrentPDC_wmas/MapServer"
+    "https://lsa2.geohub.sa.gov.au/arcgis/rest/services"
+    "/SAPPA/PropertyPlanningAtlasV18/MapServer"
 )
+SA_HEADERS = {"Referer": "https://sappa.plan.sa.gov.au/"}
 
 ENDPOINTS: dict[str, list[tuple[str, str, str]]] = {
     "VIC": [
@@ -48,12 +53,14 @@ ENDPOINTS: dict[str, list[tuple[str, str, str]]] = {
          "moderate"),
     ],
     "SA": [
-        ("Urban Interface",  f"{SA_PLAN_BASE}/9",  "extreme"),
-        ("High Risk",        f"{SA_PLAN_BASE}/10", "high"),
-        ("Medium Risk",      f"{SA_PLAN_BASE}/11", "moderate"),
-        ("General Risk",     f"{SA_PLAN_BASE}/12", "low"),
-        ("Regional",         f"{SA_PLAN_BASE}/13", "low"),
-        ("Outback",          f"{SA_PLAN_BASE}/14", "low"),
+        # Official severity ordering per the Planning & Design Code: High
+        # Risk outranks Urban Interface (the old config had them inverted).
+        ("Hazards (Bushfire - High Risk)",       f"{SA_PLAN_BASE}/135", "high"),
+        ("Hazards (Bushfire - Urban Interface)", f"{SA_PLAN_BASE}/140", "moderate"),
+        ("Hazards (Bushfire - Medium Risk)",     f"{SA_PLAN_BASE}/136", "moderate"),
+        ("Hazards (Bushfire - General Risk)",    f"{SA_PLAN_BASE}/137", "low"),
+        ("Hazards (Bushfire - Regional)",        f"{SA_PLAN_BASE}/139", "low"),
+        ("Hazards (Bushfire - Outback)",         f"{SA_PLAN_BASE}/138", "low"),
     ],
     "TAS": [
         # Statewide overlay layer (14); layer 3 was Kingborough-only so the
@@ -157,7 +164,9 @@ def _query_arcgis(url: str, lat: float, lng: float,
     if where:
         params["where"] = where
     try:
-        resp = requests.get(f"{url}/query", params=params, timeout=TIMEOUT)
+        headers = SA_HEADERS if "geohub.sa.gov.au" in url else None
+        resp = requests.get(f"{url}/query", params=params, timeout=TIMEOUT,
+                            headers=headers)
         resp.raise_for_status()
         data = resp.json()
         return None if "error" in data else data

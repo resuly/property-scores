@@ -48,9 +48,12 @@ DOMAIN_ENDPOINT = {
 SLEEP_S = float(os.environ.get("TRUTH_PROBE_SLEEP", "2.5"))
 
 
-def _get(url: str, timeout: int = 120) -> dict | None:
+def _get(url: str, timeout: int = 120, headers: dict | None = None) -> dict | None:
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "truth-probe"})
+        h = {"User-Agent": "truth-probe"}
+        if headers:
+            h.update(headers)
+        req = urllib.request.Request(url, headers=h)
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.load(r)
     except Exception:
@@ -147,7 +150,7 @@ def run_canaries() -> list[dict]:
         if not c.get("active", True):
             continue
         url = c["url"]
-        data = _get(url, timeout=30)
+        data = _get(url, timeout=30, headers=c.get("headers"))
         time.sleep(1.0)
         ok, note = False, "no response"
         if data is not None:

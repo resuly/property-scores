@@ -3,7 +3,8 @@ Solar potential score using Global Solar Atlas data.
 
 Fetches GHI (Global Horizontal Irradiance) and PVOUT (photovoltaic output
 potential) from the Global Solar Atlas API, then adjusts for building
-orientation and nearby shading.
+orientation. No shading model: PVOUT is an open-horizon Solargis simulation
+(do not claim shading anywhere downstream, 2026-06-11 audit).
 """
 
 import requests
@@ -73,9 +74,12 @@ def solar_score(lat: float, lng: float, *,
     estimated_kwh = None
     if roof_area_m2:
         panel_efficiency = 0.20
-        performance_ratio = 0.80
         capacity_kwp = roof_area_m2 * panel_efficiency
-        estimated_kwh = round(capacity_kwp * pvout * orient_factor * performance_ratio)
+        # PVOUT_csi is a full PV-system simulation: Solargis already applies
+        # the performance ratio (Sydney PVOUT/GTI = 0.813). Multiplying by
+        # another 0.80 double-counted losses (-14~17% vs CEC expectations;
+        # any owner with an inverter app catches it). kWh = kWp x PVOUT.
+        estimated_kwh = round(capacity_kwp * pvout * orient_factor)
 
     if score >= 80:
         label = "Excellent Solar Potential"

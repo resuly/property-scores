@@ -94,7 +94,7 @@ def _vic_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict]:
                 })
         return sorted(results, key=lambda x: x["distance_m"])
     except (requests.RequestException, ValueError, KeyError):
-        return []
+        return None  # error must stay distinguishable from a clean register
 
 
 def _nsw_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict]:
@@ -137,7 +137,7 @@ def _nsw_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict]:
                 })
         return sorted(results, key=lambda x: x["distance_m"])
     except (requests.RequestException, ValueError, KeyError):
-        return []
+        return None  # error must stay distinguishable from a clean register
 
 
 def _wa_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict]:
@@ -147,6 +147,11 @@ def _wa_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict]:
         "/SLIP_Public_Services/Environment/MapServer/5/query"
     )
     try:
+        # returnCentroid: the DWER register is POLYGONS; geometry.x/y is
+        # never present for them, which made every one of the 6,877 records
+        # read as "Unknown / 2000m / no coords" (standing INSIDE a
+        # 'remediation required' site scored 90 Very Clean, 2026-06-11
+        # audit). Field names in this service are lowercase.
         resp = requests.get(url, params={
             "geometry": f"{lng},{lat}",
             "geometryType": "esriGeometryPoint",
@@ -156,36 +161,65 @@ def _wa_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict]:
             "units": "esriSRUnit_Meter",
             "spatialRel": "esriSpatialRelIntersects",
             "outFields": "*",
+            "returnCentroid": "true",
             "f": "json",
         }, timeout=TIMEOUT)
         if not resp.ok:
             return []
         data = resp.json()
         m_per_deg = 111_320 * math.cos(math.radians(lat))
+
+        def _inside(rings):
+            # ray cast against the outer ring: inside the register polygon
+            # means distance 0 (standing ON the contaminated site)
+            ring = rings[0]
+            n, hit = len(ring), False
+            j = n - 1
+            for i in range(n):
+                xi, yi = ring[i][0], ring[i][1]
+                xj, yj = ring[j][0], ring[j][1]
+                if (yi > lat) != (yj > lat) and                         lng < (xj - xi) * (lat - yi) / (yj - yi + 1e-12) + xi:
+                    hit = not hit
+                j = i
+            return hit
+
         results = []
         for feat in data.get("features", []):
-            a = feat.get("attributes", {})
+            a = {str(k).lower(): v for k, v in feat.get("attributes", {}).items()}
             geom = feat.get("geometry", {})
-            flng = geom.get("x") or a.get("longitude")
-            flat = geom.get("y") or a.get("latitude")
-            if flng and flat:
-                dist = math.sqrt(
-                    ((flng - lng) * m_per_deg) ** 2 +
-                    ((flat - lat) * 111320) ** 2
-                )
+            rings = geom.get("rings") or []
+            flng = geom.get("x")
+            flat_ = geom.get("y")
+            if rings:
+                if _inside(rings):
+                    dist = 0.0
+                else:
+                    dist = min(
+                        math.sqrt(((vx - lng) * m_per_deg) ** 2
+                                  + ((vy - lat) * 111320) ** 2)
+                        for vx, vy in rings[0])
+                cx = sum(v[0] for v in rings[0]) / len(rings[0])
+                cy = sum(v[1] for v in rings[0]) / len(rings[0])
+                flng, flat_ = cx, cy
+            elif flng is not None and flat_ is not None:
+                dist = math.sqrt(((flng - lng) * m_per_deg) ** 2
+                                 + ((flat_ - lat) * 111320) ** 2)
             else:
                 dist = radius_m
+            name = (a.get("sitename") or a.get("site_name")
+                    or a.get("plan_lot_number") or a.get("reg_no") or "Registered site")
             results.append({
-                "name": a.get("SITENAME", a.get("site_name", "Unknown")),
-                "issue": a.get("CLASSIFICATION", ""),
+                "name": str(name),
+                "issue": a.get("classification") or a.get("class") or "",
                 "distance_m": round(dist),
-                "lng": round(float(flng), 6) if flng else None,
-                "lat": round(float(flat), 6) if flat else None,
+                "lng": round(float(flng), 6) if flng is not None else None,
+                "lat": round(float(flat_), 6) if flat_ is not None else None,
+                "report_url": a.get("report_url"),
                 "source": "WA DWER",
             })
         return sorted(results, key=lambda x: x["distance_m"])
     except (requests.RequestException, ValueError, KeyError):
-        return []
+        return None  # error must stay distinguishable from a clean register
 
 
 # ---------------------------------------------------------------------------
@@ -260,11 +294,32 @@ def _industrial_proximity(lat: float, lng: float) -> dict:
 # Scoring
 # ---------------------------------------------------------------------------
 
+_REMEDIATED_HINTS = ("remediated", "no longer", "removed from register", "former")
+
+
 def _epa_to_score(sites: list[dict]) -> int:
-    """Convert EPA sites to a score component."""
+    """Convert EPA sites to a score component.
+
+    Severity-aware: a site whose classification says it has been REMEDIATED
+    must not score like an active "remediation required" one (Killara was
+    rated 30 off a remediated servo 301m away, same mechanism as genuinely
+    active Botany, 2026-06-11 audit). Remediated-only neighbourhoods are
+    capped at moderate concern.
+    """
     if not sites:
         return 95
 
+    def _active(st):
+        issue = str(st.get("issue", "")).lower()
+        return not any(h in issue for h in _REMEDIATED_HINTS)
+
+    active_sites = [st for st in sites if _active(st)]
+    if not active_sites:
+        # only remediated/historical records nearby
+        nearest_r = sites[0]["distance_m"]
+        return 70 if nearest_r < 250 else 85
+
+    sites = active_sites
     nearest = sites[0]["distance_m"]
     count = len(sites)
 
@@ -361,7 +416,15 @@ def contamination_score(lat: float, lng: float) -> dict:
         f_ind = pool.submit(_industrial_proximity, lat, lng)
 
     epa_sites = f_epa.result()
-    epa_score = _epa_to_score(epa_sites) if epa_sites or state in ("VIC", "NSW", "WA") else None
+    # None = the register query FAILED; [] = queried fine, nothing nearby.
+    # Conflating them turned outages into "Very Clean" and cached the lie
+    # for an hour (Keele St 10 -> 70 on a dropped connection, 2026-06-11).
+    epa_failed = epa_sites is None
+    if epa_failed:
+        epa_sites = []
+    epa_score = (_epa_to_score(epa_sites)
+                 if not epa_failed and (epa_sites or state in ("VIC", "NSW", "WA"))
+                 else None)
 
     industrial = f_ind.result()
     ind_score = _industrial_to_score(industrial)
@@ -396,12 +459,22 @@ def contamination_score(lat: float, lng: float) -> dict:
         "epa_sites": epa_sites[:10],
         "industrial": industrial,
     }
-    if not epa_sites and state not in ("VIC", "NSW", "WA"):
-        result["note"] = f"No EPA register API for {state}. Score based on industrial POI proximity only."
+    result["epa_status"] = ("error" if epa_failed
+                            else "ok" if state in ("VIC", "NSW", "WA")
+                            else "not_integrated")
+    if epa_failed:
+        result["note"] = (f"The {state} EPA register could not be reached for this "
+                          "check; the score uses industrial proximity only and may "
+                          "understate risk.")
+    elif state not in ("VIC", "NSW", "WA"):
+        result["note"] = (f"No {state} EPA register is integrated. Score based on "
+                          "industrial POI proximity only; check the state register "
+                          "directly for this address.")
 
-    _contam_cache[key] = (result, _time.time())
-    if len(_contam_cache) > _CONTAM_CACHE_MAX:
-        _contam_cache.popitem(last=False)
+    if not epa_failed:
+        _contam_cache[key] = (result, _time.time())
+        if len(_contam_cache) > _CONTAM_CACHE_MAX:
+            _contam_cache.popitem(last=False)
 
     return result
 

@@ -352,6 +352,41 @@ def pois_near_detailed(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
 
 
 BUS_STOPS_FILE = "au_bus_stops.parquet"
+SPORTS_FIELDS_FILE = "au_sports_fields.parquet"
+
+
+def sports_fields_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
+                       radius_m: int = 1500, *, source: str | None = None) -> list[tuple]:
+    """OSM leisure-polygon sports grounds near a point: same 5-tuple shape.
+
+    Council ovals are OSM leisure polygons, not commercial POIs, so Overture
+    places miss most of them. Centroids from au_sports_fields.parquet
+    (scripts/build_sports_fields.py) join the POI stream under the
+    "sports_and_recreation_venue" category (maps to the sports scenario).
+    Returns [] when the parquet is absent.
+    """
+    path = source or data_path(SPORTS_FIELDS_FILE)
+    import os
+    if not os.path.exists(str(path)):
+        return []
+    import math
+    m_per_deg = 111_320 * math.cos(math.radians(lat))
+    dlat = radius_m / 111_320
+    dlng = radius_m / m_per_deg
+    sql = f"""
+        SELECT 'sports_and_recreation_venue' AS category, dist_m, lng, lat, name
+        FROM (
+            SELECT name, lng, lat,
+                   sqrt(pow((lng - {lng}) * {m_per_deg}, 2)
+                        + pow((lat - {lat}) * 111320, 2)) AS dist_m
+            FROM read_parquet('{path}')
+            WHERE lat BETWEEN {lat - dlat} AND {lat + dlat}
+              AND lng BETWEEN {lng - dlng} AND {lng + dlng}
+        )
+        WHERE dist_m < {radius_m}
+        ORDER BY dist_m
+    """
+    return db.sql(sql).fetchall()
 
 
 def transit_stops_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,

@@ -55,3 +55,33 @@ def test_transit_stops_missing_file_graceful():
 def test_bus_stop_category_maps_to_tram_bus_scenario():
     assert _match_category("bus_stop", "Somewhere St at Other St") == "tram_bus"
     assert _match_category("tram_stop", "Stop 12") == "tram_bus"
+
+
+@pytest.fixture
+def fields_parquet(tmp_path):
+    df = pd.DataFrame([
+        {"name": "Golden Jubilee Field", "lat": -33.7041, "lng": 151.1378,
+         "leisure": "pitch", "sport": "cricket", "state": "nsw"},
+        {"name": "Far Field", "lat": -35.0, "lng": 151.0,
+         "leisure": "pitch", "sport": "", "state": "nsw"},
+    ])
+    p = tmp_path / "fields.parquet"
+    df.to_parquet(p, index=False)
+    return str(p)
+
+
+def test_sports_fields_near_finds_oval(fields_parquet):
+    from property_scores.common.overture import sports_fields_near
+    rows = sports_fields_near(get_db(), -33.7047, 151.1368, 1500, source=fields_parquet)
+    assert rows and rows[0][0] == "sports_and_recreation_venue"
+    assert rows[0][4] == "Golden Jubilee Field"
+    assert all(r[4] != "Far Field" for r in rows)
+
+
+def test_sports_fields_missing_file_graceful():
+    from property_scores.common.overture import sports_fields_near
+    assert sports_fields_near(get_db(), -33.7, 151.1, 1500, source="/tmp/nope2.parquet") == []
+
+
+def test_sports_category_maps_to_sports_scenario():
+    assert _match_category("sports_and_recreation_venue", "Golden Jubilee Field") == "sports"

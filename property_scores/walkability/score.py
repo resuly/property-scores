@@ -12,7 +12,8 @@ or OSRM) can be substituted for higher accuracy.
 import math
 
 from property_scores.common.overture import (get_db, pois_near, pois_near_detailed,
-                                              roads_near, transit_stops_near)
+                                              roads_near, sports_fields_near,
+                                              transit_stops_near)
 
 # Exact Overture category → walkability scenario mapping.
 # Keys are exact Overture category strings; values are (scenario, sub_type).
@@ -290,6 +291,9 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
         # tram_bus scenario reads official GTFS stops. Same 5-tuple shape,
         # categories bus_stop/tram_stop already map via CATEGORY_MAP.
         pois_full = pois_full + transit_stops_near(db, lat, lng, radius_m)
+        # OSM leisure polygons: council ovals are polygons, not commercial
+        # POIs, so Overture misses most of them ("no sports ovals near us").
+        pois_full = pois_full + sports_fields_near(db, lat, lng, radius_m)
         pois = [(cat, dist) for cat, dist, *_ in pois_full]
         detailed = True
 

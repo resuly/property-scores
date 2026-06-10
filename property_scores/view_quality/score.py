@@ -26,6 +26,39 @@ from property_scores.common import landcover as lc
 
 OPEN_METEO_ELEV = "https://api.open-meteo.com/v1/elevation"
 
+
+def _sample_elevations(lats: list, lngs: list) -> list | None:
+    """Batch elevations from the LOCAL dem.vrt; Open-Meteo only as fallback.
+
+    Open-Meteo's free tier 429s under our own load (four score modules share
+    the quota) and on 2026-06-11 BOTH DEM factors were silently dead in prod,
+    with scores renormalising as if terrain did not exist. The same GLO-30
+    DEM already sits on disk for the noise model, so read it locally.
+    """
+    try:
+        from property_scores.noise import raster_sample as rs
+        from property_scores.common.config import data_path
+        import os
+        dem = str(data_path("global") / "dem.vrt")
+        if os.path.exists(dem):
+            out = []
+            for la, lo in zip(lats, lngs):
+                v = rs.sample(dem, la, lo, default=float("nan"))
+                out.append(None if v != v else float(v))
+            if any(v is not None for v in out):
+                return out
+    except Exception:
+        pass
+    try:
+        resp = requests.get(OPEN_METEO_ELEV, params={
+            "latitude": ",".join(f"{x:.6f}" for x in lats),
+            "longitude": ",".join(f"{x:.6f}" for x in lngs),
+        }, timeout=10)
+        resp.raise_for_status()
+        return resp.json().get("elevation", [])
+    except (requests.RequestException, ValueError, KeyError):
+        return None
+
 OCEAN_CLASSES = {"ocean", "sea", "bay", "strait", "tidal_channel", "lagoon"}
 INLAND_WATER_CLASSES = {"lake", "river", "reservoir", "water", "stream"}
 
@@ -131,16 +164,8 @@ def _elevation_advantage_factor(lat: float, lng: float) -> dict | None:
             lats.append(lat + dlat)
             lngs.append(lng + dlng)
 
-    try:
-        resp = requests.get(OPEN_METEO_ELEV, params={
-            "latitude": ",".join(f"{x:.6f}" for x in lats),
-            "longitude": ",".join(f"{x:.6f}" for x in lngs),
-        }, timeout=10)
-        resp.raise_for_status()
-        elevations = resp.json().get("elevation", [])
-        if not elevations or len(elevations) < 17:
-            return None
-    except (requests.RequestException, ValueError, KeyError):
+    elevations = _sample_elevations(lats, lngs)
+    if not elevations or len(elevations) < 17:
         return None
 
     point_elev = elevations[0]
@@ -300,17 +325,8 @@ def _horizon_openness_factor(lat: float, lng: float) -> dict | None:
             lats.append(lat + dlat * off)
             lngs.append(lng + dlng * off * math.cos(math.radians(lat)))
 
-    try:
-        resp = requests.get(OPEN_METEO_ELEV, params={
-            "latitude": ",".join(f"{x:.6f}" for x in lats),
-            "longitude": ",".join(f"{x:.6f}" for x in lngs),
-        }, timeout=10)
-        if not resp.ok:
-            return None
-        elevs = resp.json().get("elevation", [])
-        if len(elevs) < 1 + len(dirs) * len(distances):
-            return None
-    except (requests.RequestException, ValueError):
+    elevs = _sample_elevations(lats, lngs)
+    if not elevs or len(elevs) < 1 + len(dirs) * len(distances):
         return None
 
     center_elev = elevs[0]
@@ -438,13 +454,24 @@ def view_quality_score(lat: float, lng: float) -> dict:
     else:
         label = "Obstructed Views"
 
+    # Terrain factors silently renormalising away is exactly how prod served
+    # "80 Great Views" with both DEM factors dead (Open-Meteo 429,
+    # 2026-06-11). Surface the degradation instead of hiding it.
+    missing = sorted(set(FACTORS) - set(factor_results))
+    degraded = any(f in missing for f in ("elevation_advantage", "horizon_openness"))
     result = {
         "score": score,
         "caveat": "Based on proximity to landscape features, not actual line-of-sight. Does not guarantee unobstructed views.",
         "label": label,
         "factors": factor_results,
         "active_factors": len(factor_results),
+        "missing_factors": missing,
+        "degraded": degraded,
     }
+    if degraded:
+        result["caveat"] = ("Terrain data was unavailable for this estimate; "
+                            "the score uses the remaining factors only. "
+                            + result["caveat"])
 
     _vq_cache[key] = (result, _time.time())
     if len(_vq_cache) > _VQ_CACHE_MAX:

@@ -562,8 +562,16 @@ def _hand_discounted_jrc(jrc_score: int | None, hand: dict | None) -> int | None
     """
     if jrc_score is None or not hand:
         return jrc_score
-    if hand.get("uncertain", False) or hand.get("drainage_elev_m", 0) <= 1.0:
+    if hand.get("uncertain", False):
         return jrc_score
+    if hand.get("drainage_elev_m", 0) <= 1.0:
+        # Tidal/coastal drainage: the 0m artefact guard stays for sea-level
+        # floodplains, but a clifftop well above any tide cannot flood from
+        # the water below it (Kangaroo Point: 17m AHD above the Brisbane
+        # River scored 25 High Risk, 2026-06-11 audit). 15m AHD clears any
+        # storm surge + king tide combination by an order of magnitude.
+        if (hand.get("point_elev_m") or 0) < 15.0:
+            return jrc_score
     w = max(0.0, min(1.0, (hand["hand_m"] - 10.0) / 10.0))
     if w <= 0.0:
         return jrc_score
@@ -599,6 +607,12 @@ def flood_score(lat: float, lng: float) -> dict:
         zone_penalty = min(len(hit_zones) - 1, 3) * 3
         overlay_score = max(lo, hi - zone_penalty)
     elif not ENDPOINTS.get(state):
+        overlay_score = None
+    elif state == "NSW":
+        # NSW layer 230 holds ~620 polygons across ~12 of 128 LGAs. A miss
+        # there says nothing about Windsor or Lismore (both zero in it,
+        # 2026-06-11 audit), so it cannot vouch a 90 "checked clean";
+        # JRC + HAND carry the estimate instead.
         overlay_score = None
     else:
         overlay_score = 90 if not warnings else 80
@@ -684,7 +698,7 @@ def flood_score(lat: float, lng: float) -> dict:
         "zone_count": len(hit_zones),
     }
     if jrc:
-        result_dict["jrc"] = jrc
+        result_dict["water_proximity"] = jrc
     if hand:
         result_dict["hand"] = hand
     if p95:
@@ -717,8 +731,8 @@ if __name__ == "__main__":
     print(f"State: {result.get('state', 'N/A')}")
     if result["flood_zones"]:
         print(f"Overlay zones: {', '.join(result['flood_zones'])}")
-    if result.get("jrc"):
-        jrc = result["jrc"]
+    if result.get("water_proximity"):
+        jrc = result["water_proximity"]
         print(f"JRC: max {jrc['max_occurrence_pct']}% occurrence, "
               f"{jrc['wet_cells']}/{jrc['total_cells']} wet cells, "
               f"nearest water {jrc['nearest_water_m']}m")

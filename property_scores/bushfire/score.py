@@ -151,44 +151,54 @@ def _query_arcgis(url: str, lat: float, lng: float,
 
 
 def _check_layer(state: str, layer_name: str, url: str, severity: str,
-                 lat: float, lng: float) -> tuple[str | None, str | None]:
+                 lat: float, lng: float) -> tuple[str | None, str | None, bool]:
     where = None
     if state == "TAS":
         where = "O_NAME LIKE '%ush%ire%' OR O_NAME LIKE '%Bush Fire%'"
 
     data = _query_arcgis(url, lat, lng, where=where)
-    if not data or not data.get("features"):
-        return None, None
+    if data is None:
+        # request failed: "we don't know" must never read as "officially clear"
+        return None, None, False
+    if not data.get("features"):
+        return None, None, True
 
     attrs = data["features"][0].get("attributes", {})
 
     if state == "NSW":
         cat = attrs.get("d_Category", "")
-        return NSW_CATEGORY_MAP.get(cat, severity), cat
+        return NSW_CATEGORY_MAP.get(cat, severity), cat, True
 
     if state == "TAS":
         o_name = attrs.get("O_NAME", "")
         if "bush" not in o_name.lower() and "fire" not in o_name.lower():
-            return None, None
-        return severity, o_name
+            return None, None, True
+        return severity, o_name, True
 
     detail = attrs.get("ZONE_CODE") or attrs.get("classvalue") or layer_name
-    return severity, str(detail)
+    return severity, str(detail), True
 
 
-def _overlay_check(state: str, lat: float, lng: float) -> tuple[str | None, list[str], str | None]:
-    """Returns (worst_severity, hit_zones, worst_category)."""
+def _overlay_check(state: str, lat: float, lng: float) -> tuple[str | None, list[str], str | None, bool]:
+    """Returns (worst_severity, hit_zones, worst_category, all_queried_ok).
+
+    all_queried_ok is True only when every layer responded, so a timeout can
+    never masquerade as "officially outside the mapped bushfire zones".
+    """
     layers = ENDPOINTS.get(state)
     if not layers:
-        return None, [], None
+        return None, [], None, False
 
     hits = []
     worst_severity = None
     worst_category = None
+    all_ok = True
     severity_rank = {"extreme": 0, "high": 1, "moderate": 2, "low": 3}
 
     for layer_name, url, default_severity in layers:
-        sev, detail = _check_layer(state, layer_name, url, default_severity, lat, lng)
+        sev, detail, ok = _check_layer(state, layer_name, url, default_severity, lat, lng)
+        if not ok:
+            all_ok = False
         if sev:
             hits.append(layer_name)
             if worst_severity is None or severity_rank.get(sev, 99) < severity_rank.get(worst_severity, 99):
@@ -197,7 +207,7 @@ def _overlay_check(state: str, lat: float, lng: float) -> tuple[str | None, list
             if state == "SA":
                 break
 
-    return worst_severity, hits, worst_category
+    return worst_severity, hits, worst_category, all_ok
 
 
 # ---------------------------------------------------------------------------
@@ -709,6 +719,32 @@ def _satellite_to_score(veg: dict | None, slope: dict | None,
 # Main scoring function
 # ---------------------------------------------------------------------------
 
+# Officially outside the mapped bushfire prone land: satellite fuel can pull
+# the score down to this floor (a fuel-proximity caution) but can no longer
+# call the lot High/Very High against the official determination. The NSW BPL
+# map already encodes vegetation extent rules (>1 ha contiguous hazard
+# vegetation + buffers), which is exactly what raw WorldCover fuel cannot see
+# (2026-06-10: "High bushfire risk, but outside of council fire zone").
+_OFFICIAL_CLEAR_FLOOR = 55
+
+
+def _combine_scores(overlay_score: int | None, sat_score: int | None,
+                    overlay_clear: bool) -> int:
+    """min(official, satellite), except an official all-clear floors the
+    satellite-only pessimism at _OFFICIAL_CLEAR_FLOOR."""
+    if overlay_score is not None and sat_score is not None:
+        score = min(overlay_score, sat_score)
+        if overlay_clear:
+            score = max(score, _OFFICIAL_CLEAR_FLOOR)
+    elif overlay_score is not None:
+        score = overlay_score
+    elif sat_score is not None:
+        score = sat_score
+    else:
+        score = 85
+    return max(0, min(100, score))
+
+
 def bushfire_score(lat: float, lng: float, *, quick: bool = False) -> dict:
     """Compute bushfire risk score for an Australian coordinate.
 
@@ -740,14 +776,18 @@ def bushfire_score(lat: float, lng: float, *, quick: bool = False) -> dict:
         f_slope = None if quick else pool.submit(_terrain_slope, lat, lng)
         f_fire = None if quick else pool.submit(_fire_history_local, state, lat, lng)
 
-    worst_severity, hits, worst_category = f_overlay.result()
+    worst_severity, hits, worst_category, overlay_ok = f_overlay.result()
 
     overlay_score: int | None = None
     if worst_severity:
         lo, hi = SEVERITY_SCORES[worst_severity]
         overlay_score = round((lo + hi) / 2)
-    elif ENDPOINTS.get(state):
+    elif ENDPOINTS.get(state) and overlay_ok:
         overlay_score = 90
+    # Mapped state, every layer answered, no zone hit = the official mapping
+    # says this lot is OUTSIDE bushfire prone land. A failed query never
+    # counts as clear (overlay_ok gate).
+    overlay_clear = worst_severity is None and overlay_ok and bool(ENDPOINTS.get(state))
 
     veg = f_veg.result() if f_veg else None
     slope = f_slope.result() if f_slope else None
@@ -756,16 +796,7 @@ def bushfire_score(lat: float, lng: float, *, quick: bool = False) -> dict:
     sat_score = _satellite_to_score(veg, slope, fire)
 
     # --- Combine ---
-    if overlay_score is not None and sat_score is not None:
-        score = min(overlay_score, sat_score)
-    elif overlay_score is not None:
-        score = overlay_score
-    elif sat_score is not None:
-        score = sat_score
-    else:
-        score = 85
-
-    score = max(0, min(100, score))
+    score = _combine_scores(overlay_score, sat_score, overlay_clear)
 
     if score >= 80:
         label = "Very Low Risk"
@@ -785,6 +816,11 @@ def bushfire_score(lat: float, lng: float, *, quick: bool = False) -> dict:
         "bushfire_zones": hits,
         "state": state,
         "category": worst_category,
+        # outside | in_zone | unavailable: what the OFFICIAL state mapping
+        # says, so the UI can show "Outside mapped bushfire prone land"
+        # instead of leaving a fuel-based score to speak for the government.
+        "official_zone_status": ("in_zone" if hits else
+                                 "outside" if overlay_clear else "unavailable"),
     }
     if veg:
         result["vegetation"] = veg

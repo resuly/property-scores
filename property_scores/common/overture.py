@@ -352,6 +352,44 @@ def pois_near_detailed(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
 
 
 BUS_STOPS_FILE = "au_bus_stops.parquet"
+def water_crossings(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
+                    targets: list[tuple], radius_m: int = 2000) -> set:
+    """Which targets require crossing a major water body from (lat, lng).
+
+    targets: [(key, t_lng, t_lat), ...]. Returns the set of keys whose
+    straight property->target segment intersects a river/canal/lake/ocean/
+    bay/lagoon polygon bigger than ~2 ha. Stockton was credited with
+    Newcastle CBD cafes across the Hunter River (22/25, 2026-06-11 audit);
+    a ferry is not a walk. Small ponds/pools are excluded by class+area so a
+    footbridge over a creek is not penalised.
+    """
+    water_path = data_path(WATER_FILE)
+    import os
+    if not targets or not os.path.exists(str(water_path)):
+        return set()
+    import math
+    delta = radius_m / 111_000 * 1.5
+    values = ", ".join(
+        f"({i}, {tlng}, {tlat})" for i, (_k, tlng, tlat) in enumerate(targets))
+    sql = f"""
+        SELECT DISTINCT t.idx
+        FROM (VALUES {values}) AS t(idx, tlng, tlat)
+        JOIN read_parquet('{water_path}') w
+          ON ST_Intersects(w.geometry,
+                           ST_MakeLine(ST_Point({lng}, {lat}),
+                                       ST_Point(t.tlng, t.tlat)))
+        WHERE w.bbox.xmin <= {lng + delta} AND w.bbox.xmax >= {lng - delta}
+          AND w.bbox.ymin <= {lat + delta} AND w.bbox.ymax >= {lat - delta}
+          AND w.class IN ('river', 'canal', 'lake', 'ocean', 'sea', 'bay', 'lagoon')
+          AND ST_Area(w.geometry) > 0.0000020
+    """
+    try:
+        hit = {row[0] for row in db.sql(sql).fetchall()}
+    except Exception:
+        return set()
+    return {targets[i][0] for i in hit}
+
+
 RAIL_STOPS_FILE = "au_rail_stops.parquet"
 
 

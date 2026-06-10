@@ -13,7 +13,8 @@ import math
 
 from property_scores.common.overture import (get_db, pois_near, pois_near_detailed,
                                               rail_stops_near, roads_near,
-                                              sports_fields_near, transit_stops_near)
+                                              sports_fields_near, transit_stops_near,
+                                              water_crossings)
 
 # Exact Overture category → walkability scenario mapping.
 # Keys are exact Overture category strings; values are (scenario, sub_type).
@@ -346,18 +347,24 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
                         })
                         seen_names.setdefault(matched, set()).add(norm)
 
-    def _effective_distance(poi_dist_m: float, scenario: str = "") -> float:
+    def _bearing(to_lng: float, to_lat: float) -> float:
+        return math.degrees(math.atan2(to_lng - lng, to_lat - lat)) % 360
+
+    def _effective_distance(poi_dist_m: float, scenario: str = "",
+                            poi_lng: float | None = None,
+                            poi_lat: float | None = None) -> float:
         """Check if a highway barrier lies between property and POI.
 
-        Barrier must be at 20-80% of the distance (not at the property's
-        feet or beyond the POI) to count as a genuine crossing obstacle.
+        Barrier must be at 15-85% of the distance AND, when the POI position
+        is known, within +-50 degrees of the POI's bearing. The old scalar
+        test penalised a supermarket due north for a motorway due south
+        (Hughesdale: all 11 qualifying segments at 165-210 degrees behind the
+        property; Bay Run scored 16/100 with 21 phantom barriers,
+        2026-06-11 audit).
 
         Transit destinations (train / tram / bus) sit on or across the road
         and rail corridors by nature, and crossing a main road to reach them
-        is a normal, signalised part of the walk. Applying the full errand
-        barrier penalty there is a systematic false negative (e.g. a station
-        695 m away gets pushed past the decay cutoff and zeroed out), so
-        transit is exempt from the penalty.
+        is a normal, signalised part of the walk, so transit stays exempt.
         """
         if not barrier_segments or poi_dist_m < 100:
             return poi_dist_m
@@ -365,10 +372,25 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
             return poi_dist_m
         lo = poi_dist_m * 0.15
         hi = poi_dist_m * 0.85
-        for b_dist, _, _ in barrier_segments:
-            if lo < b_dist < hi:
-                return poi_dist_m * BARRIER_PENALTY
+        poi_b = (_bearing(poi_lng, poi_lat)
+                 if poi_lng is not None and poi_lat is not None else None)
+        for b_dist, b_lng, b_lat in barrier_segments:
+            if not (lo < b_dist < hi):
+                continue
+            if poi_b is not None and b_lng is not None:
+                diff = abs((_bearing(b_lng, b_lat) - poi_b + 180) % 360 - 180)
+                if diff > 50:
+                    continue
+            return poi_dist_m * BARRIER_PENALTY
         return poi_dist_m
+
+    # Major-water crossing test for each scenario's nearest POI: a cafe
+    # across the Hunter River is not a walkable cafe. One spatial query for
+    # all scenario-nearests; crossed scenarios take the barrier penalty.
+    water_blocked: set = set()
+    targets = [(sc, d["lng"], d["lat"]) for sc, d in nearest_detail.items()]
+    if targets:
+        water_blocked = water_crossings(db, lat, lng, targets)
 
     total_weight = sum(cfg["weight"] for cfg in SCENARIO_CONFIG.values())
     weighted_sum = 0.0
@@ -379,7 +401,11 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
         weight = cfg["weight"]
         if scenario in nearest:
             raw_dist = nearest[scenario]
-            eff_dist = _effective_distance(raw_dist, scenario)
+            nd = nearest_detail.get(scenario) or {}
+            eff_dist = _effective_distance(raw_dist, scenario,
+                                           nd.get("lng"), nd.get("lat"))
+            if scenario in water_blocked:
+                eff_dist = max(eff_dist, raw_dist * BARRIER_PENALTY)
             if eff_dist > raw_dist:
                 barriers_crossed += 1
             d = _decay(eff_dist)
@@ -393,6 +419,7 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
                 "decay": round(d, 2),
                 "count": count,
                 "barrier": eff_dist > raw_dist,
+                "water_barrier": scenario in water_blocked,
                 "icon": cfg["icon"],
                 "label": cfg["label"],
                 "group": cfg["group"],

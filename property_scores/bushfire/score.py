@@ -64,6 +64,24 @@ ENDPOINTS: dict[str, list[tuple[str, str, str]]] = {
          "/Public/PlanningOnline/MapServer/14",
          "moderate"),
     ],
+    # Verified 2026-06-11 (recon agents, point probes pasted in the audit log)
+    "ACT": [
+        # Binary in/out Strategic Bushfire Management Plan BPA (ACTmapi,
+        # CC-BY). Chapman hits; 2003-firestorm Duffy core is officially
+        # outside the CURRENT BPA, which is the honest answer.
+        ("Bushfire Prone Area (ACT SBMP)",
+         "https://services1.arcgis.com/E5n4f1VY84i0xSjy/arcgis/rest/services"
+         "/SBMP_BPA_current/FeatureServer/0",
+         "high"),
+    ],
+    "QLD": [
+        # QFD Bushfire Prone Area public proxy (class attribute carries the
+        # tier; vintage July 2017 per the service, named so the UI shows it).
+        ("Bushfire Prone Area (QLD QFD 2017)",
+         "https://utility.arcgis.com/usrsvcs/servers"
+         "/8ac1ba8eccee472fbd0e7a57bf3ad320/rest/services/Hosted/BPA/FeatureServer/0",
+         "moderate"),
+    ],
 }
 
 SEVERITY_SCORES = {
@@ -168,6 +186,22 @@ def _check_layer(state: str, layer_name: str, url: str, severity: str,
 
     if state == "TAS":
         return severity, attrs.get("OV_NAME") or "Bushfire-prone areas", True
+
+    if state == "QLD":
+        cls = str(attrs.get("class") or attrs.get("CLASS") or "")
+        low = cls.lower()
+        if "very high" in low:
+            sev = "high"
+        elif "high" in low:
+            sev = "moderate"
+        elif "medium" in low:
+            sev = "moderate"
+        else:
+            sev = "low"
+        return sev, cls or layer_name, True
+
+    if state == "ACT":
+        return severity, "Bushfire Prone Area (ACT SBMP)", True
 
     detail = attrs.get("ZONE_CODE") or attrs.get("classvalue") or layer_name
     return severity, str(detail), True
@@ -485,6 +519,10 @@ def _fire_history_local(state: str | None, lat: float, lng: float) -> dict | Non
     VIC: DEECA fire_history_scar WFS (87k+ records since 1903)
     NSW: RFS Wild Fire History ArcGIS REST
     """
+    import datetime as _dt
+    window_start = _dt.date.today().year - 30  # risk window: last 30 seasons
+    recent_start = _dt.date.today().year - 10
+
     try:
         if state == "VIC":
             buf = 0.02  # ~2km
@@ -501,53 +539,73 @@ def _fire_history_local(state: str | None, lat: float, lng: float) -> dict | Non
                 return None
             data = resp.json()
             features = data.get("features", [])
-            if not features:
-                return {"seasons_with_fire": 0, "total_seasons_checked": 3,
-                        "total_burned_pixels": 0}
-            bushfires = [f for f in features
-                         if f["properties"].get("firetype") == "Bushfire"]
+            # 30-year window: the unfiltered source goes back to 1903, so a
+            # 1927+1939+1962 history capped a town at 15 while Black Summer
+            # suburbs (frozen 2017 source) showed nothing (2026-06-11 audit,
+            # perfect inversion). Old ash is not a current-risk signal.
+            seasons = sorted({f["properties"].get("season") for f in features
+                              if f["properties"].get("firetype") == "Bushfire"
+                              and (f["properties"].get("season") or 0) >= window_start})
             recent = [f for f in features
-                      if (f["properties"].get("season") or 0) >= 2015]
+                      if (f["properties"].get("season") or 0) >= recent_start]
             return {
-                "seasons_with_fire": len(set(f["properties"].get("season")
-                                             for f in bushfires if f["properties"].get("season"))),
-                "total_seasons_checked": 3,
-                "total_burned_pixels": len(features),
+                "seasons_with_fire": len(seasons),
+                "window_years": 30,
+                "last_fire_season": str(seasons[-1]) if seasons else None,
                 "total_fires": len(features),
-                "bushfires": len(bushfires),
                 "recent_fires": len(recent),
             }
 
         if state == "NSW":
+            # NPWS Fire History (wildfires + prescribed burns): includes Black
+            # Summer. The old CrownLands source froze at YEAROFFIRE=2017, so
+            # Gospers Mountain did not exist and burned-out Bilpin read
+            # "No recorded fires" (2026-06-11 audit).
             nsw_url = (
-                "https://spatial.industry.nsw.gov.au/arcgis/rest/services"
-                "/CrownLands_Bushfire/Bushfire_RFSData/MapServer/5/query"
+                "https://mapprod3.environment.nsw.gov.au/arcgis/rest/services"
+                "/Fire/NPWS_Fire_History/MapServer/0/query"
             )
             buf = 0.02
             resp = requests.get(nsw_url, params={
                 "geometry": f"{lng-buf},{lat-buf},{lng+buf},{lat+buf}",
                 "geometryType": "esriGeometryEnvelope",
                 "inSR": "4326", "outSR": "4326",
-                "outFields": "FIRENAME,YEAROFFIRE,CLASS",
+                "where": "FireType = 1",
+                "outFields": "FireName,FireYear,Label,AreaHa",
                 "returnGeometry": "false", "f": "json",
-            }, timeout=8)
+            }, timeout=10)
             if not resp.ok:
                 return None
             data = resp.json()
             features = data.get("features", [])
             if not features:
-                return {"seasons_with_fire": 0, "total_seasons_checked": 3,
-                        "total_burned_pixels": 0}
-            years = set(f["attributes"].get("YEAROFFIRE") for f in features
-                        if f["attributes"].get("YEAROFFIRE"))
-            recent = [f for f in features
-                      if (f["attributes"].get("YEAROFFIRE") or 0) >= 2015]
+                return {"seasons_with_fire": 0, "window_years": 30,
+                        "last_fire_season": None, "total_fires": 0,
+                        "recent_fires": 0}
+            def _season_start(fy):
+                # FireYear is a season code like 201920 -> 2019
+                try:
+                    fy = int(fy)
+                except (TypeError, ValueError):
+                    return None
+                return fy // 100 if fy > 99999 else fy
+
+            seasons = sorted({y for y in
+                              (_season_start(f["attributes"].get("FireYear"))
+                               for f in features)
+                              if y and y >= window_start})
+            recent = [1 for f in features
+                      if (_season_start(f["attributes"].get("FireYear")) or 0)
+                      >= recent_start]
+            labels = [f["attributes"].get("Label") for f in features
+                      if f["attributes"].get("Label")]
             return {
-                "seasons_with_fire": len(years),
-                "total_seasons_checked": 3,
-                "total_burned_pixels": len(features),
+                "seasons_with_fire": len(seasons),
+                "window_years": 30,
+                "last_fire_season": f"{seasons[-1]}-{(seasons[-1] + 1) % 100:02d}" if seasons else None,
                 "total_fires": len(features),
                 "recent_fires": len(recent),
+                "largest_label": max(labels, default=None),
             }
     except Exception as e:
         logger.debug("Local fire history failed: %s", e)

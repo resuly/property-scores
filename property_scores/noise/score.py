@@ -41,13 +41,23 @@ _AADT_ADJUST_K = float(os.environ.get("NOISE_AADT_ADJUST_K", "4.0"))
 _AADT_ADJUST_MAX_DB = 12.0   # clamp the pull-down so a tiny class-expected can't explode
 _AADT_DOM_RADIUS_M = 150     # dominant source = max AADT within this radius
 
+# Quiet-end recalibration is opt-in (NOISE_QUIET_RECAL=1). NSW's affine (fit on
+# SoundPLAN urban facades) over-reads set-back suburban homes by ~+11 dB against
+# clean Class-1 LAeq truth (NorthConnex 2026-06-10). transfer.quiet_relief pulls
+# the affine back toward the RF raw at dwelling receptors, context-gated so the
+# loud/kerbside anchor (Lake Macquarie ±1) is untouched. Read here only for the
+# cache-version suffix; the relief itself lives on the transfer path.
+_QUIET_RECAL_ENABLED = os.environ.get("NOISE_QUIET_RECAL", "0") == "1"
+
 # Bump on any scoring change. precompute_noise.py stamps this into every cached
 # grid row and cache.py refuses to serve a cache built by a different version — so
 # a stale precompute fails safe to live-compute instead of silently shadowing the
-# live model (the overlay choropleth reads cached `score`). The AADT adjustment
-# suffix only appears when the flag is ON, so enabling it invalidates the old cache
-# (forcing regen) while default-OFF keeps the existing prod cache valid.
-NOISE_MODEL_VERSION = "2026-06-09-quincunx" + ("-aadt" if _AADT_ADJUST_ENABLED else "")
+# live model (the overlay choropleth reads cached `score`). The AADT / quiet-recal
+# suffixes only appear when their flag is ON, so enabling either invalidates the
+# old cache (forcing regen) while default-OFF keeps the existing prod cache valid.
+NOISE_MODEL_VERSION = ("2026-06-09-quincunx"
+                       + ("-aadt" if _AADT_ADJUST_ENABLED else "")
+                       + ("-nswquiet" if _QUIET_RECAL_ENABLED else ""))
 
 # ML residual correction is opt-in (see noise_score). The shipped model was
 # trained on the pre-fix physics and regresses/inverts against the corrected

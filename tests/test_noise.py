@@ -186,3 +186,148 @@ def test_defence_query_handles_multipolygon():
     finally:
         aircraft._defence_loaded = False
         aircraft._defence_features = []
+
+
+# --- NSW quiet-end recalibration (transfer.quiet_relief) ---
+# Anchor facts (2026-06-10 measured_quiet_corpus): NorthConnex set-back homes
+# need the affine's add removed (raw is near-unbiased there); Lake Macquarie
+# kerbside/activity-centre sensors and the Pacific Hwy loud end must keep the
+# affine exactly. Context values below are the real corpus values.
+
+import pytest
+
+from property_scores.noise import transfer
+
+
+@pytest.fixture
+def recal_on(monkeypatch):
+    monkeypatch.setattr(transfer, "QUIET_RECAL_ENABLED", True)
+
+
+def _affine_nsw(raw):
+    return 0.8775851005604894 * raw + 16.54737125822292
+
+
+def test_relief_flag_off_is_zero():
+    assert transfer.QUIET_RECAL_ENABLED is False  # default env in the test run
+    assert transfer.quiet_relief(62.0, _affine_nsw(62.0), 0.3, 0, 20, "NSW") == 0.0
+
+
+def test_relief_other_states_zero(recal_on):
+    for st in ("VIC", "QLD", "SA", "WA", "TAS", "ACT", "NT", None):
+        assert transfer.quiet_relief(62.0, _affine_nsw(62.0), 0.3, 0, 20, st) == 0.0
+
+
+def test_relief_full_for_suburban_home(recal_on):
+    # 118A Coonanbarra Rd Wahroonga: raw 62.5, built 0.24, poi 0, bldg100 16
+    raw = 62.5
+    relief = transfer.quiet_relief(raw, _affine_nsw(raw), 0.24, 0, 16, "NSW")
+    assert relief == pytest.approx(_affine_nsw(raw) - raw)  # full add removed
+
+
+def test_relief_zero_dense_builtup(recal_on):
+    # Charlestown Square piazzas: built300 0.84/0.91 keep the urban-facade affine
+    raw = 62.6
+    assert transfer.quiet_relief(raw, _affine_nsw(raw), 0.84, 44, 6, "NSW") == 0.0
+    assert transfer.quiet_relief(raw, _affine_nsw(raw), 0.91, 116, 5, "NSW") == 0.0
+
+
+def test_relief_zero_activity_centre_poi(recal_on):
+    raw = 62.0
+    assert transfer.quiet_relief(raw, _affine_nsw(raw), 0.3, 80, 20, "NSW") == 0.0
+
+
+def test_relief_zero_loud_band(recal_on):
+    # Pacific Hwy anchors raw 70.4/71.0 (measured 77-79) stay on the affine
+    for raw in (70.0, 70.4, 71.0, 75.0):
+        assert transfer.quiet_relief(raw, _affine_nsw(raw), 0.2, 0, 20, "NSW") == 0.0
+
+
+def test_relief_zero_open_ground(recal_on):
+    # Five Islands roundabout: 0 buildings in 100m -> junction interior, no relief
+    raw = 62.1
+    assert transfer.quiet_relief(raw, _affine_nsw(raw), 0.23, 0, 0, "NSW") == 0.0
+
+
+def test_relief_band_ramp_midpoint(recal_on):
+    raw = 68.0  # halfway between 66 (full) and 70 (zero)
+    add = _affine_nsw(raw) - raw
+    relief = transfer.quiet_relief(raw, _affine_nsw(raw), 0.2, 0, 20, "NSW")
+    assert relief == pytest.approx(add * 0.5, abs=1e-9)
+
+
+def test_relief_built_ramp_midpoint(recal_on):
+    raw = 60.0
+    add = _affine_nsw(raw) - raw
+    relief = transfer.quiet_relief(raw, _affine_nsw(raw), 0.75, 0, 20, "NSW")
+    assert relief == pytest.approx(add * 0.5, abs=1e-9)
+
+
+def test_relief_poi_ramp_midpoint(recal_on):
+    raw = 60.0
+    add = _affine_nsw(raw) - raw
+    relief = transfer.quiet_relief(raw, _affine_nsw(raw), 0.2, 35, 20, "NSW")
+    assert relief == pytest.approx(add * 0.5, abs=1e-9)
+
+
+def test_relief_dwell_ramp(recal_on):
+    raw = 60.0
+    add = _affine_nsw(raw) - raw
+    relief = transfer.quiet_relief(raw, _affine_nsw(raw), 0.2, 0, 4, "NSW")
+    assert relief == pytest.approx(add * 0.5, abs=1e-9)
+
+
+def test_relief_never_lifts(recal_on):
+    # affine below raw (cannot happen in the NSW range, but guard anyway)
+    assert transfer.quiet_relief(80.0, 75.0, 0.2, 0, 20, "NSW") == 0.0
+
+
+def test_relief_monotone_in_built(recal_on):
+    raw = 60.0
+    vals = [transfer.quiet_relief(raw, _affine_nsw(raw), b, 0, 20, "NSW")
+            for b in (0.3, 0.72, 0.78, 0.85)]
+    assert vals == sorted(vals, reverse=True)
+    assert vals[0] > 0 and vals[-1] == 0.0
+
+
+def test_relief_smooth_no_cliffs(recal_on):
+    """Relief changes by <0.6 dB for small steps in any input — overlay cells
+    must transition smoothly, never flip (cache/overlay lesson, 06-09)."""
+    raw, built, poi, bldg = 62.0, 0.5, 10.0, 12.0
+    base = transfer.quiet_relief(raw, _affine_nsw(raw), built, poi, bldg, "NSW")
+    for d_raw, d_built, d_poi, d_bldg in (
+            (0.2, 0, 0, 0), (0, 0.005, 0, 0), (0, 0, 1.0, 0), (0, 0, 0, 0.4)):
+        stepped = transfer.quiet_relief(
+            raw + d_raw, _affine_nsw(raw + d_raw),
+            built + d_built, poi + d_poi, bldg + d_bldg, "NSW")
+        assert abs(stepped - base) < 0.6
+
+
+def test_relief_full_band_residential_examples(recal_on):
+    """Every exact-quality NorthConnex home context gets the FULL relief
+    (their raws 50.8-64.2 / built 0.24-0.61 / poi 0-21 / bldg100 14-36)."""
+    cases = [  # (raw, built300, poi100, bldg100)
+        (50.8, 0.32, 0, 15), (51.9, 0.39, 1, 20), (58.4, 0.25, 0, 36),
+        (61.0, 0.61, 21, 16), (61.7, 0.24, 0, 25), (62.4, 0.26, 0, 22),
+        (62.5, 0.24, 0, 16), (62.6, 0.26, 0, 14), (64.2, 0.39, 0, 15),
+    ]
+    for raw, built, poi, bldg in cases:
+        add = _affine_nsw(raw) - raw
+        relief = transfer.quiet_relief(raw, _affine_nsw(raw), built, poi, bldg, "NSW")
+        assert relief >= add * 0.8, (raw, built, poi, bldg)
+
+
+def test_quiet_recal_version_suffix():
+    """Cache guard: enabling the flag must change NOISE_MODEL_VERSION so stale
+    precompute is refused (fail-safe to live compute)."""
+    import subprocess
+    import sys as _sys
+    code = ("import os; os.environ['NOISE_QUIET_RECAL']='1'; "
+            "from property_scores.noise.score import NOISE_MODEL_VERSION; "
+            "print(NOISE_MODEL_VERSION)")
+    out = subprocess.run([_sys.executable, "-c", code], capture_output=True,
+                         text=True, timeout=120)
+    assert out.returncode == 0, out.stderr
+    assert "-nswquiet" in out.stdout
+    from property_scores.noise.score import NOISE_MODEL_VERSION
+    assert "-nswquiet" not in NOISE_MODEL_VERSION  # default-off in this process

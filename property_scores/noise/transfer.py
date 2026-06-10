@@ -21,6 +21,7 @@ once per process (load ~3 s), mirroring noise/ml_model.py.
 import json
 import logging
 import math
+import os
 import pickle
 from pathlib import Path
 
@@ -44,9 +45,64 @@ LC = str(_DATA_DIR / "global" / "lc.vrt")
 
 MIN_LDEN = 30.0
 
+# --- Quiet-end recalibration (opt-in, NOISE_QUIET_RECAL=1; NSW only) ---
+# The per-state affine was fit on SoundPLAN urban FACADE samples. Against clean
+# Class-1 LAeq truth (NorthConnex residential, 2026-06-10) it over-reads
+# set-back suburban homes by ~+11 dB, while kerbside / activity-centre sensors
+# (Lake Macquarie) genuinely need the affine's full lift: the RF raw is
+# near-unbiased at set-back homes (mean meas-raw = -1.0, n=9) but ~-8 low at
+# kerbs. One raw value cannot serve both receptor contexts, so the relief
+# removes the affine's add (back toward raw) only where every gate below says
+# "ordinary suburban dwelling", and keeps the affine elsewhere:
+#   w_band   raw <= 66 full, 0 at >= 70 -- the loud anchor (Pacific Hwy raws
+#            70.4/71.0, measured 77-79) stays exactly on the affine
+#   w_built  lc_built_300 <= 0.70 full, 0 at >= 0.80 -- dense built-up keeps
+#            the urban-facade calibration (Charlestown piazzas 0.84/0.91;
+#            NorthConnex homes are 0.21-0.61)
+#   w_poi    poi_n100 <= 25 full, 0 at >= 45 -- activity centres keep it
+#   w_dwell  bldg_n100 >= 8 full, 0 at 0 -- relief is for dwelling receptors;
+#            open-ground sensors (junction interiors, reserves: Five Islands
+#            roundabout has 0 buildings in 100m) keep the facade calibration.
+#            This is a domain constraint, not a fitted constant.
+# Every gate is a smooth ramp so adjacent overlay cells cannot flip.
+QUIET_RECAL_ENABLED = os.environ.get("NOISE_QUIET_RECAL", "0") == "1"
+QUIET_RECAL_STATES = {"NSW"}
+_RECAL_RAW_FULL = 66.0
+_RECAL_RAW_ZERO = 70.0
+_RECAL_BUILT_FULL = 0.70
+_RECAL_BUILT_ZERO = 0.80
+_RECAL_POI_FULL = 25.0
+_RECAL_POI_ZERO = 45.0
+_RECAL_DWELL_FULL = 8.0
+
 _RF = None
 _CALIB = None
 _FEATURE_KEYS = None
+
+
+def _ramp_down(x: float, full: float, zero: float) -> float:
+    """1.0 at/below `full`, 0.0 at/above `zero`, linear between."""
+    return max(0.0, min(1.0, (zero - x) / (zero - full)))
+
+
+def quiet_relief(raw: float, affine_lden: float, built300: float, poi100: float,
+                 bldg100: float, state: str | None) -> float:
+    """dB to subtract from the affine lden for set-back dwelling receptors.
+
+    0.0 when the flag is off, the state is not covered, or any context gate
+    (loud band / dense built-up / activity centre / open ground) vetoes.
+    Smooth in every input. Never lifts (affine below raw -> no relief).
+    """
+    if not QUIET_RECAL_ENABLED or state not in QUIET_RECAL_STATES:
+        return 0.0
+    add = affine_lden - raw
+    if add <= 0:
+        return 0.0
+    w = (_ramp_down(raw, _RECAL_RAW_FULL, _RECAL_RAW_ZERO)
+         * _ramp_down(built300, _RECAL_BUILT_FULL, _RECAL_BUILT_ZERO)
+         * _ramp_down(poi100, _RECAL_POI_FULL, _RECAL_POI_ZERO)
+         * max(0.0, min(1.0, bldg100 / _RECAL_DWELL_FULL)))
+    return add * w
 
 
 def _load() -> bool:
@@ -179,6 +235,8 @@ def transfer_lden(db, lat: float, lng: float, state: str | None) -> tuple[float,
     raw = float(_RF.predict(X)[0])
     cal = (_CALIB["states"].get(state) if state else None) or _CALIB["global_affine"]
     lden = cal["slope"] * raw + cal["intercept"]
+    lden -= quiet_relief(raw, lden, f["lc_built_300"], f["poi_n100"],
+                         f["bldg_n100"], state)
     return max(lden, MIN_LDEN), raw, raster_ok
 
 

@@ -11,7 +11,8 @@ or OSRM) can be substituted for higher accuracy.
 
 import math
 
-from property_scores.common.overture import get_db, pois_near, pois_near_detailed, roads_near
+from property_scores.common.overture import (get_db, pois_near, pois_near_detailed,
+                                              roads_near, transit_stops_near)
 
 # Exact Overture category → walkability scenario mapping.
 # Keys are exact Overture category strings; values are (scenario, sub_type).
@@ -284,6 +285,11 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
         detailed = False
     else:
         pois_full = pois_near_detailed(db, lat, lng, radius_m)
+        # GTFS bus/tram stops: Overture places have essentially no AU bus
+        # stops (zero within 1500 m of Turramurra's bus interchange), so the
+        # tram_bus scenario reads official GTFS stops. Same 5-tuple shape,
+        # categories bus_stop/tram_stop already map via CATEGORY_MAP.
+        pois_full = pois_full + transit_stops_near(db, lat, lng, radius_m)
         pois = [(cat, dist) for cat, dist, *_ in pois_full]
         detailed = True
 

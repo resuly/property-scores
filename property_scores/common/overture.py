@@ -349,3 +349,41 @@ def pois_near_detailed(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
         ORDER BY dist_m
     """
     return db.sql(sql).fetchall()
+
+
+BUS_STOPS_FILE = "au_bus_stops.parquet"
+
+
+def transit_stops_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
+                       radius_m: int = 1500, *, source: str | None = None) -> list[tuple]:
+    """GTFS bus/tram stops near a point: (category, dist_m, lng, lat, name).
+
+    Overture places have essentially no Australian bus stops (2026-06-10:
+    zero within 1500 m of Turramurra station's bus interchange), so the
+    walkability tram_bus scenario reads official GTFS stops from
+    au_bus_stops.parquet (scripts/build_bus_stops.py). category is
+    "bus_stop" / "tram_stop" so rows merge straight into the POI stream.
+    Returns [] when the parquet is absent (graceful pre-data deploys).
+    """
+    path = source or data_path(BUS_STOPS_FILE)
+    import os
+    if not os.path.exists(str(path)):
+        return []
+    import math
+    m_per_deg = 111_320 * math.cos(math.radians(lat))
+    dlat = radius_m / 111_320
+    dlng = radius_m / m_per_deg
+    sql = f"""
+        SELECT mode || '_stop' AS category, dist_m, lng, lat, stop_name AS name
+        FROM (
+            SELECT mode, stop_name, lng, lat,
+                   sqrt(pow((lng - {lng}) * {m_per_deg}, 2)
+                        + pow((lat - {lat}) * 111320, 2)) AS dist_m
+            FROM read_parquet('{path}')
+            WHERE lat BETWEEN {lat - dlat} AND {lat + dlat}
+              AND lng BETWEEN {lng - dlng} AND {lng + dlng}
+        )
+        WHERE dist_m < {radius_m}
+        ORDER BY dist_m
+    """
+    return db.sql(sql).fetchall()

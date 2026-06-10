@@ -1,0 +1,52 @@
+[
+  {
+    "name": "TAS flood statewide layer alive (Launceston envelope)",
+    "url": "https://services.thelist.tas.gov.au/arcgis/rest/services/Public/PlanningOnline/MapServer/14/query?where=CODE_NO+%3D+12&geometry=147.10,-41.45,147.16,-41.40&geometryType=esriGeometryEnvelope&inSR=4326&spatialRel=esriSpatialRelIntersects&returnCountOnly=true&f=json",
+    "assert": "count>0",
+    "active": true,
+    "note": "guards the 2026-06-11 wrong-layer bug class: statewide flood code must return polygons"
+  },
+  {
+    "name": "TAS bushfire Fern Tree known-positive",
+    "url": "https://services.thelist.tas.gov.au/arcgis/rest/services/Public/PlanningOnline/MapServer/14/query?where=CODE_NO+%3D+13&geometry=147.2720,-42.9210&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&returnCountOnly=true&f=json",
+    "assert": "count>0",
+    "active": true
+  },
+  {
+    "name": "NSW BPL Esk St N Wahroonga known-positive (Vegetation Buffer)",
+    "url": "https://mapprod3.environment.nsw.gov.au/arcgis/rest/services/ePlanning/Planning_Portal_Hazard/MapServer/229/query?geometry=151.136854,-33.704753&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&returnCountOnly=true&f=json",
+    "assert": "count>0",
+    "active": true
+  },
+  {
+    "name": "VIC BMO Warrandyte known-positive",
+    "url": "https://plan-gis.mapshare.vic.gov.au/arcgis/rest/services/Planning/Vicplan_PlanningSchemeOverlays/MapServer/19/query?geometry=145.214,-37.757&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&returnCountOnly=true&f=json",
+    "assert": "count>0",
+    "active": true
+  },
+  {
+    "name": "WA Bush Fire Prone Areas service known-positive (Perth hills)",
+    "url": "https://services.slip.wa.gov.au/public/rest/services/Landgate_Public_Maps/Map_of_Bush_Fire_Prone_Areas_3/MapServer/8/query?geometry=116.06,-31.80&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&returnCountOnly=true&f=json",
+    "assert": "count>0",
+    "active": true
+  },
+  {
+    "name": "NSW flood layer 230 has polygons at all (sparse 12-LGA source)",
+    "url": "https://mapprod3.environment.nsw.gov.au/arcgis/rest/services/ePlanning/Planning_Portal_Hazard/MapServer/230/query?where=1%3D1&returnCountOnly=true&f=json",
+    "assert": "count>0",
+    "active": true
+  },
+  {
+    "name": "SA bushfire Stirling known-positive (activate after PlanSA successor wired)",
+    "url": "PENDING-RECON",
+    "assert": "count>0",
+    "active": false,
+    "note": "old CurrentPDC_wmas deleted upstream; recon agent finding successor"
+  },
+  {
+    "name": "NSW fire history reaches Black Summer (activate after NPWS source wired)",
+    "url": "PENDING-RECON",
+    "assert": "max:YEAROFFIRE>=2019",
+    "active": false
+  }
+]

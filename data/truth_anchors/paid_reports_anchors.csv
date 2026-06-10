@@ -1,0 +1,13 @@
+lat,lng,expected,why
+-35.0966,147.3550,flood_mapped,"North Wagga NSW: inside Murrumbidgee floodplain behind levee, evacuated 2012 flood; Wagga council flood study maps it 1% AEP; prod /api/map/features-at returns 0 flood features -> energy report rates flooding assessed_clean"
+-35.1082,147.3598,flood_mapped,"Wagga Wagga CBD NSW: Murrumbidgee floodplain city, levee-protected, council FPA mapping exists; prod flood tiles return 0 features"
+-27.6203,152.7514,flood_mapped,"One Mile / Bremer River Ipswich QLD: catastrophically flooded 2011 + 2022, Ipswich City Plan has full Flood Overlay; prod flood tiles return 0 features (QLD patches cover Brisbane/GC/Logan etc, not Ipswich)"
+-33.6149,150.8118,flood_mapped,"Windsor NSW Hawkesbury-Nepean floodplain: flooded 2021+2022, most studied floodplain in AU; prod flood tiles return 0 features (Hawkesbury LGA not in EPI layer 230's 12 LEPs nor council patches)"
+-29.4639,149.8411,flood_mapped,"Moree NSW: Mehi River town flooded repeatedly incl 2022; prod flood tiles return 0 features"
+-32.7320,151.5550,flood_hit_control,"Maitland NSW control: prod correctly returns nsw_hazard_flood_maitland Flood Planning Area -> proves pipeline works where coverage harvested"
+-28.8135,153.2773,flood_hit_control,"Lismore CBD control: nsw_hazard_flood_lismore patch returns Flood Planning Area; NSW EPI layer 230 itself returns empty here (official REST query verified)"
+-37.87184385,145.1607629,report_matches_live_scores,"8 Moylan Rd Glen Waverley: frozen ESI seed report (gen 2026-05-30, viewed by prospects 06-02) says Noise 76 Quiet ~46 dB; live prod 8099 on 2026-06-10 says 42 Moderate 51.2 dB"
+-37.8189,145.1219,report_matches_live_scores,"902-904 Whitehorse Rd Box Hill: frozen ESI report (2026-05-25) says Noise 20 Loud Lden ~68 dB; live prod says 11 Very Loud 72.8 dB"
+-37.810326336665945,144.9908368492113,report_matches_live_scores,"576-594 Victoria Pde East Melbourne: frozen ESI (2026-05-31) says Noise 24 Loud ~80 dB; live prod says 10 Very Loud 75.2 dB; same report Walkability card says 'Car-Dependent' while its own note lists supermarket 408m school 516m station 146m GP 204m"
+-37.81161714208992,144.99291726554566,scores_assessed,"13-23 Garfield St Richmond: generated ESI (2026-05-26) shipped all 5 scores 'Not assessed'/'No mapped hit in site screen' (score service silently down); live prod returns Noise 9 Very Loud 76.3 dB and Flood 80 Low Risk -> degraded report was marked complete"
+-35.3062,139.5235,pdf_matches_page,"Tailem Bend SA energy demo: cached PDF (prod mtime May 31, 2580499 bytes, served 2026-06-10 in 4.7ms) shows 17 constraints / 3 Moderate; current JSON (rebaked Jun 7 incl 'align with real RPS PDF + honesty hardening') shows 19 constraints / 6 Moderate"

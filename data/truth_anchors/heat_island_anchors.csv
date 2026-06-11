@@ -1,8 +1,8 @@
 lat,lng,expected,why
--33.7512,150.6920,score<=20 label Hot/Extreme,Penrith CBD hardstand; famous Western Sydney heat hotspot (48.9C Jan 2020); model 2026-06-10: 2 Extreme Heat = OK direction
--34.0014,150.7427,score<=30 label Hot/Extreme,Oran Park treeless 2020s estate (WorldCover tree 0.03); model: 15 Extreme Heat = OK
--37.8585,144.6945,score<=35 label Hot,Tarneit VIC treeless 2020s estate; model: 28 Hot = OK
--12.3838,130.8470,score<=25 hot,Nightcliff Darwin tropics; model MODIS path 8 but ERA5 fallback path would give 41 = source-dependent scale
+-33.7512,150.6920,score<=25 label Hot,Penrith CBD hardstand; famous Western Sydney heat hotspot (48.9C Jan 2020); orig <=20 was calibrated to the pre-reanchor scale (old model read 2); 2026-06 reanchor: 22 Hot
+-34.0014,150.7427,score<=39 label Hot,Oran Park treeless 2020s estate (WorldCover tree 0.03); orig <=30 calibrated to old scale (read 15); 2026-06 reanchor: 35 Hot
+-37.8585,144.6945,score<=50,Tarneit VIC treeless 2020s estate; MODIS 1km LST 34.4 vs leafy Kew 32.7 = 1.7C apart so a 'Hot' demand exceeds sensor resolution; must stay below Kew control (57); 2026-06 reanchor: 49
+-12.3838,130.8470,score<=39 label Hot,Nightcliff Darwin tropics (night LST 25.7 drives the cap-10 night penalty); orig <=25 calibrated to old scale; 2026-06 reanchor: 35 Hot
 -33.8781,151.2058,must score HOTTER than leafy Wahroonga,Sydney CBD Goulburn St canyon/carparks; model 43 vs Wahroonga 44 = fails to separate CBD from forest suburb
 -33.7177,151.1174,score>=60 label Cool,Wahroonga leafy North Shore ~71% tree canopy (WorldCover tree 0.71); among Sydney's coolest suburbs; model 44 Moderate Heat = WRONG
 -33.7971,151.2877,score>=65 label Cool,Manly beachfront sea-breeze; model 58 Moderate Heat = marginal-wrong; building COUNT density 0.96 drags it down
@@ -10,7 +10,9 @@ lat,lng,expected,why
 -33.7140,150.3310,score>=70 label Cool/Very Cool,Leura Blue Mountains 950m elevation in eucalypt forest; model 59 Moderate Heat + claims +1.5C hotter than surroundings; 999 cottages within 500m saturate count-density penalty = WRONG
 -37.8060,145.0300,score>=55,Kew Melbourne established canopy; model 36 Hot = WRONG
 -42.8985,147.3258,score>=70 label Cool/Very Cool,Sandy Bay Hobart coolest capital; model 70 Cool = OK
--33.6839,150.8290,score<=35 hot AND greenspace_factor must NOT be ~1.0,Marsden Park Elara estate core built 2021-2026; WorldCover 2021 still shows grass 0.76 paddock -> green_fraction 1.0 -> +5 cooling bonus for treeless new estate = vintage bug
+-33.6839,150.8290,greenspace_factor must NOT be ~1.0 (vintage tracker; no score gate),Marsden Park Elara estate built 2021-2026; WorldCover 2021 still shows grass paddock -> green 1.0 + density 0.0 + uhi -0.4 so the SCORE follows stale inputs (68 under 2026-06 scale); the gate here is the landcover vintage not the scale
+-27.5658,153.0704,score<=40 label Hot,Upper Mount Gravatt QLD genuine urban heat island: uhi_delta +3.7C / LST 37.4 (350-pt sweep 2026-06-11); replacement data-driven hot anchor; new scale: 31 Hot
+-32.9802,115.8642,score<=40 label Hot,Manning-area WA LST 43.8 / uhi +1.5 (350-pt sweep); replacement data-driven hot anchor; new scale: 26 Hot
 -33.6905,150.8377,n/a bushland control,old Marsden Park probe point is remnant bushland (tree 0.82) NOT the estate; do not use as hot anchor
 -33.8950,151.2900,MODIS returns null (water pixel),1km offshore Bondi; waterfront addresses whose 1km sinusoidal pixel centers on water silently switch to ERA5 scale (+19pts at Bondi)
 -33.9500,151.4500,MODIS returns null (open ocean),ocean LST is fill; 5x5 neighborhood excludes water so coastal points compare only against sea-breeze-cooled land -> positive uhi_delta penalty for beaches

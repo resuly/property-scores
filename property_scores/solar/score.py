@@ -65,10 +65,12 @@ def solar_score(lat: float, lng: float, *,
     ghi = solar["ghi_kwh_m2"]
     orient_factor = ORIENTATION_FACTOR.get(orientation, 0.85)
 
-    # Score based on PVOUT relative to global range
-    # Global PVOUT range: ~600 (Nordic) to ~2400 (Sahara) kWh/kWp/year
-    # Good solar: >1600, Excellent: >2000
-    score_raw = (pvout - 600) / (2400 - 600) * 100 * orient_factor
+    # PVOUT anchors: 750 ≈ marginal viability (high-latitude Europe, where
+    # rooftop PV still pays back), 2000 ≈ best on Earth. The previous global
+    # 600-2400 range squeezed all of Australia (1350 Hobart - 1937 Alice)
+    # into 42-74: the sunniest continent had zero "Excellent" addresses
+    # (350-point sweep, 2026-06-11 re-anchor).
+    score_raw = (pvout - 750) / (2000 - 750) * 100 * orient_factor
     score = max(0, min(100, round(score_raw)))
 
     estimated_kwh = None

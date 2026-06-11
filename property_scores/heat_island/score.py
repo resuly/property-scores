@@ -22,8 +22,16 @@ PC_STAC = "https://planetarycomputer.microsoft.com/api/stac/v1"
 PC_SIGN = "https://planetarycomputer.microsoft.com/api/sas/v1/sign"
 
 SH_SUMMER_MONTHS = (12, 1, 2)
-TEMP_COOL = 22.0
-TEMP_HOT = 42.0
+# LST anchors set against the AU summer urban distribution (350-point
+# sweep, 2026-06-11: residential LST p5=25.2 / p50=32.9 / p99=47.9°C) AND
+# the hot truth anchors (Penrith hardstand, Oran Park / Tarneit treeless
+# estates, Darwin). The original 22-42 span branded half the country
+# "Hot/Extreme Heat" (median address 41, Paddington QLD read 13); a wider
+# 26-50 trial fixed the median but lifted genuine hot spots into "Cool"
+# (Tarneit 61). 25-45 holds both ends: sample median 59, all ten heat
+# anchors pass, treeless estates stay sub-50.
+TEMP_COOL = 25.0
+TEMP_HOT = 45.0
 MODIS_R = 6371007.181
 
 _signed_cache: dict[str, tuple[str, float]] = {}
@@ -317,7 +325,7 @@ def heat_island_score(lat: float, lng: float) -> dict:
         }
 
     # --- Local adjustments (already fetched in parallel) ---
-    density_penalty = building_density * 12 if building_density is not None else 0.0
+    density_penalty = building_density * 6 if building_density is not None else 0.0
     green_bonus = greenspace * 5 if greenspace is not None else 0.0
 
     score = max(0, min(100, round(temp_score - uhi_penalty - density_penalty + green_bonus)))

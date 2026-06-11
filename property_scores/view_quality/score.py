@@ -441,9 +441,12 @@ def view_quality_score(lat: float, lng: float) -> dict:
 
     score = max(0, min(100, round(weighted_sum / active_weight * 100)))
 
-    if score >= 85:
+    # Label cuts trimmed to the observed AU distribution (350-point sweep,
+    # 2026-06-11): the factor sum tops out near 83 nationally, so 85+ was
+    # effectively unreachable (0.9% of addresses).
+    if score >= 80:
         label = "Exceptional Views"
-    elif score >= 70:
+    elif score >= 68:
         label = "Great Views"
     elif score >= 55:
         label = "Good Views"

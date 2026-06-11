@@ -330,7 +330,9 @@ def heat_island_score(lat: float, lng: float) -> dict:
 
     score = max(0, min(100, round(temp_score - uhi_penalty - density_penalty + green_bonus)))
 
-    if score >= 80:
+    # Very Cool at 85 keeps the top label to ~15% of addresses (80 let 32%
+    # of the 350-point sweep in; Bo opted for the tighter cut 2026-06-11).
+    if score >= 85:
         label = "Very Cool"
     elif score >= 60:
         label = "Cool"

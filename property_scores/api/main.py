@@ -34,7 +34,7 @@ _rate_hits: dict[str, list[float]] = defaultdict(list)
 _rate_lock = Lock()
 
 
-def _check_rate(ip: str, window: int = 60, limit: int = 30) -> bool:
+def _check_rate(ip: str, window: int = 60, limit: int = 90) -> bool:
     now = time.monotonic()
     with _rate_lock:
         hits = _rate_hits[ip]

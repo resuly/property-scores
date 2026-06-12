@@ -49,6 +49,26 @@ _AADT_DOM_RADIUS_M = 150     # dominant source = max AADT within this radius
 # cache-version suffix; the relief itself lives on the transfer path.
 _QUIET_RECAL_ENABLED = os.environ.get("NOISE_QUIET_RECAL", "0") == "1"
 
+# Rail recalibration is opt-in (NOISE_RAIL_RECAL=1). The GTFS SEL rail model
+# assumes flat-ground propagation, but Sydney's suburban heavy-rail corridors
+# run in cuttings / behind noise barriers the model cannot see (and building
+# screening is scaled down for rail, so close receptors get ~none). Against
+# Class-1 LAeq truth (NorthConnex ONAR, 2026-06-11 analysis) the rail COMPONENT
+# alone exceeds the measured TOTAL at cutting-adjacent homes — a hard physical
+# bound on the over-read: 6 Duffy Ave (69 m) >= +12.9 dB, 18 Woniora Ave
+# (116 m) >= +15.4 dB. The relief subtracts a flat, capped pull-down from the
+# GTFS heavy-rail (train/vline) component in NSW only: spatially smooth (a
+# constant on one component cannot flip overlay cells), pull-down only, trams
+# and the no-GTFS fallback untouched. Default 8 dB sits well below both hard
+# bounds — deliberately conservative because the corpus has no exposed
+# at-grade/viaduct rail-side truth point to anchor the loud-rail end.
+_RAIL_RECAL_ENABLED = os.environ.get("NOISE_RAIL_RECAL", "0") == "1"
+_RAIL_RECAL_MAX_DB = 12.0  # never pull more than this, whatever the env says
+_RAIL_RECAL_DB = max(0.0, min(_RAIL_RECAL_MAX_DB,
+                              float(os.environ.get("NOISE_RAIL_RECAL_DB", "8.0"))))
+_RAIL_RECAL_STATES = {"NSW"}
+_RAIL_RECAL_TYPES = ("train", "vline")
+
 # Bump on any scoring change. precompute_noise.py stamps this into every cached
 # grid row and cache.py refuses to serve a cache built by a different version — so
 # a stale precompute fails safe to live-compute instead of silently shadowing the
@@ -57,7 +77,8 @@ _QUIET_RECAL_ENABLED = os.environ.get("NOISE_QUIET_RECAL", "0") == "1"
 # old cache (forcing regen) while default-OFF keeps the existing prod cache valid.
 NOISE_MODEL_VERSION = ("2026-06-09-quincunx"
                        + ("-aadt" if _AADT_ADJUST_ENABLED else "")
-                       + ("-nswquiet" if _QUIET_RECAL_ENABLED else ""))
+                       + ("-nswquiet" if _QUIET_RECAL_ENABLED else "")
+                       + ("-nswrail" if _RAIL_RECAL_ENABLED else ""))
 
 # ML residual correction is opt-in (see noise_score). The shipped model was
 # trained on the pre-fix physics and regresses/inverts against the corrected
@@ -390,6 +411,17 @@ def _score_label(score: int) -> str:
     return "Very Loud"
 
 
+def _rail_recal_db(rail_type: str, state: str | None) -> float:
+    """Bounded pull-down (dB) for one GTFS rail source. 0 unless the flag is on,
+    the state is covered (NSW) and the type is heavy rail (train/vline). Flat in
+    space (smooth by construction), pull-down only, capped at _RAIL_RECAL_MAX_DB."""
+    if not _RAIL_RECAL_ENABLED or state not in _RAIL_RECAL_STATES:
+        return 0.0
+    if rail_type not in _RAIL_RECAL_TYPES:
+        return 0.0
+    return _RAIL_RECAL_DB
+
+
 def _aadt_adjustment(dom_aadt: float, exp_aadt: float,
                      k: float | None = None, max_db: float | None = None) -> float:
     """Pull-down (<=0) dB for the transfer road Lden when the dominant nearby
@@ -627,6 +659,13 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
             rail_scr_factor = min(dist_m / 500, 0.6)  # 0 at 0m → 0.6 at 500m
             screening = raw_screening * rail_scr_factor
             l_db_screened = max(l_db - screening, 0.0)
+            # NSW heavy-rail recalibration (opt-in): subtract the bounded
+            # cutting/barrier pull-down at the SOURCE level so everything
+            # downstream (Lden mix, night level, facade sectors, dominant
+            # source, reported rail_db) stays self-consistent.
+            _recal = _rail_recal_db(rail_type, state)
+            if _recal > 0:
+                l_db_screened = max(l_db_screened - _recal, 0.0)
             if raw_screening > building_screening_total:
                 building_screening_total = raw_screening
             if l_db_screened <= 0:

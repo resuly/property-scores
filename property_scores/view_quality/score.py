@@ -183,7 +183,22 @@ def _elevation_advantage_factor(lat: float, lng: float) -> dict | None:
     far_median = sorted(far_valid)[len(far_valid) // 2]
     near_adv = point_elev - near_median
     far_adv = point_elev - far_median
-    advantage_m = max(near_adv, far_adv)
+
+    # Valley-rim advantage: the medians are direction-agnostic, so a ridge
+    # suburb with a deep valley on ONE side reads advantage ~0 (half the ring
+    # sits on the plateau behind). A sustained directional drop, near point
+    # already 5m below and the far point dropping further, is a credible
+    # sightline; credit the deepest such drop at a discount (2026-06-12:
+    # "uninterrupted views north over National Parks up the valley for 6km"
+    # scored as flat terrain).
+    rim_drop = 0.0
+    for ne, fe in zip(near_elevs, far_elevs):
+        if ne is None or fe is None:
+            continue
+        if point_elev - ne >= 5 and ne - fe >= 5:
+            rim_drop = max(rim_drop, point_elev - fe)
+
+    advantage_m = max(near_adv, far_adv, rim_drop * 0.8)
 
     if advantage_m >= 50:
         decay = 1.0
@@ -208,6 +223,7 @@ def _elevation_advantage_factor(lat: float, lng: float) -> dict | None:
         "near_median_m": round(near_median, 1),
         "far_median_m": round(far_median, 1),
         "advantage_m": round(advantage_m, 1),
+        "rim_drop_m": round(rim_drop, 1),
     }
 
 

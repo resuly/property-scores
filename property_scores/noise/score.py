@@ -1019,6 +1019,15 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
                            "range; this estimate is extrapolated. Verify on site.")
         ci_db += round(_quiet_w * 4.0, 1)
 
+    # The stacked worst case (quiet + no count station + NSW) reached +-14 dB,
+    # which a critic fairly read back as "a 28dB error range". The stack
+    # predates measured validation: with the quiet-end recalibration active,
+    # exactly this profile is held against Class 1 LAeq receivers
+    # (residential anchor MAE 3.78 dB, max residual 7.1), so NSW caps at
+    # +-10 dB. States without measured validation keep the full stack.
+    if _QUIET_RECAL_ENABLED and state == "NSW" and lden_source == "transfer":
+        ci_db = min(ci_db, 10.0)
+
     motor_roads = [r for r in roads if r[0] not in ("footway", "path", "steps", "cycleway", "pedestrian", "track")]
 
     result = {

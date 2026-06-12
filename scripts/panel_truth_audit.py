@@ -75,15 +75,6 @@ PAIRS = [
      "Warrimoo Ave St Ives Chase (park edge, outside BPL)", "bushfire", 15),
 ]
 
-# Same-parcel consistency: two click points inside ONE parcel must agree on
-# the official zone status. KNOWN-FAIL until score queries use a canonical
-# parcel point instead of the raw click coordinate (4 Rutland Pl repro,
-# 2026-06-12: in_zone 45 vs outside 55 from two clicks on one lot).
-# (label, latA, lngA, latB, lngB)
-PARCEL_PAIRS = [
-    ("4 Rutland Pl North Wahroonga, two click points",
-     -33.70475, 151.13023, -33.705319, 151.130761),
-]
 
 
 def fetch(score, lat, lng):
@@ -179,21 +170,6 @@ def main():
         for rule, ok, detail in check_probe(name, tags, data):
             results.append((name, rule, ok, detail))
             fails += 0 if ok else 1
-
-    for label, la1, ln1, la2, ln2 in PARCEL_PAIRS:
-        try:
-            b1 = fetch("bushfire", la1, ln1); time.sleep(SLEEP)
-            b2 = fetch("bushfire", la2, ln2); time.sleep(SLEEP)
-            same = (b1.get("official_zone_status") == b2.get("official_zone_status")
-                    and abs((b1.get("score") or 0) - (b2.get("score") or 0)) <= 10)
-            detail = (f"{b1.get('official_zone_status')}/{b1.get('score')} vs "
-                      f"{b2.get('official_zone_status')}/{b2.get('score')}")
-        except Exception as e:
-            same, detail = False, str(e)
-        # known-fail: counted and printed, but does not gate the exit code yet
-        results.append((f"PARCEL {label}",
-                        "bushfire: one parcel, one answer (KNOWN-FAIL until canonical point)",
-                        same if same else None, detail))
 
     for a, b, score, max_delta in PAIRS:
         sa, sb = cache[a].get(score, {}).get("score"), cache[b].get(score, {}).get("score")

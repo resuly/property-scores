@@ -26,23 +26,50 @@ UA = {"User-Agent": "Mozilla/5.0 (panel-truth-audit)"}
 SLEEP = 1.5
 
 # Edge-oversampled probes: polygon boundaries, terrain rims, data seams.
-# (name, lat, lng, tags) -- tags drive which rules apply.
+# Addresses are geocoded through G-NAF at runtime (hand-typed coordinates
+# measure the wrong thing, 2026-06-10 N Piazza lesson); pinned coords are
+# the fallback when geocoding is down.
+# (name, gnaf_query, fallback_lat, fallback_lng, tags)
 PROBES = [
-    ("Cliff Ave N Wahroonga (BPL buffer + valley rim)", -33.7076, 151.1306,
+    ("Cliff Ave N Wahroonga (BPL buffer + valley rim)",
+     "20 Cliff Avenue North Wahroonga", -33.7076, 151.1306,
      {"bpl_in_buffer", "valley_rim"}),
-    ("Warrimoo Ave St Ives Chase (park edge, outside BPL)", -33.7048, 151.1771,
+    ("Warrimoo Ave St Ives Chase (park edge, outside BPL)",
+     "180 Warrimoo Avenue St Ives Chase", -33.7048, 151.1771,
      {"bpl_outside", "park_edge"}),
-    ("99 Westbrook Ave N Wahroonga (hilltop)", -33.7054, 151.1372,
+    ("99 Westbrook Ave N Wahroonga (hilltop)",
+     "99 Westbrook Avenue North Wahroonga", -33.7054, 151.1372,
      {"hilltop"}),
-    ("7 Karuah Rd Turramurra (suburban control)", -33.7268, 151.1331,
+    ("7 Karuah Rd Turramurra (suburban control)",
+     "7 Karuah Road Turramurra", -33.7268, 151.1331,
      {"bpl_outside", "suburban"}),
-    ("356 Smith St Collingwood (urban loud)", -37.7989, 144.9845,
+    ("356 Smith St Collingwood (urban loud)",
+     "356 Smith Street Collingwood", -37.7989, 144.9845,
      {"urban_loud"}),
-    ("3-4 Dirlton Cres Park Orchards (VIC quiet)", -37.7800, 145.2163,
+    ("3-4 Dirlton Cres Park Orchards (VIC quiet)",
+     "3-4 Dirlton Crescent Park Orchards", -37.7800, 145.2163,
      {"vic_quiet"}),
 ]
 
-# Neighbour pairs that must not cliff: (probe_a, probe_b, score, max_delta)
+GEOCODE = "https://daleads.com.au/api/address-autocomplete?q="
+
+
+def resolve(query, fb_lat, fb_lng):
+    try:
+        import urllib.parse
+        d = json.loads(urllib.request.urlopen(urllib.request.Request(
+            GEOCODE + urllib.parse.quote(query), headers=UA), timeout=15).read())
+        hit = next((x for x in d if x.get("type") == "address"), None)
+        if hit:
+            return hit["lat"], hit["lng"]
+    except Exception:
+        pass
+    return fb_lat, fb_lng
+
+# Neighbour pairs that must not cliff: SAME interface class on both sides of
+# the official polygon edge (a bush block vs a street is a legitimate gap;
+# two park-edge homes either side of the buffer line is not).
+# (probe_a, probe_b, score, max_delta)
 PAIRS = [
     ("Cliff Ave N Wahroonga (BPL buffer + valley rim)",
      "Warrimoo Ave St Ives Chase (park edge, outside BPL)", "bushfire", 15),
@@ -50,7 +77,11 @@ PAIRS = [
 
 
 def fetch(score, lat, lng):
-    url = f"{BASE}/scores/{score}?lat={lat}&lng={lng}"
+    # noise must take the PANEL path (detail=true, fields nested under
+    # "score"): the plain path serves a reduced field set and the audit must
+    # test what the resident reads
+    extra = "&radius=500&detail=true" if score == "noise" else ""
+    url = f"{BASE}/scores/{score}?lat={lat}&lng={lng}{extra}"
     req = urllib.request.Request(url, headers=UA)
     with urllib.request.urlopen(req, timeout=60) as r:
         return json.loads(r.read())
@@ -93,18 +124,20 @@ def check_probe(name, tags, data):
             yield ("flood: 30m+ above drainage cannot be risky",
                    fl["score"] >= 70, f"score {fl['score']} at {hd}m")
 
-    if no and no.get("score") is not None:
-        ci = no.get("confidence_range_db")
+    nsc = (no or {}).get("score") if isinstance((no or {}).get("score"), dict) \
+        else no
+    if nsc and nsc.get("lden_db") is not None:
+        ci = nsc.get("confidence_range_db")
         yield ("noise: confidence band shown and sane (<=14 dB)",
                isinstance(ci, (int, float)) and 0 < ci <= 14, ci)
-        dom = no.get("dominant_source") or no.get("loudest_source")
+        dom = nsc.get("dominant_source") or nsc.get("loudest_source")
         yield ("noise: dominant source labelled", bool(dom), dom)
         if "urban_loud" in tags:
             yield ("noise: inner-city main street reads loud (>=65 Lden)",
-                   (no.get("lden") or 0) >= 65, no.get("lden"))
+                   nsc["lden_db"] >= 65, nsc["lden_db"])
         if "vic_quiet" in tags:
             yield ("noise: VIC quiet back street stays quiet (<=62 Lden)",
-                   (no.get("lden") or 99) <= 62, no.get("lden"))
+                   nsc["lden_db"] <= 62, nsc["lden_db"])
 
     if vw and vw.get("score") is not None:
         fac = (vw.get("factors") or {}).get("elevation_advantage") or {}
@@ -122,7 +155,9 @@ def main():
     scores = ["bushfire", "flood", "noise", "view-quality", "solar"]
     results, fails = [], 0
     cache = {}
-    for name, lat, lng, tags in PROBES:
+    for name, query, fb_lat, fb_lng, tags in PROBES:
+        lat, lng = resolve(query, fb_lat, fb_lng)
+        time.sleep(1.0)
         data = {}
         for s in scores:
             try:

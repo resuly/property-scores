@@ -67,11 +67,18 @@ def sample(path, lat, lng, default=np.nan):
     return float(v)
 
 
-def window_stats(path, lat, lng, radius_m, categorical=False, classes=None):
+def window_stats(path, lat, lng, radius_m, categorical=False, classes=None,
+                 cos_correct=False):
     """Window stats in a metre radius around the point.
 
     Continuous: returns {'mean','max'}. Categorical: returns {'frac_<cls>': ...}
     for the requested class codes.
+
+    cos_correct: on EPSG:4326 rasters an equal-degree window covers cos(lat)
+    less ground east-west (17% squashed in Sydney, 26% in Hobart), so callers
+    that promise a metre radius should pass True. Default stays False because
+    the noise transfer model TRAINED on the uncorrected window; correcting
+    only its inference would shift features against the training distribution.
     """
     src = _src(path)
     if src is None:
@@ -80,15 +87,22 @@ def window_stats(path, lat, lng, radius_m, categorical=False, classes=None):
     # pixel size in raster units; assume projected metres or degrees
     px = abs(src.transform.a)
     if src.crs and src.crs.to_epsg() == 4326:
-        rad = radius_m / (111_320.0)  # degrees
+        rad_row = radius_m / 111_320.0  # degrees
+        if cos_correct:
+            import math
+            rad_col = radius_m / (111_320.0 * max(math.cos(math.radians(lat)), 0.1))
+        else:
+            rad_col = rad_row
     else:
-        rad = radius_m
-    half = max(int(rad / px), 1)
+        rad_row = rad_col = radius_m
+    half_row = max(int(rad_row / px), 1)
+    half_col = max(int(rad_col / px), 1)
     try:
         row, col = src.index(x, y)
     except Exception:
         return {}
-    win = ((max(row - half, 0), row + half + 1), (max(col - half, 0), col + half + 1))
+    win = ((max(row - half_row, 0), row + half_row + 1),
+           (max(col - half_col, 0), col + half_col + 1))
     try:
         arr = src.read(1, window=win)
     except Exception:

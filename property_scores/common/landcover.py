@@ -57,7 +57,8 @@ def fractions(lat: float, lng: float, radius_m: int = 300) -> dict:
         return {}
     try:
         fr = _sampler().window_stats(LC_VRT, lat, lng, radius_m=radius_m,
-                                     categorical=True, classes=list(_ALL))
+                                     categorical=True, classes=list(_ALL),
+                                     cos_correct=True)
     except Exception:
         return {}
     if not fr:

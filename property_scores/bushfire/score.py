@@ -333,10 +333,16 @@ def landcover_grid(lat: float, lng: float, radius_m: int = 500) -> dict | None:
 
         x, y = rs._to_raster_xy(src, lat, lng)  # WorldCover is EPSG:4326 → x=lng, y=lat
         px = abs(src.transform.a)
-        half = max(int((radius_m / 111_320.0) / px), 1)
+        # Row and column half-widths separately: an equal-degree window covers
+        # cos(lat) less ground east-west, which painted as an ellipse on the
+        # map and under-covered the promised radius (Bo, 2026-06-12).
+        import math
+        half_row = max(int((radius_m / 111_320.0) / px), 1)
+        half_col = max(int((radius_m / (111_320.0 * max(
+            math.cos(math.radians(lat)), 0.1))) / px), 1)
         row, col = src.index(x, y)
-        r0, r1 = max(row - half, 0), row + half + 1
-        c0, c1 = max(col - half, 0), col + half + 1
+        r0, r1 = max(row - half_row, 0), row + half_row + 1
+        c0, c1 = max(col - half_col, 0), col + half_col + 1
         win = ((r0, r1), (c0, c1))
         arr = src.read(1, window=win)
         if arr.size == 0 or not np.any(arr > 0):
@@ -371,7 +377,8 @@ def _vegetation_fuel(lat: float, lng: float) -> dict | None:
     try:
         rs = _raster_sampler()
         frac = rs.window_stats(_LC_VRT, lat, lng, radius_m=VEG_RADIUS_M,
-                               categorical=True, classes=_LC_CLASSES)
+                               categorical=True, classes=_LC_CLASSES,
+                               cos_correct=True)
     except Exception as e:
         logger.debug("WorldCover sampling failed: %s", e)
         frac = None

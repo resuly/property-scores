@@ -8,7 +8,8 @@ timeout was indistinguishable from an official all-clear.
 from unittest import mock
 
 from property_scores.bushfire.score import (_check_layer, _combine_scores,
-                                            _OFFICIAL_CLEAR_FLOOR)
+                                            _OFFICIAL_CLEAR_FLOOR,
+                                            _SEVERITY_FLOORS)
 
 
 def test_official_clear_floors_satellite():
@@ -36,6 +37,41 @@ def test_no_data_default():
 
 def test_overlay_only():
     assert _combine_scores(22, None, False) == 22
+
+
+def test_buffer_hit_floors_at_severity_band():
+    # Anchor (2026-06-12 Simon Kean round 2, Ku-ring-gai buffer edge):
+    # "Vegetation Buffer" is the mildest official category (band 50-65) yet
+    # min(58, sat 20) scored it 20 while the lot outside the polygon floored
+    # at 55. The severity floor caps that cliff at the band floor.
+    assert _combine_scores(58, 20, False, "low") == _SEVERITY_FLOORS["low"]
+
+
+def test_severity_floor_keeps_official_order_at_polygon_edge():
+    # same satellite pessimism in-buffer vs officially outside: the step must
+    # stay one label, not Moderate-to-High
+    in_buffer = _combine_scores(58, 20, False, "low")
+    outside = _combine_scores(90, 20, True)
+    assert outside - in_buffer <= 10
+
+
+def test_severity_floor_does_not_lift_extreme():
+    # Category 1: satellite may still read below the band midpoint freely
+    assert _combine_scores(10, 8, False, "extreme") == 8
+
+
+def test_severity_floor_moderate_band():
+    assert _combine_scores(40, 12, False, "moderate") == _SEVERITY_FLOORS["moderate"]
+
+
+def test_zone_hit_without_severity_keeps_min():
+    # callers that pass no severity (or unknown severity) keep legacy min()
+    assert _combine_scores(48, 15, False, None) == 15
+
+
+def test_satellite_can_position_within_band():
+    # satellite milder than the floor: min() result above floor is untouched
+    assert _combine_scores(58, 52, False, "low") == 52
 
 
 def test_check_layer_failure_is_not_clear():

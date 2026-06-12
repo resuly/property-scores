@@ -788,15 +788,33 @@ def _satellite_to_score(veg: dict | None, slope: dict | None,
 # (2026-06-10: "High bushfire risk, but outside of council fire zone").
 _OFFICIAL_CLEAR_FLOOR = 55
 
+# In-zone floors per official severity: the official map already grades the
+# hazard, so satellite fuel may position a lot below its band midpoint but
+# must not crater the mildest categories beneath the band itself. Without
+# this, a "Vegetation Buffer" hit (officially the lightest category, band
+# 50-65) fell to min(58, sat~20) = 20 while the lot across the polygon edge
+# floored at 55: a 35-point cliff that inverts the official severity order
+# (2026-06-12: Ku-ring-gai buffer-edge, fuel 0.893 in-buffer vs 0.845 outside).
+_SEVERITY_FLOORS = {
+    "extreme": 5,
+    "high": 15,
+    "moderate": 30,
+    "low": 45,
+}
+
 
 def _combine_scores(overlay_score: int | None, sat_score: int | None,
-                    overlay_clear: bool) -> int:
+                    overlay_clear: bool,
+                    worst_severity: str | None = None) -> int:
     """min(official, satellite), except an official all-clear floors the
-    satellite-only pessimism at _OFFICIAL_CLEAR_FLOOR."""
+    satellite-only pessimism at _OFFICIAL_CLEAR_FLOOR and an official zone
+    hit floors at its severity's band floor (_SEVERITY_FLOORS)."""
     if overlay_score is not None and sat_score is not None:
         score = min(overlay_score, sat_score)
         if overlay_clear:
             score = max(score, _OFFICIAL_CLEAR_FLOOR)
+        elif worst_severity in _SEVERITY_FLOORS:
+            score = max(score, _SEVERITY_FLOORS[worst_severity])
     elif overlay_score is not None:
         score = overlay_score
     elif sat_score is not None:
@@ -857,7 +875,8 @@ def bushfire_score(lat: float, lng: float, *, quick: bool = False) -> dict:
     sat_score = _satellite_to_score(veg, slope, fire)
 
     # --- Combine ---
-    score = _combine_scores(overlay_score, sat_score, overlay_clear)
+    score = _combine_scores(overlay_score, sat_score, overlay_clear,
+                            worst_severity)
 
     if score >= 80:
         label = "Very Low Risk"

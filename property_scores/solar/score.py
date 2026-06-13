@@ -7,9 +7,25 @@ orientation. No shading model: PVOUT is an open-horizon Solargis simulation
 (do not claim shading anywhere downstream, 2026-06-11 audit).
 """
 
+import time as _time
+from collections import OrderedDict
+
 import requests
 
 GSA_API = "https://api.globalsolaratlas.info/data/lta"
+
+# Cache the GSA fetch: irradiance is an annual long-term average (time-invariant)
+# and the API has no local equivalent, so every map click was a 0.6-1.6s network
+# round trip with a 15s timeout and no graceful degrade (would 502 under load the
+# same way noise/terrain did, 2026-06-13). Keyed on a ~110m grid; mirrors the
+# heat_island cache pattern.
+_cache: "OrderedDict[tuple[float, float], tuple[dict | None, float]]" = OrderedDict()
+_CACHE_MAX = 2000
+_CACHE_TTL = 86400  # 1 day; LTA values do not change intra-day
+
+
+def _cache_key(lat: float, lng: float) -> tuple[float, float]:
+    return (round(lat, 3), round(lng, 3))
 
 # Orientation efficiency relative to optimal (north in southern hemisphere)
 ORIENTATION_FACTOR = {
@@ -21,12 +37,21 @@ ORIENTATION_FACTOR = {
 
 
 def _fetch_solar_data(lat: float, lng: float) -> dict | None:
+    key = _cache_key(lat, lng)
+    now = _time.time()
+    if key in _cache:
+        cached, ts = _cache[key]
+        if now - ts < _CACHE_TTL:
+            _cache.move_to_end(key)
+            return cached
+        del _cache[key]
+
     try:
         resp = requests.get(GSA_API, params={"loc": f"{lat},{lng}"}, timeout=15)
         resp.raise_for_status()
         data = resp.json()
         annual = data.get("annual", {}).get("data", {})
-        return {
+        result = {
             "ghi_kwh_m2": annual.get("GHI"),
             "dni_kwh_m2": annual.get("DNI"),
             "pvout_kwh_kwp": annual.get("PVOUT_csi"),
@@ -36,7 +61,12 @@ def _fetch_solar_data(lat: float, lng: float) -> dict | None:
             "elevation_m": annual.get("ELE"),
         }
     except (requests.RequestException, KeyError, ValueError):
-        return None
+        return None  # do not cache failures; a transient outage should retry
+
+    _cache[key] = (result, now)
+    if len(_cache) > _CACHE_MAX:
+        _cache.popitem(last=False)
+    return result
 
 
 def solar_score(lat: float, lng: float, *,

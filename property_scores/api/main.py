@@ -292,8 +292,9 @@ def get_noise_terrain(
     src_lat: float = Query(...), src_lng: float = Query(...),
     lat: float = Query(...), lng: float = Query(...),
 ):
-    """DEM elevation profile from a source to the receiver. Calls open-meteo
-    (~1-2s); split out from /noise/debug so the main response stays fast."""
+    """DEM elevation profile from a source to the receiver. Local Copernicus DEM
+    first, open-meteo only as out-of-coverage fallback; split out from
+    /noise/debug so the main response stays fast."""
     try:
         profile = elevation_profile(src_lat, src_lng, lat, lng)
         if not profile:

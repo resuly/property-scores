@@ -146,6 +146,9 @@ def contamination_page():
     return FileResponse(STATIC_DIR / "contamination.html")
 
 
+_BATCH_COMPONENT_TIMEOUT = 25  # seconds per score; slow/stuck upstreams degrade, not block
+
+
 @app.get("/scores")
 def get_all_scores(
     lat: float = Query(..., description="Latitude (WGS84)"),
@@ -153,19 +156,34 @@ def get_all_scores(
     source_roads: str | None = Query(None, description="Local roads parquet"),
     source_pois: str | None = Query(None, description="Local POI parquet"),
 ):
-    return {
-        "lat": lat,
-        "lng": lng,
-        "disclaimer": DISCLAIMER,
-        "noise": noise_score(lat, lng, source=source_roads),
-        "walkability": walkability_score(lat, lng, source=source_pois),
-        "solar": solar_score(lat, lng),
-        "flood": flood_score(lat, lng),
-        "bushfire": bushfire_score(lat, lng),
-        "heat_island": heat_island_score(lat, lng),
-        "view_quality": view_quality_score(lat, lng),
-        "contamination": contamination_score(lat, lng),
+    from concurrent.futures import ThreadPoolExecutor
+
+    components = {
+        "noise": lambda: noise_score(lat, lng, source=source_roads),
+        "walkability": lambda: walkability_score(lat, lng, source=source_pois),
+        "solar": lambda: solar_score(lat, lng),
+        "flood": lambda: flood_score(lat, lng),
+        "bushfire": lambda: bushfire_score(lat, lng),
+        "heat_island": lambda: heat_island_score(lat, lng),
+        "view_quality": lambda: view_quality_score(lat, lng),
+        "contamination": lambda: contamination_score(lat, lng),
+        "aircraft_noise": lambda: aircraft_noise_penalty(lat, lng),
     }
+    out = {"lat": lat, "lng": lng, "disclaimer": DISCLAIMER}
+    pool = ThreadPoolExecutor(max_workers=len(components))
+    try:
+        futures = {name: pool.submit(fn) for name, fn in components.items()}
+        deadline = time.monotonic() + _BATCH_COMPONENT_TIMEOUT
+        for name, fut in futures.items():
+            try:
+                out[name] = fut.result(timeout=max(0.1, deadline - time.monotonic()))
+            except Exception as e:
+                logger.exception("batch /scores component %s failed", name)
+                out[name] = {"error": str(e) or e.__class__.__name__}
+    finally:
+        # Don't join stragglers: a stuck upstream must not block the response.
+        pool.shutdown(wait=False, cancel_futures=True)
+    return out
 
 
 @app.get("/scores/noise")

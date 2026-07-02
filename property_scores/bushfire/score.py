@@ -487,46 +487,47 @@ def _terrain_slope(lat: float, lng: float) -> dict | None:
     url, field = endpoint_info
     buf = 0.003  # ~330m
     env = f"{lng-buf},{lat-buf},{lng+buf},{lat+buf}"
-    try:
-        resp = requests.get(url, params={
-            "geometry": env,
-            "geometryType": "esriGeometryEnvelope",
-            "inSR": "4326", "outSR": "4326",
-            "outFields": field,
-            "returnGeometry": "false",
-            "f": "json",
-        }, timeout=5)
-        if not resp.ok:
-            return _terrain_slope_fallback(lat, lng)
-        data = resp.json()
-        features = data.get("features", [])
-        if not features:
-            return _terrain_slope_fallback(lat, lng)
-
-        elevations = []
-        for f in features:
-            val = f.get("attributes", {}).get(field)
-            if val is not None:
-                elevations.append(float(val))
-
-        if len(elevations) < 2:
-            return {"slope_deg": 0.0, "mean_slope_deg": 0.0,
-                    "max_slope_deg": 0.0, "elevation_m": round(elevations[0]) if elevations else 0}
-
-        elev_range = max(elevations) - min(elevations)
-        distance_m = buf * 2 * 111320
-        mean_slope = math.degrees(math.atan(elev_range / distance_m))
-        avg_elev = sum(elevations) / len(elevations)
-
-        return {
-            "slope_deg": round(mean_slope, 1),
-            "mean_slope_deg": round(mean_slope, 1),
-            "max_slope_deg": round(mean_slope * 1.5, 1),
-            "elevation_m": round(avg_elev),
-        }
-    except Exception as e:
-        logger.debug("State contour query failed: %s", e)
+    params = {
+        "geometry": env,
+        "geometryType": "esriGeometryEnvelope",
+        "inSR": "4326", "outSR": "4326",
+        "outFields": field,
+        "returnGeometry": "false",
+        "f": "json",
+    }
+    # Government contour endpoints are slow and intermittent (~50% timeouts at
+    # 5s from prod). Retry once at a longer timeout so states WITH contour data
+    # resolve to a measured slope instead of falling through to not_assessed.
+    data = None
+    for _attempt in range(2):
+        try:
+            resp = requests.get(url, params=params, timeout=12)
+            if resp.ok:
+                data = resp.json()
+                break
+        except requests.RequestException as e:
+            logger.debug("State contour query failed: %s", e)
+    if not data:
         return _terrain_slope_fallback(lat, lng)
+
+    features = data.get("features", [])
+    elevations = [float(v) for f in features
+                  if (v := f.get("attributes", {}).get(field)) is not None]
+    if len(elevations) < 2:
+        # Too few contour points to derive slope: not measured, so fall through
+        # to not_assessed rather than reporting a fake flat 0.
+        return _terrain_slope_fallback(lat, lng)
+
+    elev_range = max(elevations) - min(elevations)
+    distance_m = buf * 2 * 111320
+    mean_slope = math.degrees(math.atan(elev_range / distance_m))
+    avg_elev = sum(elevations) / len(elevations)
+    return {
+        "slope_deg": round(mean_slope, 1),
+        "mean_slope_deg": round(mean_slope, 1),
+        "max_slope_deg": round(mean_slope * 1.5, 1),
+        "elevation_m": round(avg_elev),
+    }
 
 
 def _fire_history_local(state: str | None, lat: float, lng: float) -> dict | None:

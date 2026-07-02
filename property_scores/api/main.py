@@ -173,6 +173,7 @@ def get_all_scores(
     }
     out = {"lat": lat, "lng": lng, "disclaimer": DISCLAIMER}
     pool = ThreadPoolExecutor(max_workers=len(components))
+    futures: dict = {}
     try:
         futures = {name: pool.submit(fn) for name, fn in components.items()}
         deadline = time.monotonic() + _BATCH_DEADLINE_S
@@ -185,6 +186,11 @@ def get_all_scores(
     finally:
         # Don't join stragglers: a stuck upstream must not block the response.
         pool.shutdown(wait=False, cancel_futures=True)
+        stuck = [name for name, fut in futures.items() if not fut.done()]
+        if stuck:
+            # Grep-able ops signal: leaked threads accumulate until restart.
+            logger.error("STRAGGLER score threads abandoned at deadline: %s",
+                         ", ".join(stuck))
     return out
 
 

@@ -459,75 +459,50 @@ def _vegetation_fuel_proxy(lat: float, lng: float) -> dict | None:
         return None
 
 
-# State contour API endpoints (same as DA Leads /map uses)
-_CONTOUR_ENDPOINTS = {
-    "VIC": ("https://services-ap1.arcgis.com/P744lA0wf4LlBZ84/arcgis/rest/services/"
-            "Vicmap_Elevation_METRO_1_to_5_metre/FeatureServer/1/query", "altitude"),
-    "NSW": ("https://mapprod3.environment.nsw.gov.au/arcgis/rest/services/"
-            "ePlanning/Planning_Portal_Hazard/MapServer/0/query", "ELEVATION"),
-    "QLD": ("https://spatial-gis.information.qld.gov.au/arcgis/rest/services/"
-            "Elevation/ContoursQLD/MapServer/0/query", "ELEVATION"),
-    "TAS": ("https://services.thelist.tas.gov.au/arcgis/rest/services/"
-            "Public/TopographyAndRelief/MapServer/1/query", "ELEVATION"),
-}
-
-
 def _terrain_slope(lat: float, lng: float) -> dict | None:
-    """Compute slope from state contour APIs (same source as DA Leads /map).
+    """Slope from the local Copernicus GLO-30 DEM (common.terrain / dem.vrt).
 
-    Queries elevation contour lines in a ~300m box, extracts altitude values,
-    estimates slope from elevation range / distance.
+    Replaces the per-state government contour REST endpoints, which were slow,
+    intermittent, and by 2026-07 partly dead (QLD ContoursQLD returned
+    "Service not found", NSW Planning_Portal_Hazard returned 0 features, so
+    NSW/QLD silently fell to not_assessed while VIC/TAS depended on flaky remote
+    calls). The local DEM covers every downloaded populated region uniformly with
+    no external dependency and gives every state a real slope. Samples elevation
+    at the point plus an 8-point ring (~250m radius) and derives slope from the
+    elevation range across the window. Returns None outside DEM tile coverage so
+    the caller flags slope_assessment=not_assessed rather than a fake flat 0.
     """
-    state = _detect_state(lat, lng)
-    endpoint_info = _CONTOUR_ENDPOINTS.get(state) if state else None
-
-    if not endpoint_info:
-        return _terrain_slope_fallback(lat, lng)
-
-    url, field = endpoint_info
-    buf = 0.003  # ~330m
-    env = f"{lng-buf},{lat-buf},{lng+buf},{lat+buf}"
-    params = {
-        "geometry": env,
-        "geometryType": "esriGeometryEnvelope",
-        "inSR": "4326", "outSR": "4326",
-        "outFields": field,
-        "returnGeometry": "false",
-        "f": "json",
-    }
-    # Government contour endpoints are slow and intermittent (~50% timeouts at
-    # 5s from prod). Retry once at a longer timeout so states WITH contour data
-    # resolve to a measured slope instead of falling through to not_assessed.
-    data = None
-    for _attempt in range(2):
-        try:
-            resp = requests.get(url, params=params, timeout=12)
-            if resp.ok:
-                data = resp.json()
-                break
-        except requests.RequestException as e:
-            logger.debug("State contour query failed: %s", e)
-    if not data:
-        return _terrain_slope_fallback(lat, lng)
-
-    features = data.get("features", [])
-    elevations = [float(v) for f in features
-                  if (v := f.get("attributes", {}).get(field)) is not None]
-    if len(elevations) < 2:
-        # Too few contour points to derive slope: not measured, so fall through
-        # to not_assessed rather than reporting a fake flat 0.
-        return _terrain_slope_fallback(lat, lng)
-
-    elev_range = max(elevations) - min(elevations)
-    distance_m = buf * 2 * 111320
-    mean_slope = math.degrees(math.atan(elev_range / distance_m))
-    avg_elev = sum(elevations) / len(elevations)
-    return {
-        "slope_deg": round(mean_slope, 1),
-        "mean_slope_deg": round(mean_slope, 1),
-        "max_slope_deg": round(mean_slope * 1.5, 1),
-        "elevation_m": round(avg_elev),
-    }
+    try:
+        from property_scores.common import terrain
+        e0 = terrain.elevation(lat, lng)
+        if e0 is None:
+            return None
+        r = 0.0023  # ~250m in latitude degrees
+        coslat = max(math.cos(math.radians(lat)), 0.1)
+        diag = r * 0.7071
+        offsets = [
+            (r, 0.0), (-r, 0.0), (0.0, r / coslat), (0.0, -r / coslat),
+            (diag, diag / coslat), (diag, -diag / coslat),
+            (-diag, diag / coslat), (-diag, -diag / coslat),
+        ]
+        elevs = [e0]
+        for dla, dln in offsets:
+            e = terrain.elevation(lat + dla, lng + dln)
+            if e is not None:
+                elevs.append(e)
+        if len(elevs) < 3:
+            return None
+        distance_m = r * 2 * 111320
+        mean_slope = math.degrees(math.atan((max(elevs) - min(elevs)) / distance_m))
+        return {
+            "slope_deg": round(mean_slope, 1),
+            "mean_slope_deg": round(mean_slope, 1),
+            "max_slope_deg": round(mean_slope * 1.5, 1),
+            "elevation_m": round(e0),
+        }
+    except Exception as e:
+        logger.debug("DEM slope failed: %s", e)
+        return None
 
 
 def _fire_history_local(state: str | None, lat: float, lng: float) -> dict | None:

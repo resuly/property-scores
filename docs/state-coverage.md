@@ -1,5 +1,14 @@
 # State-by-State Data Coverage
 
+> ⚠️ **Reconciled with code 2026-07-02.** Three rows below were overstated and
+> are corrected inline: "JRC satellite (38yr)" is actually local Overture water
+> proximity (the remote JRC path is dead code); "MODIS fire history" runs VIC/NSW
+> only (remote MODIS path is dead code); "COP DEM slope" has contour endpoints
+> for VIC/NSW/QLD/TAS only (other states fall back and are flagged
+> `slope_assessment=not_assessed`). Score APIs now emit `official_layer` /
+> `slope_assessment` / aircraft `assessment` flags so a no-data state is not
+> read as a confident zero.
+
 Scores use different data sources depending on the state. This document explains what data is available where, so users understand why accuracy may vary across states.
 
 ## Coverage Matrix
@@ -14,13 +23,13 @@ Scores use different data sources depending on the state. This document explains
 | ANEF Defence airfields | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ❌ |
 | **Flood** | | | | | | | | |
 | Planning overlays | ✅ | ✅ | ❌ | ✅ | ❌ | ✅ | ❌ | ✅ |
-| JRC satellite (38yr) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Water proximity (Overture, local) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | HAND elevation | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Bushfire** | | | | | | | | |
 | Planning overlays | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | WorldCover vegetation | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| COP DEM slope | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| MODIS fire history | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Terrain slope (contour) | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ |
+| Fire history (local) | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Contamination** | | | | | | | | |
 | EPA register | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
 | Industrial POI proxy | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |

@@ -458,6 +458,13 @@ def _query_syd(lat: float, lng: float) -> dict | None:
 # Public API
 # ---------------------------------------------------------------------------
 
+# States with a civilian ANEF source wired up. Outside these, a no-hit result
+# means "not assessed" (only Defence airfields were checked), not "no aircraft
+# noise" - so we must not report a confident zero near Adelaide/Hobart/Canberra
+# civilian airports.
+_CIVILIAN_ANEF_STATES = {"VIC", "NSW", "QLD", "WA"}
+
+
 def aircraft_noise_penalty(lat: float, lng: float) -> dict:
     """Query ANEF zones from all national data sources."""
     return _aircraft_cached(round(lat, 3), round(lng, 3))
@@ -506,8 +513,26 @@ def _aircraft_cached(lat: float, lng: float) -> dict:
         results.append(defence)
 
     if not results:
+        if state not in _CIVILIAN_ANEF_STATES:
+            # SA/TAS/ACT/NT have no civilian ANEF source; only Defence was
+            # checked. Report not_assessed rather than a confident zero.
+            return {
+                "penalty_db": 0.0,
+                "assessment": "not_assessed",
+                "zone_code": None,
+                "zone_desc": "No civilian ANEF data for this state",
+                "anef_min": None,
+                "anef_max": None,
+                "lga": None,
+                "impact": ("Civilian aircraft-noise overlays are not available "
+                           "for this state; only Defence airfields were checked. "
+                           "Treat as not assessed, not as zero."),
+                "source": "national",
+                "airport_type": None,
+            }
         return {
             "penalty_db": 0.0,
+            "assessment": "no_overlay",
             "zone_code": None,
             "zone_desc": "Outside airport noise overlay",
             "anef_min": None,

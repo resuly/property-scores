@@ -1,5 +1,12 @@
 # Commercial Readiness Assessment (2026-04-24, updated)
 
+> ⚠️ **2026-04-24 snapshot, several items now stale — code is the source of truth**
+> (reconciled 2026-07-02). Known inaccuracies: heat-island latency 18s → now a
+> local MODIS median mosaic at **~1.2s** (17x); bushfire "MODIS coverage patchy"
+> is actually `_fire_history` **dead code** (never called; the live path is
+> `_fire_history_local`, VIC/NSW only); the "33s / 96s→33s" figures come from
+> that dead path and are unreliable. Do not quote latency numbers from this file.
+
 ## Per-Score Assessment
 
 | Score | Readiness | Key Improvements | Remaining Gap |
@@ -9,8 +16,8 @@
 | Flood | **60%** | Overlay+JRC+HAND+P95, cache pipeline, disclaimer | 10s latency; no depth estimation |
 | View Quality | **55%** | 6 factors incl. 8-dir horizon angle analysis | No building-level occlusion; no floor level |
 | Solar | 50% | Caveat added | Pure API passthrough; no roof analysis |
-| Bushfire | **55%** | Overlay+Veg+Slope+FireHistory, 96s→33s | 33s still slow; MODIS coverage patchy |
-| Heat Island | **50%** | MODIS day+night LST, night heat retention penalty | 1km coarse; 18s latency |
+| Bushfire | **55%** | Overlay+Veg+Slope (FireHistory local, VIC/NSW only) | latency figure below unreliable; remote MODIS fire is dead code |
+| Heat Island | **50%** | MODIS day+night LST (local median mosaic 2026-07), night heat retention | 1km coarse; ~1.2s latency (was 18s) |
 | Contamination | **50%** | EPA 3-state + POI deduped, disclaimer | POI proxy ≠ actual contamination |
 
 ## All Disclaimers Present: 8/8 ✅

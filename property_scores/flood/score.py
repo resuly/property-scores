@@ -237,6 +237,11 @@ def _get_signed_url(tile: str) -> str | None:
 def _jrc_flood_proximity(lat: float, lng: float) -> dict | None:
     """Sample JRC water occurrence in a grid around the point.
 
+    UNUSED / DEAD CODE (2026-07-02 audit): flood_score() uses
+    _water_proximity_local() (local Overture water), NOT this remote JRC path.
+    Do NOT cite "JRC satellite flood (38yr)" as a live data source in docs or
+    marketing. Kept for reference only.
+
     Returns dict with max_occurrence, nearest_water_m, mean_occurrence.
     Samples 500m radius at ~100m steps (11x11 grid = 121 points).
     """
@@ -705,10 +710,18 @@ def flood_score(lat: float, lng: float) -> dict:
         result_dict["p95"] = p95
     if warnings:
         result_dict["warnings"] = warnings
+    # Transparency flag: whether an OFFICIAL flood overlay covered this point.
+    # QLD/WA/NT have no overlay endpoint at all, so the score there rests on
+    # satellite water proximity + HAND + rainfall, not authoritative mapping.
+    result_dict["official_layer"] = (
+        "none" if not ENDPOINTS.get(state)
+        else "hit" if hit_zones
+        else "checked_no_hit"
+    )
     if not ENDPOINTS.get(state) and not jrc:
         result_dict["note"] = (
-            f"No overlay data for {state} and JRC query failed. "
-            "Score is a default estimate."
+            f"No official flood overlay for {state} and no water-proximity "
+            "signal. Score is a default estimate."
         )
 
     return result_dict

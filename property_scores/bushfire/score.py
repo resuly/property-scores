@@ -629,17 +629,13 @@ def _fire_history_local(state: str | None, lat: float, lng: float) -> dict | Non
 
 
 def _terrain_slope_fallback(lat: float, lng: float) -> dict | None:
-    """Fallback: estimate elevation from Overture buildings (ground floor ~ terrain)."""
-    try:
-        from property_scores.common.overture import get_db, buildings_near
-        db = get_db()
-        buildings = buildings_near(db, lat, lng, radius_m=500)
-        if not buildings:
-            return None
-        return {"slope_deg": 0.0, "mean_slope_deg": 0.0,
-                "max_slope_deg": 0.0, "elevation_m": 0}
-    except Exception:
-        return None
+    """No contour endpoint for this state: slope cannot be measured.
+
+    Previously returned a fake flat slope 0 (= lowest fire-spread factor),
+    silently treating real hillsides as flat. Now returns None so scoring uses
+    a neutral mid slope and the caller flags slope_assessment=not_assessed.
+    """
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -667,6 +663,11 @@ def _ensure_proj():
 
 def _fire_history(lat: float, lng: float) -> dict | None:
     """Check MODIS burned area products for fire history within 10km.
+
+    UNUSED / DEAD CODE (2026-07-02 audit): bushfire_score() calls
+    _fire_history_local() (VIC/NSW only), NOT this remote MODIS path. Do NOT
+    cite "MODIS fire history (8 states)" as a live data source in docs or
+    marketing. Kept for reference only.
 
     Searches the last 5 fire seasons (Australian summer: Oct-Mar).
     Returns count of fire seasons with nearby burns.
@@ -913,6 +914,12 @@ def bushfire_score(lat: float, lng: float, *, quick: bool = False) -> dict:
         result["vegetation"] = veg
     if slope:
         result["slope"] = slope
+        result["slope_assessment"] = "measured"
+    elif not quick:
+        # Non-quick call with no slope = no contour endpoint for this state
+        # (SA/WA/ACT/NT) or the query failed. Scoring used a neutral mid slope,
+        # not a measured flat 0.
+        result["slope_assessment"] = "not_assessed"
     if fire:
         result["fire_history"] = fire
 

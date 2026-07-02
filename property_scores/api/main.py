@@ -146,7 +146,9 @@ def contamination_page():
     return FileResponse(STATIC_DIR / "contamination.html")
 
 
-_BATCH_COMPONENT_TIMEOUT = 25  # seconds per score; slow/stuck upstreams degrade, not block
+# Overall wall-clock budget for the WHOLE /scores batch (shared deadline, not
+# per-component): slow/stuck upstreams degrade to an error marker, not block.
+_BATCH_DEADLINE_S = 25
 
 
 @app.get("/scores")
@@ -173,7 +175,7 @@ def get_all_scores(
     pool = ThreadPoolExecutor(max_workers=len(components))
     try:
         futures = {name: pool.submit(fn) for name, fn in components.items()}
-        deadline = time.monotonic() + _BATCH_COMPONENT_TIMEOUT
+        deadline = time.monotonic() + _BATCH_DEADLINE_S
         for name, fut in futures.items():
             try:
                 out[name] = fut.result(timeout=max(0.1, deadline - time.monotonic()))

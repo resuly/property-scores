@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import threading
 from functools import lru_cache
 from typing import Any
 
@@ -332,22 +333,30 @@ def _query_wa(lat: float, lng: float) -> dict | None:
 
 _defence_loaded = False
 _defence_features: list = []
+_defence_lock = threading.Lock()
 
 
 def _load_defence():
+    # Lock + flag-set-last: /scores now runs noise_score and the standalone
+    # aircraft component concurrently, and the old flag-before-populate order
+    # let the losing thread observe loaded=True with an empty feature list,
+    # caching a false penalty_db=0 for points inside a real ANEF contour.
     global _defence_loaded, _defence_features
     if _defence_loaded:
         return
-    _defence_loaded = True
-    geojson_path = data_path("defence_anef.geojson")
-    if not geojson_path.exists():
-        return
-    try:
-        with open(geojson_path) as f:
-            data = json.load(f)
-        _defence_features = data.get("features", [])
-    except Exception:
-        pass
+    with _defence_lock:
+        if _defence_loaded:
+            return
+        try:
+            geojson_path = data_path("defence_anef.geojson")
+            if geojson_path.exists():
+                with open(geojson_path) as f:
+                    data = json.load(f)
+                _defence_features = data.get("features", [])
+        except Exception:
+            pass
+        finally:
+            _defence_loaded = True
 
 
 def _query_defence(lat: float, lng: float) -> dict | None:
@@ -405,20 +414,27 @@ _syd_loaded = False
 _syd_features: list = []
 
 
+_syd_lock = threading.Lock()
+
+
 def _load_syd():
+    # Same lock + flag-set-last rationale as _load_defence.
     global _syd_loaded, _syd_features
     if _syd_loaded:
         return
-    _syd_loaded = True
-    geojson_path = data_path("syd_anef.geojson")
-    if not geojson_path.exists():
-        return
-    try:
-        with open(geojson_path) as f:
-            data = json.load(f)
-        _syd_features = data.get("features", [])
-    except Exception:
-        pass
+    with _syd_lock:
+        if _syd_loaded:
+            return
+        try:
+            geojson_path = data_path("syd_anef.geojson")
+            if geojson_path.exists():
+                with open(geojson_path) as f:
+                    data = json.load(f)
+                _syd_features = data.get("features", [])
+        except Exception:
+            pass
+        finally:
+            _syd_loaded = True
 
 
 def _query_syd(lat: float, lng: float) -> dict | None:

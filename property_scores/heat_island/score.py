@@ -36,6 +36,17 @@ MODIS_R = 6371007.181
 
 _signed_cache: dict[str, tuple[str, float]] = {}
 
+# Local MODIS LST summer mosaic (built by scripts/download_modis_lst.py).
+# Sampling the local sinusoidal VRT is ~0.1s vs ~18s for the remote signed-COG
+# path (2026-07-02: remote MODIS was 17.7s of a 19.7s cold call). The shared
+# raster sampler reprojects lat/lng into the MODIS sinusoidal CRS automatically,
+# so no warp is needed. Points outside tile coverage read back NODATA -> None
+# -> ERA5 fallback, exactly as a remote MODIS miss behaved.
+from property_scores.common.config import data_path as _data_path
+
+_DAY_VRT = str(_data_path("global/modis_lst_day.vrt"))
+_NIGHT_VRT = str(_data_path("global/modis_lst_night.vrt"))
+
 
 # ---------------------------------------------------------------------------
 # MODIS LST helpers
@@ -65,10 +76,62 @@ def _get_signed(href: str) -> str | None:
 
 
 def _modis_lst(lat: float, lng: float) -> dict | None:
-    """Fetch MODIS LST 1km surface temperature for recent summers.
+    """MODIS LST from the local summer mosaic (day/night + 5x5 UHI delta).
+
+    Center pixel = point LST; the 24 surrounding 1km pixels (the 2km window with
+    the centre pixel backed out) = area LST, matching the remote path's
+    neighbourhood. Returns None outside tile coverage, on a NODATA/water pixel,
+    or on any sampler error, so the caller falls back to ERA5 as on a remote
+    MODIS miss.
+    """
+    import os as _os
+    if not _os.path.exists(_DAY_VRT):
+        return None
+    try:
+        from property_scores.common import landcover as _lc
+        rs = _lc.sampler()
+
+        day = rs.sample(_DAY_VRT, lat, lng)
+        if day is None or day != day:  # None or NaN (outside coverage / nodata)
+            return None
+        day = float(day)
+
+        # Area LST over the 5x5 1km-pixel window (radius 2km on the ~926m
+        # sinusoidal grid -> +/-2 pixels). window_stats INCLUDES the centre
+        # pixel, but the remote path averages the 24 neighbours only; back the
+        # centre out with (mean*n - centre)/(n-1) so uhi_delta matches remote.
+        st = rs.window_stats(_DAY_VRT, lat, lng, radius_m=2000)
+        n = int(st.get("count", 0)) if st else 0
+        mean_incl = float(st.get("mean", day)) if st else day
+        area = (mean_incl * n - day) / (n - 1) if n > 1 else mean_incl
+        uhi_delta = day - area
+
+        night = rs.sample(_NIGHT_VRT, lat, lng)
+        night = float(night) if (night is not None and night == night) else None
+    except Exception:
+        return None  # any sampler / IO / CRS error -> ERA5 fallback
+
+    result: dict = {
+        "point_lst_c": round(day, 1),
+        "area_lst_c": round(area, 1),
+        "uhi_delta_c": round(uhi_delta, 1),
+        "samples": 1,
+    }
+    if night is not None:
+        result["night_lst_c"] = round(night, 1)
+        result["night_retention_c"] = round(night - (day - 15), 1)
+    return result
+
+
+def _modis_lst_remote(lat: float, lng: float) -> dict | None:
+    """Fetch MODIS LST 1km surface temperature for recent summers (remote COG).
 
     Queries 8-day composites from Jan-Feb of recent year.
     Compares point value to 5x5 neighborhood for UHI detection.
+
+    Retained as the source-of-truth reference for scripts/download_modis_lst.py
+    (which bakes this exact signal into the local mosaic) and as an optional
+    slow fallback. Not called on the hot path.
     """
     try:
         import rasterio

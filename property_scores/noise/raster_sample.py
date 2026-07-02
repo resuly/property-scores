@@ -117,4 +117,4 @@ def window_stats(path, lat, lng, radius_m, categorical=False, classes=None,
         for c in (classes or np.unique(arr)):
             out[f"frac_{int(c)}"] = float(np.mean(arr == c))
         return out
-    return {"mean": float(np.mean(arr)), "max": float(np.max(arr))}
+    return {"mean": float(np.mean(arr)), "max": float(np.max(arr)), "count": int(arr.size)}

@@ -216,15 +216,28 @@ def _check_layer(state: str, layer_name: str, url: str, severity: str,
     return severity, str(detail), True
 
 
-def _overlay_check(state: str, lat: float, lng: float) -> tuple[str | None, list[str], str | None, bool]:
-    """Returns (worst_severity, hit_zones, worst_category, all_queried_ok).
+def _overlay_check(state: str, lat: float, lng: float) -> tuple[str | None, list[str], str | None, bool, str | None]:
+    """Returns (worst_severity, hit_zones, worst_category, all_queried_ok, basis).
 
     all_queried_ok is True only when every layer responded, so a timeout can
     never masquerade as "officially outside the mapped bushfire zones".
+
+    Local layer library first (the same features.duckdb that serves the
+    customer-visible hazards block, so score and layers cannot contradict;
+    currently VIC BMO only — the same VicPlan dataset the remote endpoint
+    serves, so values are identical and only the basis changes). Remote
+    ArcGIS endpoints remain for every other state and as fallback.
     """
+    from property_scores.flood.local_overlays import check_bushfire as _local_check
+
+    local = _local_check(state, lat, lng)
+    if local is not None:
+        return (local["worst"], local["hit_zones"], local["category"],
+                True, "local_library")
+
     layers = ENDPOINTS.get(state)
     if not layers:
-        return None, [], None, False
+        return None, [], None, False, None
 
     hits = []
     worst_severity = None
@@ -244,7 +257,7 @@ def _overlay_check(state: str, lat: float, lng: float) -> tuple[str | None, list
             if state == "SA":
                 break
 
-    return worst_severity, hits, worst_category, all_ok
+    return worst_severity, hits, worst_category, all_ok, "state_service"
 
 
 # ---------------------------------------------------------------------------
@@ -839,18 +852,18 @@ def bushfire_score(lat: float, lng: float, *, quick: bool = False) -> dict:
         f_slope = None if quick else pool.submit(_terrain_slope, lat, lng)
         f_fire = None if quick else pool.submit(_fire_history_local, state, lat, lng)
 
-    worst_severity, hits, worst_category, overlay_ok = f_overlay.result()
+    worst_severity, hits, worst_category, overlay_ok, overlay_basis = f_overlay.result()
 
     overlay_score: int | None = None
     if worst_severity:
         lo, hi = SEVERITY_SCORES[worst_severity]
         overlay_score = round((lo + hi) / 2)
-    elif ENDPOINTS.get(state) and overlay_ok:
+    elif overlay_basis and overlay_ok:
         overlay_score = 90
-    # Mapped state, every layer answered, no zone hit = the official mapping
-    # says this lot is OUTSIDE bushfire prone land. A failed query never
-    # counts as clear (overlay_ok gate).
-    overlay_clear = worst_severity is None and overlay_ok and bool(ENDPOINTS.get(state))
+    # Mapped state (local library or state service), every layer answered, no
+    # zone hit = the official mapping says this lot is OUTSIDE bushfire prone
+    # land. A failed query never counts as clear (overlay_ok gate).
+    overlay_clear = worst_severity is None and overlay_ok and overlay_basis is not None
 
     veg = f_veg.result() if f_veg else None
     slope = f_slope.result() if f_slope else None
@@ -886,6 +899,8 @@ def bushfire_score(lat: float, lng: float, *, quick: bool = False) -> dict:
         "official_zone_status": ("in_zone" if hits else
                                  "outside" if overlay_clear else "unavailable"),
     }
+    if overlay_basis:
+        result["overlay_basis"] = overlay_basis
     if veg:
         result["vegetation"] = veg
     if slope:

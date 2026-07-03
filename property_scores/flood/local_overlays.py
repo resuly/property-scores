@@ -145,3 +145,58 @@ def check(state: str, lat: float, lng: float) -> dict | None:
         if worst is None or _SEVERITY_RANK[kind] < _SEVERITY_RANK[worst]:
             worst = kind
     return {"worst": worst, "hit_zones": labels, "trust": trust}
+
+
+# ---------------------------------------------------------------------------
+# Bushfire: same library, same discipline. Only VIC's BMO is baked so far
+# (5,225 statewide statutory polygons, the same VicPlan dataset the remote
+# endpoint serves), so VIC switches to the library and every other state
+# keeps its remote path untouched. Extend BUSHFIRE_TRUST as NSW BFPL /
+# SA / WA / TAS layers get baked.
+# ---------------------------------------------------------------------------
+
+BUSHFIRE_TRUST: dict[str, str] = {
+    "vic": "full",   # BMO is statewide statutory: a clean miss is meaningful
+}
+
+
+def check_bushfire(state: str, lat: float, lng: float) -> dict | None:
+    """Whitelisted bushfire overlay hits from the local library.
+
+    Returns {"worst": severity|None, "hit_zones": [labels],
+    "category": str|None, "trust": class} or None when the library cannot
+    answer for this state (caller falls back to the remote endpoints)."""
+    st = (state or "").lower()
+    trust = BUSHFIRE_TRUST.get(st)
+    if trust is None:
+        return None
+    conn = _get_conn()
+    if conn is None:
+        return None
+    try:
+        rows = conn.execute(
+            "SELECT source, props FROM features "
+            "WHERE state = ? AND category = 'bushfire' "
+            "AND ST_Contains(geom, ST_Point(?, ?))",
+            [st, float(lng), float(lat)],
+        ).fetchall()
+    except Exception:
+        log.warning("local bushfire overlay query failed", exc_info=True)
+        return None
+
+    worst: str | None = None
+    labels: list[str] = []
+    category: str | None = None
+    for source, props_raw in rows:
+        if source != "vic_hazard_bushfire":
+            continue  # non-whitelisted: visible in the layers block only
+        try:
+            props = json.loads(props_raw) if isinstance(props_raw, str) else (props_raw or {})
+        except (json.JSONDecodeError, TypeError):
+            props = {}
+        label = "Bushfire Management Overlay (BMO)"
+        if label not in labels:
+            labels.append(label)
+        worst = "high"                       # BMO maps to the remote's severity
+        category = props.get("code") or "BMO"
+    return {"worst": worst, "hit_zones": labels, "category": category, "trust": trust}

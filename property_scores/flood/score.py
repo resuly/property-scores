@@ -603,24 +603,42 @@ def flood_score(lat: float, lng: float) -> dict:
             "error": "Coordinate is outside Australian state bounding boxes",
         }
 
-    # --- Phase 1: ArcGIS overlays (official data) ---
-    worst_severity, hit_zones, warnings = _overlay_check(state, lat, lng)
+    # --- Phase 1: official overlays. Local layer library first (the SAME
+    # library that serves the customer-visible hazards block, so score and
+    # layers can never contradict; no live state-service dependency), remote
+    # ArcGIS as fallback for states the library does not cover (SA/TAS) or
+    # when the library file is unavailable (dev boxes).
+    from property_scores.flood.local_overlays import check as _local_check
+
+    local = _local_check(state, lat, lng)
+    if local is not None:
+        worst_severity, hit_zones, warnings = local["worst"], local["hit_zones"], []
+        overlay_trust: str | None = local["trust"]
+        overlay_basis: str | None = "local_library"
+    else:
+        worst_severity, hit_zones, warnings = _overlay_check(state, lat, lng)
+        if not ENDPOINTS.get(state):
+            overlay_trust, overlay_basis = None, None
+        elif state == "NSW":
+            # NSW layer 230 holds ~620 polygons across ~12 of 128 LGAs. A miss
+            # there says nothing about Windsor or Lismore (both zero in it,
+            # 2026-06-11 audit), so it cannot vouch a 90 "checked clean".
+            overlay_trust, overlay_basis = "hit_only", "state_service"
+        else:
+            overlay_trust, overlay_basis = "full", "state_service"
 
     overlay_score: int | None = None
     if worst_severity is not None:
         lo, hi = SEVERITY_SCORES[worst_severity]
         zone_penalty = min(len(hit_zones) - 1, 3) * 3
         overlay_score = max(lo, hi - zone_penalty)
-    elif not ENDPOINTS.get(state):
-        overlay_score = None
-    elif state == "NSW":
-        # NSW layer 230 holds ~620 polygons across ~12 of 128 LGAs. A miss
-        # there says nothing about Windsor or Lismore (both zero in it,
-        # 2026-06-11 audit), so it cannot vouch a 90 "checked clean";
+    elif overlay_trust == "full":
+        # Statewide statutory overlay checked clean.
+        overlay_score = 90 if not warnings else 80
+    else:
+        # hit_only coverage or no source: a miss proves nothing;
         # JRC + HAND carry the estimate instead.
         overlay_score = None
-    else:
-        overlay_score = 90 if not warnings else 80
 
     # --- Phase 2: Water proximity (local Overture data) ---
     jrc = _water_proximity_local(lat, lng)
@@ -710,15 +728,20 @@ def flood_score(lat: float, lng: float) -> dict:
         result_dict["p95"] = p95
     if warnings:
         result_dict["warnings"] = warnings
-    # Transparency flag: whether an OFFICIAL flood overlay covered this point.
-    # QLD/WA/NT have no overlay endpoint at all, so the score there rests on
-    # satellite water proximity + HAND + rainfall, not authoritative mapping.
+    # Transparency flags: whether an OFFICIAL flood overlay covered this
+    # point, and which source answered. 'checked_partial_coverage' means the
+    # available overlay library for this state only vouches hits (a miss says
+    # nothing); the score then rests on satellite water proximity + HAND +
+    # rainfall rather than authoritative mapping.
     result_dict["official_layer"] = (
-        "none" if not ENDPOINTS.get(state)
-        else "hit" if hit_zones
-        else "checked_no_hit"
+        "hit" if hit_zones
+        else "checked_no_hit" if overlay_trust == "full"
+        else "checked_partial_coverage" if overlay_trust == "hit_only"
+        else "none"
     )
-    if not ENDPOINTS.get(state) and not jrc:
+    if overlay_basis:
+        result_dict["overlay_basis"] = overlay_basis
+    if overlay_trust is None and not jrc:
         result_dict["note"] = (
             f"No official flood overlay for {state} and no water-proximity "
             "signal. Score is a default estimate."

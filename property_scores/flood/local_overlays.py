@@ -148,16 +148,79 @@ def check(state: str, lat: float, lng: float) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# Bushfire: same library, same discipline. Only VIC's BMO is baked so far
-# (5,225 statewide statutory polygons, the same VicPlan dataset the remote
-# endpoint serves), so VIC switches to the library and every other state
-# keeps its remote path untouched. Extend BUSHFIRE_TRUST as NSW BFPL /
-# SA / WA / TAS layers get baked.
+# Bushfire: same library, same discipline. Six states baked as of
+# 2026-07-06 (VIC BMO, QLD QFES BPA 2.56M, NSW BFPL, WA OBRM, SA P&D Code
+# overlays, TAS Bushfire-prone Areas Code) — all full-precision direct
+# downloads of the same datasets the remote endpoints serve, so severity
+# classification below mirrors bushfire.score._check_layer exactly and
+# only the basis changes. ACT/NT stay remote/modelled.
 # ---------------------------------------------------------------------------
 
 BUSHFIRE_TRUST: dict[str, str] = {
-    "vic": "full",   # BMO is statewide statutory: a clean miss is meaningful
+    "vic": "full",   # BMO statewide statutory: a clean miss is meaningful
+    "qld": "full",   # QFES BPA statewide (July 2017 official release)
+    "nsw": "full",   # Bushfire Prone Land statewide statutory (CC BY 4.0)
+    "wa":  "full",   # OBRM Map of Bush Fire Prone Areas statewide
+    "sa":  "full",   # Planning & Design Code hazard overlays, all six classes
+    "tas": "full",   # Bushfire-prone Areas Code overlay (LIST layer 14)
 }
+
+# Bushfire severities rank on the score module's scale — NOT the flood
+# _SEVERITY_RANK above, which ranks flood overlay kinds.
+_BUSHFIRE_SEVERITY_RANK = {"extreme": 0, "high": 1, "moderate": 2, "low": 3}
+
+# Mirrors bushfire.score.NSW_CATEGORY_MAP — duplicated (not imported) to
+# avoid a load-time import cycle with bushfire.score; these are stable
+# statutory categories.
+_NSW_BUSHFIRE_CATEGORY = {
+    "Vegetation Category 1": "extreme",
+    "Vegetation Category 2": "high",
+    "Vegetation Category 3": "moderate",
+    "Vegetation Buffer": "low",
+}
+
+# Official severity ordering per the SA Planning & Design Code: High Risk
+# outranks Urban Interface (same ordering as the remote ENDPOINTS list).
+_SA_BUSHFIRE_CATEGORY = {
+    "High Risk": "high",
+    "Urban Interface": "moderate",
+    "Medium Risk": "moderate",
+    "General Risk": "low",
+    "Regional": "low",
+    "Outback": "low",
+}
+
+
+def _classify_bushfire(source: str, props: dict) -> tuple[str, str] | None:
+    """(severity, label) for a whitelisted bushfire source hit, else None.
+
+    Severity semantics mirror bushfire.score._check_layer per state so a
+    local_library basis scores identically to the remote state services."""
+    if source == "vic_hazard_bushfire":
+        return "high", "Bushfire Management Overlay (BMO)"
+    if source == "qld_hazard_bushfire":
+        cls = str(props.get("desc") or props.get("category") or "")
+        low = cls.lower()
+        if "very high" in low:
+            sev = "high"
+        elif "high" in low or "medium" in low:
+            sev = "moderate"
+        else:
+            sev = "low"
+        return sev, cls or "Bushfire Prone Area (QLD QFD 2017)"
+    if source == "nsw_hazard_bushfire":
+        cat = str(props.get("category") or "")
+        return (_NSW_BUSHFIRE_CATEGORY.get(cat, "high"),
+                cat or "Bushfire Prone Land")
+    if source == "wa_hazard_bushfire":
+        return "moderate", "Bush Fire Prone Area (OBRM-023)"
+    if source == "sa_hazard_bushfire":
+        cat = str(props.get("category") or "")
+        label = f"Hazards (Bushfire - {cat})" if cat else "Bushfire hazard overlay"
+        return _SA_BUSHFIRE_CATEGORY.get(cat, "moderate"), label
+    if source == "tas_hazard_bushfire":
+        return "moderate", str(props.get("desc") or "Bushfire-prone areas")
+    return None
 
 
 def check_bushfire(state: str, lat: float, lng: float) -> dict | None:
@@ -188,15 +251,22 @@ def check_bushfire(state: str, lat: float, lng: float) -> dict | None:
     labels: list[str] = []
     category: str | None = None
     for source, props_raw in rows:
-        if source != "vic_hazard_bushfire":
-            continue  # non-whitelisted: visible in the layers block only
         try:
             props = json.loads(props_raw) if isinstance(props_raw, str) else (props_raw or {})
         except (json.JSONDecodeError, TypeError):
             props = {}
-        label = "Bushfire Management Overlay (BMO)"
+        classified = _classify_bushfire(source, props)
+        if classified is None:
+            continue  # non-whitelisted: visible in the layers block only
+        sev, label = classified
         if label not in labels:
             labels.append(label)
-        worst = "high"                       # BMO maps to the remote's severity
-        category = props.get("code") or "BMO"
+        if worst is None or _BUSHFIRE_SEVERITY_RANK[sev] < _BUSHFIRE_SEVERITY_RANK[worst]:
+            worst = sev
+            # VIC keeps its historical category (zone code); other states
+            # surface the classified label, same as the remote detail.
+            if source == "vic_hazard_bushfire":
+                category = props.get("code") or "BMO"
+            else:
+                category = label
     return {"worst": worst, "hit_zones": labels, "category": category, "trust": trust}

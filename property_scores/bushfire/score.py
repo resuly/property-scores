@@ -2,7 +2,10 @@
 Bushfire risk score combining planning overlays + satellite vegetation/slope.
 
 Three complementary signals:
-1. ArcGIS REST overlays — official bushfire-prone zones (VIC/NSW/WA/SA/TAS)
+1. ArcGIS REST overlays — official bushfire-prone zones, 7 of 8 states:
+   VIC/NSW/QLD/WA/SA/TAS/ACT (QLD = QFD 2017-vintage proxy, ACT = SBMP BPA;
+   only the NT has none). Keep this list in sync with OVERLAY_ENDPOINTS below;
+   a stale 5-state version of this line caused wrong public copy 2026-07-03.
 2. ESA WorldCover 10m — land cover / vegetation fuel load (global COG)
 3. Copernicus DEM 30m — terrain slope for fire spread (global COG)
 
@@ -224,9 +227,10 @@ def _overlay_check(state: str, lat: float, lng: float) -> tuple[str | None, list
 
     Local layer library first (the same features.duckdb that serves the
     customer-visible hazards block, so score and layers cannot contradict;
-    currently VIC BMO only — the same VicPlan dataset the remote endpoint
-    serves, so values are identical and only the basis changes). Remote
-    ArcGIS endpoints remain for every other state and as fallback.
+    VIC/QLD/NSW/WA/SA/TAS as of 2026-07-06 — full-precision downloads of
+    the same datasets the remote endpoints serve, classified identically,
+    so values match and only the basis changes). Remote ArcGIS endpoints
+    remain for ACT and as fallback whenever the library cannot answer.
     """
     from property_scores.flood.local_overlays import check_bushfire as _local_check
 

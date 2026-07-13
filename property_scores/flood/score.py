@@ -552,6 +552,74 @@ def _hand_local_proxy(lat: float, lng: float) -> dict | None:
         return None
 
 
+def inundation_grid(lat: float, lng: float, radius_m: int = 500) -> dict | None:
+    """DEM elevation window around a point, relative to the local drainage
+    minimum — the data behind the map's water-level simulation overlay.
+
+    Uses the same drainage reference as _hand_local so the panel's "height
+    above drainage" and the simulation agree: the query point goes under
+    exactly when the simulated level passes hand_m. Terrain fill (bathtub)
+    illustration only — not hydraulic modelling. None outside DEM coverage.
+    """
+    try:
+        from property_scores.common import terrain
+        from property_scores.common.landcover import sampler as _sampler
+
+        if not terrain.available():
+            return None
+        hand = _hand_local(lat, lng)
+        if not hand or hand.get("source") != "dem_relief":
+            return None
+
+        import numpy as np
+        from rasterio.windows import transform as _win_transform
+
+        rs = _sampler()
+        src = rs._src(terrain.DEM_VRT)
+        if src is None:
+            return None
+        x, y = rs._to_raster_xy(src, lat, lng)
+        px = abs(src.transform.a)
+        # Separate row/column half-widths: an equal-degree window covers
+        # cos(lat) less ground east-west (same fix as landcover_grid).
+        half_row = max(int((radius_m / 111_320.0) / px), 1)
+        half_col = max(int((radius_m / (111_320.0 * max(
+            math.cos(math.radians(lat)), 0.1))) / px), 1)
+        row, col = src.index(x, y)
+        r0, r1 = max(row - half_row, 0), row + half_row + 1
+        c0, c1 = max(col - half_col, 0), col + half_col + 1
+        arr = src.read(1, window=((r0, r1), (c0, c1))).astype(float)
+        if arr.size == 0:
+            return None
+
+        wt = _win_transform(((r0, r1), (c0, c1)), src.transform)
+        h, w = arr.shape
+        west, north = wt.c, wt.f
+        east = west + w * wt.a
+        south = north + h * wt.e  # wt.e is negative
+        # The DEM VRT has no nodata (gaps read back 0.0). Gate the window on
+        # tile coverage at its corners; inside a covered 1-degree tile a gap
+        # cannot occur (tiles are complete).
+        for cla, cln in ((north, west), (north, east), (south, west), (south, east)):
+            if not terrain.covered(cla, cln):
+                return None
+
+        rel = np.round(arr - float(hand["drainage_elev_m"]), 1)
+        return {
+            "bbox": [round(west, 6), round(south, 6), round(east, 6), round(north, 6)],
+            "nrows": h,
+            "ncols": w,
+            "radius_m": radius_m,
+            "cell_m": round(px * 111_320.0),
+            "drainage_elev_m": hand["drainage_elev_m"],
+            "point_hand_m": hand["hand_m"],
+            "rel": rel.tolist(),
+        }
+    except Exception as e:
+        logger.debug("inundation_grid failed: %s", e)
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Main scoring function
 # ---------------------------------------------------------------------------

@@ -258,6 +258,22 @@ def get_flood(lat: float = Query(...), lng: float = Query(...),
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.get("/scores/flood/inundation")
+def get_flood_inundation(lat: float = Query(...), lng: float = Query(...),
+                         radius: int = Query(500)):
+    """DEM grid relative to the local drainage line, for the map's water-level
+    simulation overlay. Terrain fill illustration, not a hydraulic model."""
+    from property_scores.flood.score import inundation_grid
+    try:
+        grid = inundation_grid(lat, lng, radius_m=max(200, min(radius, 1000)))
+        if not grid:
+            return JSONResponse({"error": "no elevation coverage"}, status_code=404)
+        return grid
+    except Exception as e:
+        logger.exception("flood inundation failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.get("/scores/bushfire")
 def get_bushfire(lat: float = Query(...), lng: float = Query(...),
                  quick: bool = Query(False)):

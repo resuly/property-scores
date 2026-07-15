@@ -284,5 +284,16 @@ exportImage 不改变服务模型。
 暂无消费此 flood 分(无接线), 故只到 property-scores API + demo 页; 将来 da_leads 报告接入时
 `elevation_confidence` 已在 payload 里直接可用。
 
-**部署**(prod :8099 = /var/www/property-scores master): pull → restart property-scores.service。
-**未推未部署, 等 Bo sign-off。**
+**✅ 已部署生产(2026-07-15, prod HEAD 91063b2)** — Oracle :8099 = /var/www/property-scores master
+pull + restart property-scores.service。prod 出网可达 NSW(0.14s)/QLD(0.21s) ImageServer。
+
+**上线后全场景实测(warm/steady-state)**: Parramatta 河岸 0.1-1.4s→high lidar HAND 1.0 分45;
+Ryde 高干 high 27.0 分95; Brisbane WE high 3.6 分65; Bourke 远郊 high 9.1(见下); QLD Channel
+Country(真 SRTM fill)→low; VIC/SA/WA/TAS(无端点)0.2-0.6s→medium dem_relief; 州外→干净报错;
+缓存命中 0.1s 同值。全链无 500、无崩溃, 兜底链正确, 置信度徽章诚实。
+
+**部署后加固(commit 91063b2)**: 冷启首测出现 40s/13-30s 长延迟, 定位=(a)服务冷启 + (b)我
+连打测试触发 NSW/QLD **限流**(UA-less 被当爬虫), 非系统性。修:①exportImage/identify 请求加
+User-Agent(限流消失, Bourke 从 12.4s→proxy 变 0.4s→high);②fail-fast(超时 6s→5s, 重试 1→0),
+慢/被限的 cell 最坏只加一次 5s 就兜底 DEM-H(medium), 不为重试阻塞 live 分。warm 覆盖点稳定
+0.1-3s 拿 LiDAR。⚠️生产低频逐址+缓存, 正常不会自限流。

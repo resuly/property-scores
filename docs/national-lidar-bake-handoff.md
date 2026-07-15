@@ -6,6 +6,30 @@
 
 ---
 
+## 0a-goal. 最终目标 + 完成条件(Definition of Done)
+
+**战略目标**:服务北极星(DA Leads = B2B 数据层)。把 flood/高程从软功能变成可辩护、可 licence
+的数据差异化——答 Hugh/Naveen 批评 + Kenneth/Geoscape 硬牌。核心叙事:"有地址的地方都跑在
+LiDAR 上,且诚实标置信度"。
+
+**项目目标**:一套统一的全国 5m LiDAR 裸地高程地基,本地/确定性/亚毫秒,升级所有地形评分
+(flood 优先 + bushfire/view/noise/solar)、退掉 5 州 live-API 拼图。
+
+**完成条件(逐条可检验)**:
+1. 全国 5m LiDAR COG 落 `data/global/lidar/` + `au_lidar_5m.vrt`,覆盖=第 1 步枚举确认的 GA
+   足迹(~245k km²),~10GB,逐州 attribution 齐。
+2. `_hand_local` 优先本地 LiDAR;**5 州 live-API provider 下线**;bushfire/view/noise/solar 走同一
+   DEM;测试 90+ 全过。
+3. prod 跨州测试集:有 LiDAR=`elevation_confidence:high`、无=DEM-H `medium`;**SA/ACT/NT 现拿到
+   high**;关键案例(Parramatta 45 / Elwood High)无回归。
+4. 本地采样亚毫秒、无 live-API 依赖;Oracle 盘净增 ~5GB(回收旧 Copernicus 后)无需买盘;bake
+   串行跑完未宕机。
+5. 收尾:`flood-dem-upgrade.md` + 记忆更新;contour live-API 退役说明;对外话术一致(分米级/相对
+   筛查/换底座)。
+
+**诚实边界**:5 州 live LiDAR 已上线=已交付绝大部分用户价值;国家级增量=统一+覆盖 SA/ACT/NT+
+退维护负担+"全国"声明。带宽紧时 5 州版即为完整可交付态。
+
 ## 0. 一句话目标
 
 用**一层统一的全国 5m LiDAR 裸地 COG**(本地采样)接进 flood HAND,替换现在 5 州的

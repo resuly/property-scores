@@ -198,3 +198,91 @@ DEM-H 数据源确认: **DEA 公共 S3 COG**(无认证, CC BY 4.0): `/vsicurl/ht
 **工作量**: 天级(COG 管道 + 覆盖 mask + 采样器改造 + 逐州接入), 非小时级。P1 已满足对批评的核心回应, P2 不紧急、不与北极星 P0(licence)抢注意力。
 
 **触发条件建议**: Kenneth/保险类买家明确要 survey 级时, 或 licence 客户把 flood 当卖点时, 再排期。
+
+---
+
+## 六、P2 本地验证 + 架构定型(2026-07-15, 改代码前)
+
+### 端点摸底(2026-07-15 全部实测)
+
+| 州 | 端点 | 类型 | 分辨率 | DTM/DSM | 授权 | 覆盖 | 状态 |
+|---|---|---|---|---|---|---|---|
+| **NSW** | `maps.six.nsw.gov.au/.../NSW_5M_Elevation/ImageServer` | ArcGIS ImageServer | 5m | DTM 裸地 | CC BY 4.0 | 全州 | ✅ identify+exportImage 双验证, 州外干净 NoData |
+| **QLD** | `spatial-img.information.qld.gov.au/.../Elevation/QldDem/ImageServer` | ArcGIS ImageServer | **0.5m** LiDAR + SRTM 30m 兜底 | DTM 裸地 | CC BY 4.0(需署名) | 全州(有采集处 LiDAR, 其余 SRTM 填) | ✅ identify 实测(Brisbane 5.82/West End 13.52/Rockhampton 8.98, 州外 NoData) |
+| VIC | Vicmap 1m DEM VaaS | ImageServer 但**政府授权闸门** | 1m | DTM | ❌ 非开放(公众须经 reseller 付费) | 全州 | ⚠️ live 端点用不了 → 优先 LGA 走 ELVIS AOI 批量下自烤 |
+| SA/WA/TAS/ACT/NT | 无 open live 端点 | ELVIS AOI 批量 / opendata 下载 | 1/2/5m | DTM | CC BY 4.0 | 补丁(都会/海岸) | ⬜ 无编程端点, 覆盖本就补丁 → 留 DEM-H 30m |
+| 国家 5m | GA `AUSTRALIA_5M_DEM` | **Earth Engine only** | 5m | DTM | CC BY 4.0 | 补丁 245k km² | ❌ 无公共 COG/ImageServer(`services.ga.gov.au/.../DEM_LiDAR_5m` = 404), 死路 |
+| DEA S3 | `dea-public-data.../projects/elevation/` | 公共 COG | 30m | 裸地 | CC BY 4.0 | 全国 | 仅 DEM-H(`ga_srtm_dem1sv1_0`), **无 5m/LiDAR COG** |
+
+> **可现在层叠(live ImageServer, CC BY 4.0, 无 auth)= NSW + QLD**, 两个都是同款 ArcGIS
+> identify/exportImage, drop-in。QLD 是本轮唯一新增可开州(0.5m 比 5m 还细, 且 SRTM 兜底不空)。
+> VIC 要 1m 须为优先 LGA 预下 ELVIS 瓦片自烤(gov 端点闸死)。SA/WA/TAS/ACT/NT 无编程端点+覆盖补丁
+> → 留 DEM-H 30m。国家 5m 是 EE-only 死路, 不接。DEA 桶只有 DEM-H, 没有省事的全国 5m COG。
+
+### 决定性验证 — LiDAR vs DEM-H HAND 前后(NSW, 一次 exportImage 窗 + 本地 16 点 300m 环采样)
+
+| 地址 | DEM-H HAND | LiDAR HAND | Δ | 说明 |
+|---|---|---|---|---|
+| **Parramatta 河岸(近水低洼)** | 11.3m | **1.1m** | **−10.2m** | DEM-H 30m 残余噪声把它抬高假安全, LiDAR 读出几乎贴排水线 |
+| Chatswood 空地 | 17.1m | 14.9m | −2.2m | 中度 |
+| Ryde 住宅(高干) | 26.2m | 27.3m | +1.1m | 高干地几乎不动 |
+| Windsor 洪泛滩 | 3.0m | 4.2m | +1.2m | 小 |
+| Lismore CBD | 3.0m | 1.4m | −1.6m | LiDAR 更谨慎 |
+
+**结论(答 P1 遗留的 line 76 决定性测试)**: LiDAR **只在近水低洼地块大幅收紧 HAND**(Parramatta
+11.3→1.1m),正是 DEM-H ~4-6m 残余噪声最伤 flood 判读处;高干地块基本不动(Ryde 26→27)。
+这就是"有覆盖处 survey 级、其余照旧"的干净卖点 —— 与 P1 同调:改准不是调吓人。
+
+### 架构定型: on-demand 读 API, 零存储(2026-07-15 修正)
+
+先前初判"必须预烤"——**基于两个新事实修正为 on-demand**:
+
+**事实 1: flood 现在就是 live 服务。** prod `/var/www/property-scores/data/` 里**没有
+`flood_cache_*.parquet`**(precompute 脚本只有 melbourne 区且从未在 prod 跑),`flood_cache_lookup`
+永远返回 None → 每次请求现算 `flood_score()`,本就有远程调用(JRC signed COG)。加一次 LiDAR
+exportImage 不改变服务模型。
+
+**事实 2: 用 exportImage(一窗/址)速度够,可靠性靠兜底。** 端点基准(6 次/20s 超时):
+
+| 端点 | 中位 | 最慢 | 失败 |
+|---|---|---|---|
+| NSW identify(点查, HAND 要 17 次) | 0.31s | 17.15s | 3/6 ❌ |
+| NSW exportImage(一窗覆盖整环) | 0.44s | 1.27s | 1/6 ⚠️ |
+| QLD identify | 0.97s | 1.29s | 0/6 ✅ |
+| QLD exportImage | 1.97s | 2.10s | 0/6 ✅ |
+
+速度不是瓶颈(中位 0.3–2s);NSW 间歇丢请求是真问题 → **tight 超时 + 1 重试 + 失败兜底 DEM-H**。
+
+**存储对比(实测 22 KB/km² Int16 分米 5m COG)**: 全州预烤 NSW 18G + QLD 41G = **59G > Oracle 剩 53G**
+(QLD 原生 0.5m 全州 = 3.8TB 荒谬)。优先 LGA 只 0.3–0.6G。→ 但 on-demand **零存储**, 更省。
+
+- **采样器**: flood `_hand_local` 先试一次 LiDAR exportImage 窗(NSW/QLD 覆盖内), 本地采点+16 点环
+  → 成则 `elevation_confidence=high`; 超时/失败/州外 → 兜底现有 DEM-H 30m 环, `=medium`; proxy `=low`。
+  LiDAR 逻辑放 flood(HAND 是唯一受益者), 不动通用 `terrain.elevation`(否则 bushfire/noise/view
+  白白多打 API)。窗内加进程级 bbox 缓存, 环的 17 点复用一次 fetch。
+- **代价**: NSW 偶发失败的地址暂时落 medium(同址不同天可能高/中飘, 但诚实); 首次命中偶尔慢 1–2s。
+- **预烤留作后手**: 将来 flood 转预计算网格、或某市场明确要确定性 high-confidence 时再排。
+
+### 实施(2026-07-15, 本地全测过, 待 Bo sign-off 部署)
+
+- ✅ `flood/lidar.py`: on-demand NSW/QLD exportImage 窗采样器。一窗覆盖整环, 5m px,
+  按 ~500m cell 进程级缓存(正样本长存/负样本 90s TTL 防打死机), tight 6s 超时+1 重试,
+  QLD 用 identify catalogItems 门控 LiDAR vs SRTM-fill(仅真 LiDAR 判 high)。
+- ✅ `flood/score.py`: `_hand_local(lat,lng,state)` 三级(LiDAR→DEM-H 30m→proxy);
+  `_hand_from_elev` 抽出共享环几何 + **来源感知不确定阈**(DEM-H 5m / LiDAR 1m,
+  让 LiDAR 敢信近水低相对差); 输出 `elevation_confidence` = high/medium/low。
+- ✅ `flood.html`: HAND 段加置信度徽章(绿=LiDAR survey-grade / 琥珀=DEM-H screening),
+  方法论 data-source 行更新。浏览器实测两档都渲染正确。
+- ✅ 测试: `tests/test_flood.py` +6 网络无关用例(环数学/来源阈/映射/LiDAR 优先/兜底);
+  全 88 passed。
+- ✅ 真 flood 分前后(live): Parramatta 河岸 DEM-H HAND 11.3→**LiDAR 1.0m**, 分 65→**45
+  Moderate**(近水低洼正确收紧, conf=high); Ryde 高干几乎不动; VIC/QLD-SRTM-fill 落 DEM-H
+  medium 无回归。
+
+**已知代价(诚实)**: NSW/QLD 偶发超时的地址走兜底 → 那次 HAND 落 medium(同址不同天可能
+高/中飘, 徽章诚实反映); 瞬时双超时最坏 ~10-12s 首次延迟(之后 cell 负缓存 90s)。da_leads
+暂无消费此 flood 分(无接线), 故只到 property-scores API + demo 页; 将来 da_leads 报告接入时
+`elevation_confidence` 已在 payload 里直接可用。
+
+**部署**(prod :8099 = /var/www/property-scores master): pull → restart property-scores.service。
+**未推未部署, 等 Bo sign-off。**

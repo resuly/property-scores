@@ -59,3 +59,79 @@ def test_jrc_to_score_no_water_safe():
 def test_jrc_to_score_floodplain_risky():
     s = _jrc_to_score({"nearest_water_m": 50, "flood_cells": 20, "wet_cells": 25})
     assert s <= 15
+
+
+# --- LiDAR / DEM-H resolution-aware HAND + elevation_confidence (P2) ---
+
+from property_scores.flood import score as _score
+from property_scores.flood.score import (
+    _ELEV_CONFIDENCE, _hand_from_elev, _hand_local,
+)
+
+
+def _bowl(pt_lat, pt_lng, pt_elev, drop):
+    """Elevation sampler: the query point sits `drop` m above its ring (the ring
+    holds the local drainage), so HAND = drop."""
+    def elev(lat, lng):
+        near = abs(lat - pt_lat) < 1e-4 and abs(lng - pt_lng) < 1e-4
+        return pt_elev if near else pt_elev - drop
+    return elev
+
+
+def test_hand_from_elev_ring_math():
+    h = _hand_from_elev(-33.8, 151.0, _bowl(-33.8, 151.0, 8.0, 6.0),
+                        "lidar_5m", 1.0)
+    assert h["hand_m"] == 6.0 and h["source"] == "lidar_5m"
+    assert h["relief_m"] == 6.0 and h["uncertain"] is False
+
+
+def test_hand_from_elev_source_aware_uncertainty():
+    # 3 m relief: within DEM-H's ~5 m noise (uncertain) but trusted by LiDAR.
+    elev = _bowl(-33.8, 151.0, 8.0, 3.0)
+    assert _hand_from_elev(-33.8, 151.0, elev, "dem_relief", 5.0)["uncertain"] is True
+    assert _hand_from_elev(-33.8, 151.0, elev, "lidar_5m", 1.0)["uncertain"] is False
+
+
+def test_hand_from_elev_none_outside_coverage():
+    assert _hand_from_elev(-33.8, 151.0, lambda la, ln: None, "lidar_5m", 1.0) is None
+
+
+def test_elevation_confidence_mapping():
+    assert _ELEV_CONFIDENCE["lidar_5m"] == "high"
+    assert _ELEV_CONFIDENCE["dem_relief"] == "medium"
+    assert _ELEV_CONFIDENCE.get("proxy", "low") == "low"
+
+
+class _FakeWindow:
+    def __init__(self, pt_lat, pt_lng, pt_elev, drop):
+        self._elev = _bowl(pt_lat, pt_lng, pt_elev, drop)
+        self.closed = False
+
+    def elev(self, lat, lng):
+        return self._elev(lat, lng)
+
+    def close(self):
+        self.closed = True
+
+
+def test_hand_local_prefers_lidar(monkeypatch):
+    win = _FakeWindow(-33.8, 151.0, 8.0, 6.0)
+    monkeypatch.setattr(_score, "_hand_local_proxy", lambda la, ln: {"hand_m": 99})
+    import property_scores.flood.lidar as _lidar
+    monkeypatch.setattr(_lidar, "covered", lambda s: s in ("NSW", "QLD"))
+    monkeypatch.setattr(_lidar, "open_window", lambda la, ln, st: win)
+    h = _hand_local(-33.8, 151.0, "NSW")
+    assert h["source"] == "lidar_5m" and h["hand_m"] == 6.0
+    assert win.closed is True  # window handle always released
+
+
+def test_hand_local_falls_back_to_demh(monkeypatch):
+    # LiDAR unavailable (timeout / SRTM fill) -> DEM-H 30 m, medium confidence.
+    import property_scores.flood.lidar as _lidar
+    monkeypatch.setattr(_lidar, "covered", lambda s: s in ("NSW", "QLD"))
+    monkeypatch.setattr(_lidar, "open_window", lambda la, ln, st: None)
+    from property_scores.common import terrain
+    monkeypatch.setattr(terrain, "available", lambda: True)
+    monkeypatch.setattr(terrain, "elevation", _bowl(-33.8, 151.0, 8.0, 6.0))
+    h = _hand_local(-33.8, 151.0, "NSW")
+    assert h["source"] == "dem_relief" and _ELEV_CONFIDENCE[h["source"]] == "medium"

@@ -457,59 +457,98 @@ def _water_proximity_local(lat: float, lng: float) -> dict | None:
         return None
 
 
-def _hand_local(lat: float, lng: float) -> dict | None:
-    """Approximate HAND (Height Above Nearest Drainage) from the local GLO-30 DEM.
+# HAND elevation source -> vertical-accuracy tier for elevation_confidence.
+_ELEV_CONFIDENCE = {"lidar_5m": "high", "dem_relief": "medium"}
+
+
+def _hand_from_elev(lat: float, lng: float, elev, source: str,
+                    uncertain_thresh: float) -> dict | None:
+    """HAND (Height Above Nearest Drainage) from an elevation sampler `elev`.
 
     HAND = the point's height above the local drainage line. We approximate the
-    drainage as the lowest elevation in a ring around the point (rivers/creeks sit
-    at the local minimum) and take point_elev - that minimum. This uses real
-    elevation (data/global/dem.vrt, already on disk, no extra storage) instead of
-    the old building-density proxy. Falls back to that proxy outside DEM coverage.
+    drainage as the lowest elevation in a ring around the point (rivers/creeks
+    sit at the local minimum) and take point_elev - that minimum. `elev(lat,lng)`
+    returns metres or None; source-agnostic so DEM-H 30 m and on-demand LiDAR
+    share one ring geometry. `uncertain_thresh` is the local relief below which a
+    read is within the source's vertical noise (deferred to overlay/JRC): ~5 m
+    for GLO-30/DEM-H, ~1 m for LiDAR (its whole value is trusting low relief near
+    water). None if the point or the whole ring is outside coverage.
     """
+    pt = elev(lat, lng)
+    if pt is None:
+        return None
+
+    coslat = max(0.2, math.cos(math.radians(lat)))
+
+    def _ring(r_m: float, n: int) -> list:
+        dlat = r_m / 111320.0
+        dlng = r_m / (111320.0 * coslat)
+        out = []
+        for i in range(n):
+            a = 2 * math.pi * i / n
+            e = elev(lat + dlat * math.sin(a), lng + dlng * math.cos(a))
+            if e is not None:
+                out.append(e)
+        return out
+
+    # Nearest-ring-first: drainage = lowest point in the NEAREST ring, so a
+    # distant gorge/escarpment can't inflate HAND. Widen only if the nearest
+    # ring is entirely outside coverage.
+    samples = _ring(300, 16) or _ring(600, 12) or _ring(1000, 8)
+    if not samples:
+        return None
+
+    drainage = min(min(samples), pt)
+    relief = max(max(samples), pt) - drainage
+    hand_m = max(0.0, round(pt - drainage, 1))
+    return {
+        "hand_m": hand_m,
+        "point_elev_m": round(pt, 1),
+        "drainage_elev_m": round(drainage, 1),
+        "relief_m": round(relief, 1),
+        "uncertain": relief < uncertain_thresh,
+        "source": source,
+    }
+
+
+def _hand_local(lat: float, lng: float, state: str | None = None) -> dict | None:
+    """HAND from the best available elevation, cheapest-trusted first.
+
+    1. On-demand LiDAR (NSW/QLD open ImageServers) — one exportImage window feeds
+       the whole ring; sub-5 m bare-earth, so low relief near water is trusted
+       (`elevation_confidence` = high). Skipped/None outside NSW-QLD or on a
+       timeout/failure, so live scoring never blocks on the remote service.
+    2. Local GA DEM-H 30 m (data/global/dem.vrt, on disk) — confidence = medium.
+    3. Overture water/building proxy outside DEM tile coverage — confidence = low.
+    """
+    # 1. LiDAR (survey-grade where covered)
+    if state:
+        try:
+            from property_scores.flood import lidar
+            if lidar.covered(state):
+                win = lidar.open_window(lat, lng, state)
+                if win is not None:
+                    try:
+                        h = _hand_from_elev(lat, lng, win.elev, "lidar_5m", 1.0)
+                    finally:
+                        win.close()
+                    if h is not None:
+                        return h
+        except Exception as e:
+            logger.debug("LiDAR HAND failed, falling back: %s", e)
+
+    # 2. Local DEM-H 30 m
     try:
         from property_scores.common import terrain
-
-        pt = terrain.elevation(lat, lng)
-        if pt is None:
-            return _hand_local_proxy(lat, lng)  # outside DEM tile coverage
-
-        coslat = max(0.2, math.cos(math.radians(lat)))
-
-        def _ring(r_m: float, n: int) -> list:
-            dlat = r_m / 111320.0
-            dlng = r_m / (111320.0 * coslat)
-            out = []
-            for i in range(n):
-                a = 2 * math.pi * i / n
-                e = terrain.elevation(lat + dlat * math.sin(a),
-                                      lng + dlng * math.cos(a))
-                if e is not None:
-                    out.append(e)
-            return out
-
-        # Nearest-ring-first: drainage = lowest point in the NEAREST ring, so a
-        # distant gorge/escarpment can't inflate HAND. Widen only if the nearest
-        # ring is entirely outside coverage.
-        samples = _ring(300, 16) or _ring(600, 12) or _ring(1000, 8)
-        if not samples:
-            return _hand_local_proxy(lat, lng)
-
-        drainage = min(min(samples), pt)
-        relief = max(max(samples), pt) - drainage
-        hand_m = max(0.0, round(pt - drainage, 1))
-        return {
-            "hand_m": hand_m,
-            "point_elev_m": round(pt, 1),
-            "drainage_elev_m": round(drainage, 1),
-            "relief_m": round(relief, 1),
-            # GLO-30 vertical noise is ~4m; below ~5m local relief a HAND read
-            # is not trustworthy, so callers should defer to overlay/JRC.
-            "uncertain": relief < 5.0,
-            "source": "dem_relief",
-        }
+        if terrain.available():
+            h = _hand_from_elev(lat, lng, terrain.elevation, "dem_relief", 5.0)
+            if h is not None:
+                return h
     except Exception as e:
         logger.debug("DEM HAND failed, falling back to proxy: %s", e)
-        return _hand_local_proxy(lat, lng)
+
+    # 3. Proxy outside DEM tile coverage
+    return _hand_local_proxy(lat, lng)
 
 
 def _hand_local_proxy(lat: float, lng: float) -> dict | None:
@@ -714,8 +753,8 @@ def flood_score(lat: float, lng: float) -> dict:
     if jrc:
         jrc_score = _jrc_to_score(jrc)
 
-    # --- Phase 3: HAND approximation (local data) ---
-    hand = _hand_local(lat, lng)
+    # --- Phase 3: HAND approximation (LiDAR where covered, else DEM-H) ---
+    hand = _hand_local(lat, lng, state)
 
     # --- Phase 4: ERA5 P95 extreme rainfall ---
     p95 = _query_p95(lat, lng)
@@ -792,6 +831,11 @@ def flood_score(lat: float, lng: float) -> dict:
         result_dict["water_proximity"] = jrc
     if hand:
         result_dict["hand"] = hand
+        # Vertical-accuracy tier of the elevation behind the HAND read, exposed
+        # so the report/API can flag it: high = on-demand LiDAR (NSW/QLD, ~5m or
+        # finer bare-earth), medium = GA DEM-H 30m, low = water/building proxy.
+        result_dict["elevation_confidence"] = _ELEV_CONFIDENCE.get(
+            hand.get("source"), "low")
     if p95:
         result_dict["p95"] = p95
     if warnings:

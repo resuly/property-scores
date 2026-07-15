@@ -85,7 +85,7 @@
           <ul class="list-disc ml-4 space-y-0.5">
             <li>ArcGIS Planning Overlays (VIC/NSW/SA/TAS/ACT)</li>
             <li>JRC Global Surface Water, 38-year satellite record</li>
-            <li>HAND (Height Above Nearest Drainage), Copernicus 30m</li>
+            <li>HAND (Height Above Nearest Drainage): LiDAR ≤5m bare-earth where covered (NSW/QLD), else GA DEM-H 30m</li>
             <li>ERA5 P95 extreme rainfall climatology</li>
           </ul>
         </div>
@@ -348,6 +348,17 @@ async function query() {
       html += `<div class="text-xs">`;
       html += stat('Height above drainage', hm + ' m', handLabel);
       html += `<div class="text-[11px] text-slate-500 mt-0.5">${handDesc}</div>`;
+      // Elevation-source confidence: honest tier of the DEM behind the HAND read.
+      const conf = d.elevation_confidence;
+      if (conf) {
+        const cfg = conf === 'high'
+          ? { c: 'text-emerald-700 bg-emerald-50 border-emerald-200', t: 'High confidence', s: 'LiDAR ≤5m bare-earth (survey-grade)' }
+          : conf === 'medium'
+          ? { c: 'text-amber-700 bg-amber-50 border-amber-200', t: 'Screening confidence', s: 'National DEM-H 30m bare-earth' }
+          : { c: 'text-slate-600 bg-slate-50 border-slate-200', t: 'Low confidence', s: 'Proxy estimate (no elevation coverage)' };
+        html += `<div class="mt-1.5 inline-flex items-center gap-1 text-[11px] border rounded px-1.5 py-0.5 ${cfg.c}">`;
+        html += `<span class="font-medium">${cfg.t}</span><span class="opacity-70">· ${cfg.s}</span></div>`;
+      }
       html += `</div>`;
     }
 

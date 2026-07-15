@@ -207,17 +207,21 @@ DEM-H 数据源确认: **DEA 公共 S3 COG**(无认证, CC BY 4.0): `/vsicurl/ht
 
 | 州 | 端点 | 类型 | 分辨率 | DTM/DSM | 授权 | 覆盖 | 状态 |
 |---|---|---|---|---|---|---|---|
-| **NSW** | `maps.six.nsw.gov.au/.../NSW_5M_Elevation/ImageServer` | ArcGIS ImageServer | 5m | DTM 裸地 | CC BY 4.0 | 全州 | ✅ identify+exportImage 双验证, 州外干净 NoData |
-| **QLD** | `spatial-img.information.qld.gov.au/.../Elevation/QldDem/ImageServer` | ArcGIS ImageServer | **0.5m** LiDAR + SRTM 30m 兜底 | DTM 裸地 | CC BY 4.0(需署名) | 全州(有采集处 LiDAR, 其余 SRTM 填) | ✅ identify 实测(Brisbane 5.82/West End 13.52/Rockhampton 8.98, 州外 NoData) |
-| VIC | Vicmap 1m DEM VaaS | ImageServer 但**政府授权闸门** | 1m | DTM | ❌ 非开放(公众须经 reseller 付费) | 全州 | ⚠️ live 端点用不了 → 优先 LGA 走 ELVIS AOI 批量下自烤 |
-| SA/WA/TAS/ACT/NT | 无 open live 端点 | ELVIS AOI 批量 / opendata 下载 | 1/2/5m | DTM | CC BY 4.0 | 补丁(都会/海岸) | ⬜ 无编程端点, 覆盖本就补丁 → 留 DEM-H 30m |
+| **NSW** | `maps.six.nsw.gov.au/.../NSW_5M_Elevation/ImageServer` | ArcGIS ImageServer(栅格) | 5m | DTM 裸地 | CC BY 4.0 | 全州 | ✅ 已上线(读栅格窗) |
+| **QLD** | `spatial-img.information.qld.gov.au/.../Elevation/QldDem/ImageServer` | ArcGIS ImageServer(栅格) | **0.5m** LiDAR + SRTM 30m 兜底 | DTM 裸地 | CC BY 4.0(需署名) | 全州(有采集处 LiDAR, 其余 SRTM 填, identify 门控) | ✅ 已上线(读栅格窗) |
+| **VIC** | `services-ap1.arcgis.com/P744lA0wf4LlBZ84/.../Vicmap_Elevation_METRO_1_to_5_metre/FeatureServer/1` | ArcGIS FeatureServer(**等高线**) | **1m metro** / 5m 其余 | DTM 裸地 | CC BY 4.0 | 全州(metro 1m) | ✅ 已上线(**等高线 IDW 插值**, 与地图同源); 栅格 VaaS 被政府授权闸死, 但等高线开放 |
+| **TAS** | `services.thelist.tas.gov.au/.../TopographyAndRelief/MapServer/13` | ArcGIS MapServer(等高线) | 5m | DTM 裸地 | CC BY 3.0 AU | 全州 | ✅ 已上线(等高线 IDW, conf=medium; 比 DEM-H 准但非 survey 级) |
+| WA | `services.slip.wa.gov.au/.../Terrain/MapServer/1` | 等高线 | **10m** | DTM | CC BY 4.0 | 全州 | ⏸ **不接**: 10m 间距≈±5m≈DEM-H, 无增益, 打 LiDAR 徽章=作秀 → 留 DEM-H |
+| SA/ACT/NT | 无好的开放源 | — | — | — | — | — | ⬜ 留 DEM-H 30m |
 | 国家 5m | GA `AUSTRALIA_5M_DEM` | **Earth Engine only** | 5m | DTM | CC BY 4.0 | 补丁 245k km² | ❌ 无公共 COG/ImageServer(`services.ga.gov.au/.../DEM_LiDAR_5m` = 404), 死路 |
 | DEA S3 | `dea-public-data.../projects/elevation/` | 公共 COG | 30m | 裸地 | CC BY 4.0 | 全国 | 仅 DEM-H(`ga_srtm_dem1sv1_0`), **无 5m/LiDAR COG** |
 
-> **可现在层叠(live ImageServer, CC BY 4.0, 无 auth)= NSW + QLD**, 两个都是同款 ArcGIS
-> identify/exportImage, drop-in。QLD 是本轮唯一新增可开州(0.5m 比 5m 还细, 且 SRTM 兜底不空)。
-> VIC 要 1m 须为优先 LGA 预下 ELVIS 瓦片自烤(gov 端点闸死)。SA/WA/TAS/ACT/NT 无编程端点+覆盖补丁
-> → 留 DEM-H 30m。国家 5m 是 EE-only 死路, 不接。DEA 桶只有 DEM-H, 没有省事的全国 5m COG。
+> **已层叠 4 州 = NSW + QLD(栅格)+ VIC + TAS(等高线)**, 全 on-demand 零存储。
+> **关键更正(07-15)**: 初判"VIC 做不了"是错的——VIC 栅格 VaaS 虽被政府授权闸死, 但它的 **1m 等高线
+> FeatureServer 是开放的**(就是 da_leads 地图等高线图层用的那个)。等高线给的是线不是栅格, 所以走
+> **IDW 插值**(box 内取等高线顶点, 反距离加权算点高程, 最低等高线=排水线)而非读栅格窗。VIC metro 1m
+> = survey 级 high; TAS 5m / VIC rural 5m = medium(点高程比 DEM-H 准, 但非 survey)。
+> **WA 10m 不接**(≈±5m≈DEM-H 无增益); SA/ACT/NT 无源; 国家 5m EE-only 死路。DEA 桶只有 DEM-H。
 
 ### 决定性验证 — LiDAR vs DEM-H HAND 前后(NSW, 一次 exportImage 窗 + 本地 16 点 300m 环采样)
 
@@ -265,9 +269,11 @@ exportImage 不改变服务模型。
 
 ### 实施(2026-07-15, 本地全测过, 待 Bo sign-off 部署)
 
-- ✅ `flood/lidar.py`: on-demand NSW/QLD exportImage 窗采样器。一窗覆盖整环, 5m px,
-  按 ~500m cell 进程级缓存(正样本长存/负样本 90s TTL 防打死机), tight 6s 超时+1 重试,
-  QLD 用 identify catalogItems 门控 LiDAR vs SRTM-fill(仅真 LiDAR 判 high)。
+- ✅ `flood/lidar.py`: on-demand 采样器, 两种 provider 一个 `open_window()`(鸭子类型
+  elev/close/source/uncertain_thresh):**栅格**(NSW/QLD exportImage 窗, 5m px)+ **等高线**
+  (VIC/TAS FeatureServer 顶点 IDW 插值)。按 ~500m cell 进程级缓存(正样本长存/负样本 90s TTL),
+  tight 5s 超时 fail-fast, UA 防限流, QLD identify 门控 LiDAR vs SRTM-fill; 等高线间距驱动置信度
+  (≤1.5m→high, ≤7m→medium, >7m 不接)。WA 10m 自动落回 DEM-H。
 - ✅ `flood/score.py`: `_hand_local(lat,lng,state)` 三级(LiDAR→DEM-H 30m→proxy);
   `_hand_from_elev` 抽出共享环几何 + **来源感知不确定阈**(DEM-H 5m / LiDAR 1m,
   让 LiDAR 敢信近水低相对差); 输出 `elevation_confidence` = high/medium/low。

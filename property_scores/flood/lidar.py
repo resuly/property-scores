@@ -41,10 +41,14 @@ _CELL_DEG = 0.005        # ~500 m grid cell — cache-key granularity
 _RING_MARGIN_M = 400     # HAND ring is 300 m; pad the window so any point in the
                          # cell keeps its full ring inside the single fetch
 _PX_M = 5.0              # sample everything at 5 m (QLD 0.5 m resampled down)
-_TIMEOUT = 6.0
-_RETRIES = 1
+_TIMEOUT = 5.0           # fail fast: DEM-H fallback is instant and honestly
+_RETRIES = 0             # flagged 'medium', so a slow/throttled cell is not
+                         # worth blocking a live score on a retry
 _NEG_TTL = 90.0          # re-try a failed cell after this many seconds
 _MAX_CACHE = 256
+# ArcGIS ImageServers throttle/deny UA-less requests under load; identify as a
+# normal client so a burst of nearby lookups is not mistaken for a scraper.
+_UA = "property-scores-flood/1.0 (+https://limontech.net)"
 
 # QLD mosaic items whose name marks SRTM fill rather than a LiDAR capture.
 _SRTM_RE = re.compile(r"srtm|_dem[_-]?h|1sec", re.I)
@@ -72,10 +76,11 @@ def _lru_put(cache, key, val):
 
 
 def _http(url):
-    """GET with a tight timeout + one retry. Returns bytes or None."""
+    """GET with a tight timeout (+ optional retry). Returns bytes or None."""
+    req = urllib.request.Request(url, headers={"User-Agent": _UA})
     for _ in range(_RETRIES + 1):
         try:
-            return urllib.request.urlopen(url, timeout=_TIMEOUT).read()
+            return urllib.request.urlopen(req, timeout=_TIMEOUT).read()
         except Exception as e:
             logger.debug("LiDAR http failed: %s", e)
     return None

@@ -134,9 +134,9 @@ def test_contour_window_tiers_by_interval():
     fine = ContourWindow([(-37.8, 144.9, float(a)) for a in (10, 11, 12, 13)])
     assert fine.step == 1.0 and fine.source == "lidar_contour_1m"
     assert fine.uncertain_thresh == 1.0
-    # 5 m interval -> better than DEM-H but labelled medium.
+    # 5 m interval -> better than DEM-H but labelled medium (provenance-neutral).
     coarse = ContourWindow([(-41.4, 147.1, float(a)) for a in (5, 10, 15, 20)])
-    assert coarse.step == 5.0 and coarse.source == "lidar_contour_5m"
+    assert coarse.step == 5.0 and coarse.source == "contour_med"
     assert coarse.uncertain_thresh == 2.5
 
 

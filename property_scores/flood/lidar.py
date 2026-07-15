@@ -8,13 +8,20 @@ for the HAND ring, so near-water low lots get survey-grade height instead of the
     NSW  — NSW_5M_Elevation, statewide 5 m bare-earth DTM
     QLD  — Elevation/QldDem, 0.5-1 m LiDAR where captured, SRTM 30 m fill else
   CONTOUR (ArcGIS Feature/MapServer, elevation iso-lines -> IDW point value):
-    VIC  — Vicmap Elevation, 1 m metro / 5 m rest (the map's contour source)
-    TAS  — theLIST TopographyAndRelief, 5 m
+    VIC  — Vicmap Elevation, 1 m metro / 5 m rest (LiDAR; the map's source)
+    TAS  — theLIST TopographyAndRelief, 5 m (LiDAR)
+    WA   — SLIP DPIRD Terrain, 2 m interval over SW/coastal (NOT LiDAR: a
+           10 m-grid Land Monitor DEM, ~2000; finer than DEM-H but only medium)
 
 VIC's *raster* DEM (VaaS) is government-licensed, but its 1 m contours are open,
 so we interpolate a point value by inverse-distance weighting over the contour
-vertices in the cell. WA (10 m contours) is skipped: at ~+/-5 m it is no better
-than DEM-H, so a LiDAR badge there would be theatre.
+vertices in the cell. A deep 2026-07-15 sweep confirmed SA / ACT / NT publish
+their (real, 1 m) LiDAR only as batch downloads, and NT's one live gov server
+resets every client — none has an open on-demand endpoint, so they stay DEM-H.
+WA's finer Landgate topo contours are subscription-locked; the open DPIRD 2 m
+layer is the usable-but-coarser fallback (same locked-raster / open-contour
+shape as VIC). Confidence is interval-driven, so only genuine <=1.5 m (VIC
+metro LiDAR) reads as survey-grade 'high'; everything else is 'medium'.
 
 HAND samples a 300 m / 16-point ring, so ONE fetch per ~500 m cell (an
 exportImage window, or one contour envelope query) feeds the whole ring and is
@@ -54,6 +61,9 @@ _CONTOUR = {
     "TAS": {"url": ("https://services.thelist.tas.gov.au/arcgis/rest/services/"
                     "Public/TopographyAndRelief/MapServer/13/query"),
             "field": "ELEVATION"},
+    "WA": {"url": ("https://public-services.slip.wa.gov.au/public/rest/services/"
+                   "SLIP_Public_Services/Terrain/MapServer/0/query"),
+           "field": "elevation_m"},  # 2 m interval, SW/coastal only, non-LiDAR
 }
 
 _CELL_DEG = 0.005        # ~500 m grid cell — cache-key granularity
@@ -272,10 +282,12 @@ class ContourWindow:
         step = min((b - a for a, b in zip(alts, alts[1:]) if b > a), default=None)
         self.step = step
         if step is not None and step <= _CONTOUR_HIGH_STEP:
-            self.source = "lidar_contour_1m"      # high
+            self.source = "lidar_contour_1m"      # high (VIC metro 1 m LiDAR)
             self.uncertain_thresh = 1.0
         else:
-            self.source = "lidar_contour_5m"      # medium (still beats DEM-H)
+            # medium: finer than DEM-H but not survey-grade. Mixed provenance
+            # (VIC-rural/TAS are LiDAR, WA is a 10 m-grid DEM), so no 'lidar' tag.
+            self.source = "contour_med"
             self.uncertain_thresh = max(2.5, (step or 5.0) / 2.0)
 
     def elev(self, lat, lng):

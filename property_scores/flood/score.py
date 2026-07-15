@@ -463,7 +463,7 @@ def _water_proximity_local(lat: float, lng: float) -> dict | None:
 _ELEV_CONFIDENCE = {
     "lidar_5m": "high",
     "lidar_contour_1m": "high",
-    "lidar_contour_5m": "medium",
+    "contour_med": "medium",
     "dem_relief": "medium",
 }
 

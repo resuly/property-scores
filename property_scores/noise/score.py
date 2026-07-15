@@ -798,6 +798,8 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     # is untouched). Mainly the NOISE_TRANSFER=0 / raster-miss path.
     lden = min(lden, 82.0)
 
+    _perf_terrain = time.perf_counter()  # TEMP: terrain/physics done, before transfer RF
+
     # --- EU->AU transfer RF + per-state affine calibration (opt-in) ---
     # Replaces the physics Lden with the geometry-trained transfer prediction.
     # The RF is road/geometry only (no aircraft), so any aircraft penalty is
@@ -874,6 +876,8 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
         except Exception:
             logger.warning("transfer fallback to physics", exc_info=True)
             lden = physics_lden  # explicit: keep physics value
+
+    _perf_transfer = time.perf_counter()  # TEMP: transfer RF done
 
     # --- ML residual correction ---
     # Disabled by default. The XGBoost residual model (noise_ml_model_la50.pkl)
@@ -1160,7 +1164,9 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     result["_perf_ms"] = {
         "db_and_sources": round((_perf_sources - _perf_t0) * 1000),
         "aircraft_wait": round((_perf_air - _perf_sources) * 1000),
-        "finalize": round((_perf_end - _perf_air) * 1000),
+        "physics_terrain": round((_perf_terrain - _perf_air) * 1000),
+        "transfer_rf": round((_perf_transfer - _perf_terrain) * 1000),
+        "ml_and_rest": round((_perf_end - _perf_transfer) * 1000),
         "total": round((_perf_end - _perf_t0) * 1000),
     }
     _cache_put(_CACHE_DB, _ck, result)

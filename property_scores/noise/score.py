@@ -512,6 +512,8 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     if _hit is not None:
         return {**_hit, "cached": True}
 
+    _perf_t0 = time.perf_counter()  # TEMP cold-path profiling (Bo, 2026-07-15)
+
     # Aircraft noise is two external API round-trips (~half the cold time) and
     # depends only on lat/lng, so run it in a thread while the DuckDB road/rail
     # queries below execute — the external latency hides behind that work
@@ -730,8 +732,10 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     rail_db = 10 * math.log10(rail_energy) if rail_energy > 0 else 0.0
 
     # --- Aircraft noise ---
+    _perf_sources = time.perf_counter()  # TEMP: DB + road/rail source processing done
     aircraft = _air_future.result()
     _air_pool.shutdown(wait=False)
+    _perf_air = time.perf_counter()  # TEMP: aircraft join done
     aircraft_db = 0.0
     if aircraft["penalty_db"] > 0:
         aircraft_db = AMBIENT_DB + aircraft["penalty_db"]
@@ -1152,6 +1156,13 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     except Exception:
         pass
 
+    _perf_end = time.perf_counter()  # TEMP cold-path profiling
+    result["_perf_ms"] = {
+        "db_and_sources": round((_perf_sources - _perf_t0) * 1000),
+        "aircraft_wait": round((_perf_air - _perf_sources) * 1000),
+        "finalize": round((_perf_end - _perf_air) * 1000),
+        "total": round((_perf_end - _perf_t0) * 1000),
+    }
     _cache_put(_CACHE_DB, _ck, result)
     return result
 

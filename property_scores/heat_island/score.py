@@ -389,9 +389,21 @@ def heat_island_score(lat: float, lng: float) -> dict:
 
     # --- Local adjustments (already fetched in parallel) ---
     density_penalty = building_density * 6 if building_density is not None else 0.0
-    green_bonus = greenspace * 5 if greenspace is not None else 0.0
+    # Tree/green cover is the primary UHI lever, so weight it as a CENTRED
+    # adjustment rather than a bonus-only term: above ~0.35 green fraction
+    # (typical AU suburban cover) reads cooler, below it reads hotter. The old
+    # bonus-only x5 term meant a nearly treeless, fully-paved CBD cell still read
+    # "Cool" off its moderate 1km MODIS temperature — the canopy reality could
+    # not pull it down (Bo, 2026-07-15). Because it is centred, the median
+    # address (green ~0.35) is unchanged; only the tails separate — leafy sites
+    # reward more, low-canopy paved sites penalise. Validated against 11 hot/cool
+    # anchors: fixes the CBD outlier (60->54 Moderate) and lifts genuinely leafy
+    # sites, without pushing ordinary suburbia into Hot or the hot-truth anchors
+    # (Oran Park / Penrith / Tarneit) into Extreme.
+    GREEN_BASELINE = 0.35
+    green_adjust = (greenspace - GREEN_BASELINE) * 22 if greenspace is not None else 0.0
 
-    score = max(0, min(100, round(temp_score - uhi_penalty - density_penalty + green_bonus)))
+    score = max(0, min(100, round(temp_score - uhi_penalty - density_penalty + green_adjust)))
 
     # Very Cool at 85 keeps the top label to ~15% of addresses (80 let 32%
     # of the 350-point sweep in; Bo opted for the tighter cut 2026-06-11).

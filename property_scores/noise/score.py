@@ -16,11 +16,12 @@ import logging
 import math
 import os
 import time
-from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 
 from property_scores.common.overture import get_db, roads_near, rail_near, aadt_near, nfdh_near, gtfs_rail_near
 from property_scores.common.au_state import detect_state
+from property_scores.common.config import data_path
+from property_scores.common.result_cache import get as _cache_get, put as _cache_put
 from property_scores.noise.buildings import buildings_in_radius, barrier_attenuation, buildings_to_arrays
 from property_scores.noise.aircraft import aircraft_noise_penalty
 from property_scores.noise.terrain import terrain_attenuation
@@ -493,29 +494,23 @@ def cell_score(lat: float, lng: float, cell_m: float = 220.0,
     return out
 
 
-# Dynamic result cache for LIVE computations that miss the pre-baked regional
-# noise cache. An uncached point runs the full road/rail/aircraft/ML stack
-# (~1s on prod, half of it two external aircraft-API round-trips) and was
-# recomputed on every repeat — even a second click on the same parcel. Cache the
-# finished payload (~1m key) so re-clicks / pan-backs / duplicate queries return
-# instantly, exactly like heat_island's cache. The pre-baked cache still serves
-# the points it covers; this only backstops the live path (Bo, 2026-07-15).
-_result_cache: "OrderedDict[tuple, tuple[dict, float]]" = OrderedDict()
-_RESULT_CACHE_MAX = 2000
-_RESULT_CACHE_TTL = 3600
+# Persistent, cross-worker result cache (see common/result_cache). An uncached
+# live noise_score is a ~1s road/rail/aircraft/ML stack that missed the pre-baked
+# regional cache, and prod runs 2 uvicorn workers, so a per-process dict only
+# caught ~half the repeats and died on every restart. One shared SQLite file
+# catches every repeat — any worker, across restarts — and self-populates, so a
+# revisited point goes from ~1s to sub-ms (Bo, 2026-07-15). The pre-baked cache
+# still serves the points it covers; this backstops the live path.
+_CACHE_DB = str(data_path("noise_result_cache.sqlite"))
+_RESULT_CACHE_TTL = 86400.0
 
 
 def noise_score(lat: float, lng: float, radius_m: int = 500,
                 *, source: str | None = None) -> dict:
-    _ck = (round(lat, 5), round(lng, 5), radius_m, source)
-    _now = time.time()
-    _hit = _result_cache.get(_ck)
+    _ck = f"{round(lat, 5)}:{round(lng, 5)}:{radius_m}:{source or ''}"
+    _hit = _cache_get(_CACHE_DB, _ck, _RESULT_CACHE_TTL)
     if _hit is not None:
-        _payload, _ts = _hit
-        if _now - _ts < _RESULT_CACHE_TTL:
-            _result_cache.move_to_end(_ck)
-            return {**_payload, "cached": True}
-        del _result_cache[_ck]
+        return {**_hit, "cached": True}
 
     # Aircraft noise is two external API round-trips (~half the cold time) and
     # depends only on lat/lng, so run it in a thread while the DuckDB road/rail
@@ -1157,9 +1152,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     except Exception:
         pass
 
-    _result_cache[_ck] = (result, time.time())
-    if len(_result_cache) > _RESULT_CACHE_MAX:
-        _result_cache.popitem(last=False)
+    _cache_put(_CACHE_DB, _ck, result)
     return result
 
 

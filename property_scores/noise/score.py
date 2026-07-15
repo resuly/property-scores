@@ -15,6 +15,9 @@ Score 0-100 where 100 = quietest.
 import logging
 import math
 import os
+import time
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 
 from property_scores.common.overture import get_db, roads_near, rail_near, aadt_near, nfdh_near, gtfs_rail_near
 from property_scores.common.au_state import detect_state
@@ -490,8 +493,37 @@ def cell_score(lat: float, lng: float, cell_m: float = 220.0,
     return out
 
 
+# Dynamic result cache for LIVE computations that miss the pre-baked regional
+# noise cache. An uncached point runs the full road/rail/aircraft/ML stack
+# (~1s on prod, half of it two external aircraft-API round-trips) and was
+# recomputed on every repeat — even a second click on the same parcel. Cache the
+# finished payload (~1m key) so re-clicks / pan-backs / duplicate queries return
+# instantly, exactly like heat_island's cache. The pre-baked cache still serves
+# the points it covers; this only backstops the live path (Bo, 2026-07-15).
+_result_cache: "OrderedDict[tuple, tuple[dict, float]]" = OrderedDict()
+_RESULT_CACHE_MAX = 2000
+_RESULT_CACHE_TTL = 3600
+
+
 def noise_score(lat: float, lng: float, radius_m: int = 500,
                 *, source: str | None = None) -> dict:
+    _ck = (round(lat, 5), round(lng, 5), radius_m, source)
+    _now = time.time()
+    _hit = _result_cache.get(_ck)
+    if _hit is not None:
+        _payload, _ts = _hit
+        if _now - _ts < _RESULT_CACHE_TTL:
+            _result_cache.move_to_end(_ck)
+            return {**_payload, "cached": True}
+        del _result_cache[_ck]
+
+    # Aircraft noise is two external API round-trips (~half the cold time) and
+    # depends only on lat/lng, so run it in a thread while the DuckDB road/rail
+    # queries below execute — the external latency hides behind that work
+    # instead of adding to it (Bo, 2026-07-15). Joined at its use site (~L760).
+    _air_pool = ThreadPoolExecutor(max_workers=1)
+    _air_future = _air_pool.submit(aircraft_noise_penalty, lat, lng)
+
     db = get_db()
     state = detect_state(lat, lng)
 
@@ -703,7 +735,8 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     rail_db = 10 * math.log10(rail_energy) if rail_energy > 0 else 0.0
 
     # --- Aircraft noise ---
-    aircraft = aircraft_noise_penalty(lat, lng)
+    aircraft = _air_future.result()
+    _air_pool.shutdown(wait=False)
     aircraft_db = 0.0
     if aircraft["penalty_db"] > 0:
         aircraft_db = AMBIENT_DB + aircraft["penalty_db"]
@@ -1124,6 +1157,9 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     except Exception:
         pass
 
+    _result_cache[_ck] = (result, time.time())
+    if len(_result_cache) > _RESULT_CACHE_MAX:
+        _result_cache.popitem(last=False)
     return result
 
 

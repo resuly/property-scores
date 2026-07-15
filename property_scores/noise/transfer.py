@@ -139,14 +139,19 @@ def transfer_feats(db, lat: float, lng: float) -> tuple[dict, bool]:
     mpd = 111_320 * math.cos(math.radians(lat))
 
     # --- Roads (bbox STRUCT in production) ---
+    # ST_Distance on linestrings is the cold-path hotspot in dense areas
+    # (thousands of segments in the bbox). Compute it ONCE in a subquery and
+    # filter on the alias, instead of calling ST_Distance in both SELECT and
+    # WHERE — same rows, same distances, half the geometry math (Bo, 2026-07-15).
     rows = db.execute(f"""
-        SELECT class,
-               ST_Distance(geometry, ST_Point({lng},{lat})) * {mpd} AS d
-        FROM read_parquet('{_DATA_DIR / "overture_roads.parquet"}')
-        WHERE bbox.xmin BETWEEN {lng-deg} AND {lng+deg}
-          AND bbox.ymin BETWEEN {lat-deg} AND {lat+deg}
-          AND subtype = 'road'
-          AND ST_Distance(geometry, ST_Point({lng},{lat})) < {1000/mpd}
+        SELECT class, d FROM (
+            SELECT class,
+                   ST_Distance(geometry, ST_Point({lng},{lat})) * {mpd} AS d
+            FROM read_parquet('{_DATA_DIR / "overture_roads.parquet"}')
+            WHERE bbox.xmin BETWEEN {lng-deg} AND {lng+deg}
+              AND bbox.ymin BETWEEN {lat-deg} AND {lat+deg}
+              AND subtype = 'road'
+        ) WHERE d < 1000
     """).fetchall()
 
     f: dict = {}

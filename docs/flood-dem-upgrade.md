@@ -211,12 +211,18 @@ DEM-H 数据源确认: **DEA 公共 S3 COG**(无认证, CC BY 4.0): `/vsicurl/ht
 | **QLD** | `spatial-img.information.qld.gov.au/.../Elevation/QldDem/ImageServer` | ArcGIS ImageServer(栅格) | **0.5m** LiDAR + SRTM 30m 兜底 | DTM 裸地 | CC BY 4.0(需署名) | 全州(有采集处 LiDAR, 其余 SRTM 填, identify 门控) | ✅ 已上线(读栅格窗) |
 | **VIC** | `services-ap1.arcgis.com/P744lA0wf4LlBZ84/.../Vicmap_Elevation_METRO_1_to_5_metre/FeatureServer/1` | ArcGIS FeatureServer(**等高线**) | **1m metro** / 5m 其余 | DTM 裸地 | CC BY 4.0 | 全州(metro 1m) | ✅ 已上线(**等高线 IDW 插值**, 与地图同源); 栅格 VaaS 被政府授权闸死, 但等高线开放 |
 | **TAS** | `services.thelist.tas.gov.au/.../TopographyAndRelief/MapServer/13` | ArcGIS MapServer(等高线) | 5m | DTM 裸地 | CC BY 3.0 AU | 全州 | ✅ 已上线(等高线 IDW, conf=medium; 比 DEM-H 准但非 survey 级) |
-| WA | `services.slip.wa.gov.au/.../Terrain/MapServer/1` | 等高线 | **10m** | DTM | CC BY 4.0 | 全州 | ⏸ **不接**: 10m 间距≈±5m≈DEM-H, 无增益, 打 LiDAR 徽章=作秀 → 留 DEM-H |
-| SA/ACT/NT | 无好的开放源 | — | — | — | — | — | ⬜ 留 DEM-H 30m |
+| **WA** | `public-services.slip.wa.gov.au/.../SLIP_Public_Services/Terrain/MapServer/**0**` | ArcGIS MapServer(等高线) | **2m 间距** | DTM(**非 LiDAR**: 10m 网格 Land Monitor DEM ~2000) | CC BY 4.0 | SW+海岸(Perth/Bunbury/Geraldton, 内陆无) | ✅ 已上线(等高线 IDW, conf=**medium**; 比 DEM-H 细但非 survey; 源非 LiDAR 故 tag=`contour_med`); ⚠️初判只探了 layer/1(10m)漏了 layer/0(2m) |
+| SA/ACT/NT | 有真 1m LiDAR **但只 download** | ELVIS/zip 下载, 无 live 端点 | 0.5-1m | DTM | CC BY 4.0 | 都会 | ⬜ **深挖已确认无 on-demand 端点**(SA DEW server 云 IP 拒连/Adelaide 0.5m 只 zip; ACT org 398 全 FeatureServer 0 ImageServer 无等高线; NT gis-d 对所有客户端 RST)→ 留 DEM-H, 除非自烤 ELVIS |
 | 国家 5m | GA `AUSTRALIA_5M_DEM` | **Earth Engine only** | 5m | DTM | CC BY 4.0 | 补丁 245k km² | ❌ 无公共 COG/ImageServer(`services.ga.gov.au/.../DEM_LiDAR_5m` = 404), 死路 |
 | DEA S3 | `dea-public-data.../projects/elevation/` | 公共 COG | 30m | 裸地 | CC BY 4.0 | 全国 | 仅 DEM-H(`ga_srtm_dem1sv1_0`), **无 5m/LiDAR COG** |
 
-> **已层叠 4 州 = NSW + QLD(栅格)+ VIC + TAS(等高线)**, 全 on-demand 零存储。
+> **已层叠 5 州 = NSW + QLD(栅格)+ VIC + TAS + WA(等高线)**, 全 on-demand 零存储。
+> **WA 更正(Bo 07-15 再次追问 SA/WA/ACT/NT 后深挖)**: 初判"WA 10m 不接"漏了同一 Terrain 服务的
+> **layer/0 = 2m 等高线**(只探了 layer/1 的 10m)。2m 覆盖 Perth/Bunbury/海岸, CC BY, 比 DEM-H 细
+> → 接, 但它是 10m 网格 2000 年 DEM 非 LiDAR, 故 conf=medium、source tag 用 `contour_med` 不冒充 LiDAR。
+> **SA/ACT/NT 深挖确认无 live 端点**: 三州都有真 1m LiDAR 但只 ELVIS/zip 下载(SA Adelaide 0.5m、
+> ACT/NT 1m), 无 on-demand 查询服务(SA DEW server 拒云 IP、ACT org 零 ImageServer 零等高线、
+> NT gov server RST 所有客户端)→ 要接得自烤瓦片(破零存储), 暂留 DEM-H。
 > **关键更正(07-15)**: 初判"VIC 做不了"是错的——VIC 栅格 VaaS 虽被政府授权闸死, 但它的 **1m 等高线
 > FeatureServer 是开放的**(就是 da_leads 地图等高线图层用的那个)。等高线给的是线不是栅格, 所以走
 > **IDW 插值**(box 内取等高线顶点, 反距离加权算点高程, 最低等高线=排水线)而非读栅格窗。VIC metro 1m

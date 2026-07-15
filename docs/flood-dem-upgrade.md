@@ -128,7 +128,9 @@ DEM-H 数据源确认: **DEA 公共 S3 COG**(无认证, CC BY 4.0): `/vsicurl/ht
 | Kew ridge(对照) | 90→87 | 16.1→12.0 |
 | Ryde(对照) | 95→95 | 23.4→25.2 |
 
-**诚实结论**: DEM-H 是**改准地面(裸地)非调得更吓人**。河岸假安全被抓(Parramatta/Windsor 大幅更谨慎),但个别点(Maribyrnong/Elwood)裸地后离排水线更高反而更安全。**仅有 LiDAR 真值的点(Parramatta/North Ryde)证明 DEM-H 匹配 LiDAR、DSM 差 6~10m**;其余无真值不能断言。**对外话术只能说"迁裸地+消除 DSM 系统偏差+LiDAR 验证",不可吹"全面更准"。** Maribyrnong 44→65 待查(坐标在高处 vs overlay 漏盖)。
+**诚实结论**: DEM-H 是**改准地面(裸地)非调得更吓人**。河岸假安全被抓(Parramatta/Windsor 大幅更谨慎),但个别点(Maribyrnong/Elwood)裸地后离排水线更高反而更安全。**仅有 LiDAR 真值的点(Parramatta/North Ryde)证明 DEM-H 匹配 LiDAR、DSM 差 6~10m**;其余无真值不能断言。**对外话术只能说"迁裸地+消除 DSM 系统偏差+LiDAR 验证",不可吹"全面更准"。**
+
+**Maribyrnong 44→65 已查清(2026-07-15)= 不是 bug, DEM-H 对**: 该坐标(-37.766,144.906)在 12.0m 高地, 比 2022 洪泛滩(7.2m)高近 5m, 在河谷坡侧非淹没滩; Copernicus 旧 44 是过度悲观。同 Maribyrnong 扫点证明: 真正的洪泛滩(Maribyrnong Rd/河湾低地, 7.2m)命中 VIC 官方 overlay(zone=1)且正确打 High/Moderate(24/40)——**真洪区没被漏, overlay 查询正常**。→ 结论强化: DEM-H 不漏真洪区(overlay+地形双抓), 只修正 DSM 在高地的过度悲观。对外话术站得住。Elwood 13→25 同理(仍在 overlay High 档)。
 
 ## 三、Kenneth (Geoscape) 07-16 通话话术
 

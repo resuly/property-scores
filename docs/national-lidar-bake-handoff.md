@@ -16,6 +16,15 @@ live-API 拼图,填上 SA/ACT/NT(只能下载的州)、替掉 WA 那份老的非
 
 ---
 
+## 0b. 架构定调:5m 全国基线 + 1m 按地块 on-demand(别烤全国 1m)
+
+- **全国基线 = 5m**。所有筛查评分层(flood HAND / bushfire 坡度 / view / noise / solar)
+  都够——1m vs 5m 只差水平细节,垂直精度一样(±0.2m),这些层都是大地形尺度。一份 ~10GB 通吃。
+- **1m 只在地块级工程细节才有意义**(某块地的积水点/车道坡度/cut-fill 土方/granny flat 3D 地形/
+  挡土墙)。这类**天生是 per-lot**:用户分析哪块地就 on-demand 拉那块的 1m 瓦片(同一条 ELVIS
+  链路,单块 1m 几 MB、~26s 到手),用完不落盘。**绝不为此烤全国 1m(250GB)/ 买盘。**
+- **Contour 地图视觉**想保留原生 1m 好看:继续读各州 live 等高线 API(免费零存储),不驱动全国 1m。
+
 ## 1. 现状:什么已完成,别重做
 
 **已上线生产**(prod :8099 = `/var/www/property-scores` master,systemd `property-scores.service`):

@@ -458,7 +458,14 @@ def _water_proximity_local(lat: float, lng: float) -> dict | None:
 
 
 # HAND elevation source -> vertical-accuracy tier for elevation_confidence.
-_ELEV_CONFIDENCE = {"lidar_5m": "high", "dem_relief": "medium"}
+# high = survey-grade LiDAR (~5m raster or 1m contour); medium = coarser LiDAR
+# contour or the 30m DEM-H; low = proxy (no elevation coverage).
+_ELEV_CONFIDENCE = {
+    "lidar_5m": "high",
+    "lidar_contour_1m": "high",
+    "lidar_contour_5m": "medium",
+    "dem_relief": "medium",
+}
 
 
 def _hand_from_elev(lat: float, lng: float, elev, source: str,
@@ -514,9 +521,10 @@ def _hand_from_elev(lat: float, lng: float, elev, source: str,
 def _hand_local(lat: float, lng: float, state: str | None = None) -> dict | None:
     """HAND from the best available elevation, cheapest-trusted first.
 
-    1. On-demand LiDAR (NSW/QLD open ImageServers) — one exportImage window feeds
-       the whole ring; sub-5 m bare-earth, so low relief near water is trusted
-       (`elevation_confidence` = high). Skipped/None outside NSW-QLD or on a
+    1. On-demand LiDAR where a state publishes it open — NSW/QLD raster
+       ImageServers or VIC/TAS contour services; one fetch feeds the whole ring.
+       Sub-5 m bare-earth, so low relief near water is trusted (confidence high;
+       VIC/TAS at 5 m contour -> medium). Skipped/None outside coverage or on a
        timeout/failure, so live scoring never blocks on the remote service.
     2. Local GA DEM-H 30 m (data/global/dem.vrt, on disk) — confidence = medium.
     3. Overture water/building proxy outside DEM tile coverage — confidence = low.
@@ -529,7 +537,8 @@ def _hand_local(lat: float, lng: float, state: str | None = None) -> dict | None
                 win = lidar.open_window(lat, lng, state)
                 if win is not None:
                     try:
-                        h = _hand_from_elev(lat, lng, win.elev, "lidar_5m", 1.0)
+                        h = _hand_from_elev(lat, lng, win.elev,
+                                            win.source, win.uncertain_thresh)
                     finally:
                         win.close()
                     if h is not None:

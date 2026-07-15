@@ -103,6 +103,9 @@ def test_elevation_confidence_mapping():
 
 
 class _FakeWindow:
+    source = "lidar_5m"
+    uncertain_thresh = 1.0
+
     def __init__(self, pt_lat, pt_lng, pt_elev, drop):
         self._elev = _bowl(pt_lat, pt_lng, pt_elev, drop)
         self.closed = False
@@ -123,6 +126,26 @@ def test_hand_local_prefers_lidar(monkeypatch):
     h = _hand_local(-33.8, 151.0, "NSW")
     assert h["source"] == "lidar_5m" and h["hand_m"] == 6.0
     assert win.closed is True  # window handle always released
+
+
+def test_contour_window_tiers_by_interval():
+    from property_scores.flood.lidar import ContourWindow
+    # 1 m contour interval -> survey-grade high.
+    fine = ContourWindow([(-37.8, 144.9, float(a)) for a in (10, 11, 12, 13)])
+    assert fine.step == 1.0 and fine.source == "lidar_contour_1m"
+    assert fine.uncertain_thresh == 1.0
+    # 5 m interval -> better than DEM-H but labelled medium.
+    coarse = ContourWindow([(-41.4, 147.1, float(a)) for a in (5, 10, 15, 20)])
+    assert coarse.step == 5.0 and coarse.source == "lidar_contour_5m"
+    assert coarse.uncertain_thresh == 2.5
+
+
+def test_contour_window_idw_interpolates_between_levels():
+    from property_scores.flood.lidar import ContourWindow
+    # A 10 m contour due west and a 20 m due east; a point between reads ~15 m.
+    w = ContourWindow([(-37.80, 144.900, 10.0), (-37.80, 144.910, 20.0)])
+    mid = w.elev(-37.80, 144.905)
+    assert 13.0 < mid < 17.0
 
 
 def test_hand_local_falls_back_to_demh(monkeypatch):

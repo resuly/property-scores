@@ -1,21 +1,28 @@
-"""On-demand LiDAR bare-earth elevation for the flood HAND read (NSW + QLD).
+"""On-demand LiDAR bare-earth elevation for the flood HAND read.
 
-Only NSW and QLD publish open, CC BY 4.0 ArcGIS ImageServers we can read live:
-  NSW_5M_Elevation      — statewide 5 m bare-earth DTM (uniform)
-  QLD Elevation/QldDem   — 0.5-1 m LiDAR DTM where captured, SRTM 30 m fill else
+Where a state publishes open (CC BY 4.0) LiDAR-derived elevation we read it live
+for the HAND ring, so near-water low lots get survey-grade height instead of the
+30 m DEM-H's +/-4-6 m noise. Two provider shapes, both self-contained:
 
-HAND samples a 300 m / 16-point ring, so ONE exportImage window fetch (not 17
-point queries) covers the whole ring. Windows are fetched at a fixed 5 m pixel
-(QLD's native 0.5 m is resampled server-side — 5 m is ample for a drainage ring
-and keeps the payload small) and cached process-wide per ~500 m grid cell, so
-the 17 ring samples reuse one fetch and adjacent addresses share it.
+  RASTER (ArcGIS ImageServer, direct point values):
+    NSW  — NSW_5M_Elevation, statewide 5 m bare-earth DTM
+    QLD  — Elevation/QldDem, 0.5-1 m LiDAR where captured, SRTM 30 m fill else
+  CONTOUR (ArcGIS Feature/MapServer, elevation iso-lines -> IDW point value):
+    VIC  — Vicmap Elevation, 1 m metro / 5 m rest (the map's contour source)
+    TAS  — theLIST TopographyAndRelief, 5 m
 
-Everything degrades to None on timeout / failure / outside NSW-QLD / QLD SRTM
-fill, so the caller falls back to the local DEM-H 30 m and labels the read
-'medium' confidence instead of blocking. NSW's service is fast-but-flaky
-(intermittent request drops), so fetches use a tight timeout + one retry, and a
-failed cell is negatively cached for a short TTL to avoid hammering an endpoint
-that is down while still recovering quickly once it is back.
+VIC's *raster* DEM (VaaS) is government-licensed, but its 1 m contours are open,
+so we interpolate a point value by inverse-distance weighting over the contour
+vertices in the cell. WA (10 m contours) is skipped: at ~+/-5 m it is no better
+than DEM-H, so a LiDAR badge there would be theatre.
+
+HAND samples a 300 m / 16-point ring, so ONE fetch per ~500 m cell (an
+exportImage window, or one contour envelope query) feeds the whole ring and is
+cached process-wide; the 17 samples reuse it and adjacent addresses share it.
+Everything degrades to None on timeout / failure / outside coverage, so the
+caller falls back to the local DEM-H 30 m instead of blocking. Fetches use a
+tight timeout (some services drop requests under load) and a failed cell is
+negatively cached for a short TTL.
 """
 
 import json
@@ -30,11 +37,23 @@ from collections import OrderedDict
 
 logger = logging.getLogger(__name__)
 
-_ENDPOINTS = {
+# Raster point-sample services (exportImage window).
+_RASTER = {
     "NSW": ("https://maps.six.nsw.gov.au/arcgis/rest/services/"
             "public/NSW_5M_Elevation/ImageServer"),
     "QLD": ("https://spatial-img.information.qld.gov.au/arcgis/rest/services/"
             "Elevation/QldDem/ImageServer"),
+}
+
+# Contour iso-line services (query envelope -> IDW point value). `field` = the
+# elevation attribute; the same endpoints the da_leads map's contour layer uses.
+_CONTOUR = {
+    "VIC": {"url": ("https://services-ap1.arcgis.com/P744lA0wf4LlBZ84/arcgis/rest/"
+                    "services/Vicmap_Elevation_METRO_1_to_5_metre/FeatureServer/1/query"),
+            "field": "altitude"},
+    "TAS": {"url": ("https://services.thelist.tas.gov.au/arcgis/rest/services/"
+                    "Public/TopographyAndRelief/MapServer/13/query"),
+            "field": "ELEVATION"},
 }
 
 _CELL_DEG = 0.005        # ~500 m grid cell — cache-key granularity
@@ -46,7 +65,13 @@ _RETRIES = 0             # flagged 'medium', so a slow/throttled cell is not
                          # worth blocking a live score on a retry
 _NEG_TTL = 90.0          # re-try a failed cell after this many seconds
 _MAX_CACHE = 256
-# ArcGIS ImageServers throttle/deny UA-less requests under load; identify as a
+# Contour interval (m) at/under which we trust the read as survey-grade 'high';
+# coarser LiDAR-derived contours still give a better point value than DEM-H but
+# are labelled 'medium'. Above _CONTOUR_MAX_STEP we do not bother (no gain).
+_CONTOUR_HIGH_STEP = 1.5
+_CONTOUR_MAX_STEP = 7.0
+_IDW_K = 12              # nearest contour vertices used per interpolated point
+# ArcGIS services throttle/deny UA-less requests under load; identify as a
 # normal client so a burst of nearby lookups is not mistaken for a scraper.
 _UA = "property-scores-flood/1.0 (+https://limontech.net)"
 
@@ -55,12 +80,13 @@ _SRTM_RE = re.compile(r"srtm|_dem[_-]?h|1sec", re.I)
 
 _WIN_CACHE: "OrderedDict[tuple, tuple]" = OrderedDict()  # key -> (bytes|None, ts)
 _CAT_CACHE: "OrderedDict[tuple, bool]" = OrderedDict()   # key -> is_lidar
+_CTR_CACHE: "OrderedDict[tuple, tuple]" = OrderedDict()  # key -> (verts|None, ts)
 _LOCK = threading.Lock()
 
 
 def covered(state) -> bool:
-    """True if the state has an open LiDAR ImageServer we read on demand."""
-    return state in _ENDPOINTS
+    """True if the state has an open LiDAR source we read on demand."""
+    return state in _RASTER or state in _CONTOUR
 
 
 def _cell(lat, lng):
@@ -99,7 +125,7 @@ def _qld_is_lidar(lat, lng) -> bool:
             _CAT_CACHE.move_to_end(key)
             return _CAT_CACHE[key]
     geom = json.dumps({"x": lng, "y": lat, "spatialReference": {"wkid": 4326}})
-    url = _ENDPOINTS["QLD"] + "/identify?" + urllib.parse.urlencode({
+    url = _RASTER["QLD"] + "/identify?" + urllib.parse.urlencode({
         "geometry": geom, "geometryType": "esriGeometryPoint", "inSR": 4326,
         "returnGeometry": "false", "returnCatalogItems": "true",
         "maxItemCount": 5, "f": "json"})
@@ -142,7 +168,7 @@ def _window_bytes(lat, lng, state):
     xmin, ymin, xmax, ymax = lng0 - mlng, lat0 - mlat, lng1 + mlng, lat1 + mlat
     ncol = max(16, int((xmax - xmin) * 111_320.0 * coslat / _PX_M))
     nrow = max(16, int((ymax - ymin) * 111_320.0 / _PX_M))
-    url = _ENDPOINTS[state] + "/exportImage?" + urllib.parse.urlencode({
+    url = _RASTER[state] + "/exportImage?" + urllib.parse.urlencode({
         "bbox": f"{xmin},{ymin},{xmax},{ymax}", "bboxSR": 4326, "imageSR": 4326,
         "size": f"{ncol},{nrow}", "format": "tiff", "pixelType": "F32",
         "noData": "-9999", "interpolation": "RSP_BilinearInterpolation",
@@ -153,9 +179,13 @@ def _window_bytes(lat, lng, state):
 
 
 class Window:
-    """An opened in-memory elevation window; sample the point + ring off it, then
-    close(). The raster bytes are shared/cached, but each Window opens its own
-    handle so concurrent flood requests never race on one GDAL cursor."""
+    """Raster (NSW/QLD) elevation window; sample the point + ring off it, then
+    close(). The bytes are shared/cached, but each Window opens its own handle so
+    concurrent flood requests never race on one GDAL cursor. `source` /
+    `uncertain_thresh` let the caller label the read and trust low relief."""
+
+    source = "lidar_5m"       # ~5 m bare-earth DTM -> high confidence
+    uncertain_thresh = 1.0    # trust relief down to 1 m (LiDAR noise is sub-m)
 
     def __init__(self, raw):
         from rasterio.io import MemoryFile
@@ -183,18 +213,118 @@ class Window:
             self._mf.close()
 
 
+def _contour_verts(lat, lng, state):
+    """Contour vertices [(lat, lng, alt), ...] in the point's cell + margin, from
+    the state's open iso-line service. Cached per cell (positive / negative TTL)."""
+    key = (state,) + _cell(lat, lng)
+    now = time.time()
+    with _LOCK:
+        if key in _CTR_CACHE:
+            payload, ts = _CTR_CACHE[key]
+            if payload is not None or (now - ts) < _NEG_TTL:
+                _CTR_CACHE.move_to_end(key)
+                return payload
+    ci, cj = _cell(lat, lng)
+    lat0, lat1 = ci * _CELL_DEG, (ci + 1) * _CELL_DEG
+    lng0, lng1 = cj * _CELL_DEG, (cj + 1) * _CELL_DEG
+    coslat = max(math.cos(math.radians(lat)), 0.2)
+    mlat = _RING_MARGIN_M / 111_320.0
+    mlng = _RING_MARGIN_M / (111_320.0 * coslat)
+    cfg = _CONTOUR[state]
+    field = cfg["field"]
+    env = f"{lng0 - mlng},{lat0 - mlat},{lng1 + mlng},{lat1 + mlat}"
+    url = cfg["url"] + "?" + urllib.parse.urlencode({
+        "where": "1=1", "geometry": env, "geometryType": "esriGeometryEnvelope",
+        "inSR": 4326, "outSR": 4326, "spatialRel": "esriSpatialRelIntersects",
+        "outFields": field, "returnGeometry": "true",
+        "resultRecordCount": 2000, "f": "json"})
+    raw = _http(url)
+    verts = None
+    if raw:
+        try:
+            d = json.loads(raw)
+            verts = []
+            for f in d.get("features", []):
+                a = (f.get("attributes") or {}).get(field)
+                if a is None:
+                    continue
+                a = float(a)
+                for path in (f.get("geometry") or {}).get("paths", []):
+                    for x, y in path:
+                        verts.append((y, x, a))
+        except Exception as e:
+            logger.debug("contour parse failed: %s", e)
+            verts = None
+    _lru_put(_CTR_CACHE, key, (verts, now))
+    return verts
+
+
+class ContourWindow:
+    """VIC/TAS elevation from open contour iso-lines: IDW over the contour
+    vertices in the cell gives a point value, the local drainage is just the
+    lowest contour nearby. Confidence follows the observed contour interval —
+    1 m (VIC metro) is survey-grade 'high'; coarser is a better point value than
+    DEM-H but labelled 'medium'."""
+
+    def __init__(self, verts):
+        self._v = verts
+        alts = sorted({v[2] for v in verts})
+        step = min((b - a for a, b in zip(alts, alts[1:]) if b > a), default=None)
+        self.step = step
+        if step is not None and step <= _CONTOUR_HIGH_STEP:
+            self.source = "lidar_contour_1m"      # high
+            self.uncertain_thresh = 1.0
+        else:
+            self.source = "lidar_contour_5m"      # medium (still beats DEM-H)
+            self.uncertain_thresh = max(2.5, (step or 5.0) / 2.0)
+
+    def elev(self, lat, lng):
+        coslat = math.cos(math.radians(lat))
+        near = []  # (dist2, alt)
+        for vlat, vlng, alt in self._v:
+            dx = (vlng - lng) * coslat
+            dy = vlat - lat
+            d2 = dx * dx + dy * dy
+            if d2 < 1e-14:
+                return alt
+            near.append((d2, alt))
+        if not near:
+            return None
+        near.sort(key=lambda t: t[0])
+        num = den = 0.0
+        for d2, alt in near[:_IDW_K]:
+            w = 1.0 / (d2 * d2)  # inverse-distance^2 weighting
+            num += w * alt
+            den += w
+        return num / den if den else None
+
+    def close(self):
+        self._v = None
+
+
 def open_window(lat, lng, state):
-    """A Window for the point, or None outside coverage / on fetch failure /
-    (QLD) where the point is SRTM fill rather than a LiDAR capture."""
-    if not covered(state):
-        return None
-    if state == "QLD" and not _qld_is_lidar(lat, lng):
-        return None
-    raw = _window_bytes(lat, lng, state)
-    if not raw:
-        return None
-    try:
-        return Window(raw)
-    except Exception as e:
-        logger.debug("LiDAR window open failed: %s", e)
-        return None
+    """A point+ring elevation window for the state, or None outside coverage /
+    on fetch failure / (QLD) SRTM fill / (contour) too coarse to beat DEM-H.
+
+    Duck-typed result exposes elev(lat,lng), close(), source, uncertain_thresh."""
+    if state in _RASTER:
+        if state == "QLD" and not _qld_is_lidar(lat, lng):
+            return None
+        raw = _window_bytes(lat, lng, state)
+        if not raw:
+            return None
+        try:
+            return Window(raw)
+        except Exception as e:
+            logger.debug("LiDAR window open failed: %s", e)
+            return None
+    if state in _CONTOUR:
+        verts = _contour_verts(lat, lng, state)
+        # Need enough vertices spanning >=2 contour levels to interpolate.
+        if not verts or len({v[2] for v in verts}) < 2 or len(verts) < 20:
+            return None
+        win = ContourWindow(verts)
+        if win.step is None or win.step > _CONTOUR_MAX_STEP:
+            return None  # too coarse (e.g. WA 10 m) — no gain over DEM-H
+        return win
+    return None

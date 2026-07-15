@@ -112,9 +112,27 @@ DEM-H 数据源确认: **DEA 公共 S3 COG**(无认证, CC BY 4.0): `/vsicurl/ht
 - ⚠️ 逐 survey 瓦片核 license(总体 CC BY 4.0,个别自定义),建 attribution 登记(同 `geocode_source` 模式)。
 - 解决 Hugh 的"survey 级",有覆盖处。
 
+### 加宽证据表(2026-07-15, old Copernicus vs new DEM-H, 11 址)
+
+| 地址 | old→new | HAND o→n |
+|---|---|---|
+| Parramatta 河岸 NSW | **92→65** | 18.3→4.6 |
+| Windsor NSW(Hawkesbury) | **91→85** | 15.7→9.7 |
+| Gawler SA | 25→22 | 5.9→1.7 |
+| Lismore | 58→60 | 10.8→11.3 |
+| Rochester | 40→40 | 1.3→0.0 |
+| Shepparton | 75→75 | 1.7→3.0 |
+| Launceston TAS | 86→85 | 10.7→8.4 |
+| Maribyrnong(2022洪) | 44→65 ⚠️ | 0.9→3.3 |
+| Elwood canal flat | 13→25 ⚠️ | 0.8→0.9 |
+| Kew ridge(对照) | 90→87 | 16.1→12.0 |
+| Ryde(对照) | 95→95 | 23.4→25.2 |
+
+**诚实结论**: DEM-H 是**改准地面(裸地)非调得更吓人**。河岸假安全被抓(Parramatta/Windsor 大幅更谨慎),但个别点(Maribyrnong/Elwood)裸地后离排水线更高反而更安全。**仅有 LiDAR 真值的点(Parramatta/North Ryde)证明 DEM-H 匹配 LiDAR、DSM 差 6~10m**;其余无真值不能断言。**对外话术只能说"迁裸地+消除 DSM 系统偏差+LiDAR 验证",不可吹"全面更准"。** Maribyrnong 44→65 待查(坐标在高处 vs overlay 漏盖)。
+
 ## 三、Kenneth (Geoscape) 07-16 通话话术
 
-主动亮: "我们正从 Copernicus DSM 迁到裸地——全国 GA DEM-H,优先市场叠 ELVIS LiDAR,按地址标覆盖/置信度;定位是带明确不确定度的相对筛查,不是判定级。" → 把公开批评变路线图 + 证明对 DEM landscape(DEM-H/ELVIS/CC BY 4.0)的了解不输 Geoscape。⚠️披露纪律: 谈分销放开,flood 评分方法论(how)控着说。
+主动亮(**07-15 已升级为"已做完"**): "我们已把全国高程基线从 Copernicus 表面模型迁到 GA DEM-H 裸地(水文强化,CC BY 4.0),生产在跑;5m LiDAR 验证过——裸地匹配 LiDAR,而表面模型在低洼近水地块差 6~10m(一个河岸旧数据打成 Very Low,现在正确读 Moderate)。下一步优先市场叠 ELVIS LiDAR + 按地址标覆盖/置信度。定位是带明确不确定度的相对筛查、不是判定级。" → "已做完" > "打算做" = 更硬;证明对 DEM landscape(DEM-H/ELVIS/CC BY 4.0)的了解不输 Geoscape。⚠️披露纪律: 谈分销放开,flood 评分方法论(how)控着说。⚠️话术只说"迁裸地+LiDAR验证",不吹"全面更准"(见加宽证据表 Maribyrnong 反例)。
 
 ## 四、上线后回复草稿(P0+P1 上线才发)
 
@@ -157,3 +175,24 @@ DEM-H 数据源确认: **DEA 公共 S3 COG**(无认证, CC BY 4.0): `/vsicurl/ht
 - NSW 5M ImageServer(点查): https://maps.six.nsw.gov.au/arcgis/rest/services/public/NSW_5M_Elevation/ImageServer
 
 **FathomDEM**(备选,接近 LiDAR 表现,授权需核): https://iopscience.iop.org/article/10.1088/1748-9326/ada972
+
+---
+
+## 五、P2 方案 — LiDAR 精度层(独立后续项目, 未排期)
+
+**目标**: 在有覆盖的优先市场把高程从 30m DEM-H 提到 1~5m LiDAR 裸地 → 答 Hugh 的"survey/保险级",并给每地址"覆盖/置信度 flag"(本身是卖点/差异化)。
+
+**数据源(全 CC BY 4.0, 端点已验证)**:
+- NSW 5m: `https://maps.six.nsw.gov.au/arcgis/rest/services/public/NSW_5M_Elevation/ImageServer`(identify 点查已验证可用; exportImage 取窗)
+- GA 5m 国家 LiDAR DEM(部分覆盖) / ELVIS 1-2m state LiDAR(批量 AOI order)
+- Earth Engine `AU/GA/AUSTRALIA_5M_DEM`(备选)
+
+**架构设计**:
+1. 优先 LGA(首府都会+海岸+洪泛走廊)批量下 1/5m LiDAR → 转 COG 本机(复用 DA Leads 瓦片管道)
+2. `common/terrain.py` 改成**分辨率感知采样器**: 先查 LiDAR COG(有则用), 无则兜底 DEM-H 30m
+3. flood 输出加 `elevation_confidence` 字段(high=LiDAR / medium=30m)→ API + 前端 flag
+4. 逐 survey 瓦片核 license, 建 attribution 登记(同 geocode_source 模式)
+
+**工作量**: 天级(COG 管道 + 覆盖 mask + 采样器改造 + 逐州接入), 非小时级。P1 已满足对批评的核心回应, P2 不紧急、不与北极星 P0(licence)抢注意力。
+
+**触发条件建议**: Kenneth/保险类买家明确要 survey 级时, 或 licence 客户把 flood 当卖点时, 再排期。

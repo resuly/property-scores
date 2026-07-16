@@ -54,6 +54,12 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(REPO, "data", "global", "lidar")
 WORK = os.path.join(REPO, "data", "global", "lidar", "_work")
+
+# gdal_calc.py (system osgeo, compiled for NumPy 1.x) crashes if a NumPy 2.x in
+# ~/.local shadows the system one (Oracle has numpy 2.4.4 there). Ignoring the
+# user site-packages for our gdal subprocesses makes gdal_calc use the matching
+# system numpy. Inherited by subprocess.run; harmless to the C++ gdal tools.
+os.environ["PYTHONNOUSERSITE"] = "1"
 # Records each baked zone's source zip Content-Length so --check can detect a GA
 # re-release (the national 5 m mosaic is otherwise static since 2015).
 MANIFEST = os.path.join(OUT_DIR, "manifest.json")

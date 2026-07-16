@@ -354,47 +354,54 @@ def _jrc_to_score(jrc: dict) -> int:
 
 
 # ---------------------------------------------------------------------------
-# ERA5 P95 extreme rainfall (pre-computed grid)
+# BOM 2016 IFD design rainfall (pre-computed grid; scripts/precompute_bom_ifd.py)
+#
+# Replaces the ERA5-via-Open-Meteo P95 climatology: BOM IFD is the ARR 2019
+# national-standard design rainfall (true 1% AEP), CC BY 4.0 so it is clean
+# for the commercial API (the Open-Meteo free tier is non-commercial ToS).
+# Attribution: Bureau of Meteorology, (c) Commonwealth of Australia, CC BY 4.0.
 # ---------------------------------------------------------------------------
 
-_p95_grid = None
+_ifd_grid = None
 
 
-def _load_p95_grid():
-    global _p95_grid
-    if _p95_grid is not None:
-        return _p95_grid
+def _load_ifd_grid():
+    global _ifd_grid
+    if _ifd_grid is not None:
+        return _ifd_grid
     from property_scores.common.config import data_path
-    p = data_path("era5_rainfall_p95.parquet")
+    p = data_path("bom_ifd_1pct.parquet")
     if not p.exists():
-        _p95_grid = []
-        return _p95_grid
+        _ifd_grid = []
+        return _ifd_grid
     try:
         import pandas as pd
         df = pd.read_parquet(p)
-        valid = df.dropna(subset=["p95_mm"])
-        _p95_grid = list(valid[["lat", "lng", "p95_mm", "p99_mm"]].itertuples(index=False))
-        return _p95_grid
+        valid = df.dropna(subset=["ifd_1pct_1h_mm"])
+        _ifd_grid = list(valid[["lat", "lng", "ifd_1pct_1h_mm",
+                                "ifd_1pct_6h_mm"]].itertuples(index=False))
+        return _ifd_grid
     except Exception:
-        _p95_grid = []
-        return _p95_grid
+        _ifd_grid = []
+        return _ifd_grid
 
 
-def _query_p95(lat: float, lng: float) -> dict | None:
-    """Find nearest P95/P99 rainfall from pre-computed grid (within 2 degrees)."""
-    grid = _load_p95_grid()
+def _query_ifd(lat: float, lng: float) -> dict | None:
+    """Nearest 1% AEP design-rainfall depths from the grid (within 2 degrees)."""
+    grid = _load_ifd_grid()
     if not grid:
         return None
     best_dist = 999.0
     best = None
-    for glat, glng, p95, p99 in grid:
+    for glat, glng, mm_1h, mm_6h in grid:
         d = math.sqrt((glat - lat) ** 2 + (glng - lng) ** 2)
         if d < best_dist:
             best_dist = d
-            best = (p95, p99)
+            best = (mm_1h, mm_6h)
     if best_dist > 2.0:
         return None
-    return {"p95_mm": best[0], "p99_mm": best[1], "grid_dist_deg": round(best_dist, 1)}
+    return {"ifd_1pct_1h_mm": best[0], "ifd_1pct_6h_mm": best[1],
+            "grid_dist_deg": round(best_dist, 1), "source": "BOM 2016 IFD (CC BY 4.0)"}
 
 
 # ---------------------------------------------------------------------------
@@ -780,8 +787,8 @@ def flood_score(lat: float, lng: float) -> dict:
     # --- Phase 3: HAND approximation (LiDAR where covered, else DEM-H) ---
     hand = _hand_local(lat, lng, state)
 
-    # --- Phase 4: ERA5 P95 extreme rainfall ---
-    p95 = _query_p95(lat, lng)
+    # --- Phase 4: BOM IFD design rainfall (1% AEP) ---
+    ifd = _query_ifd(lat, lng)
 
     # --- Combine ---
     # Overlay + JRC determine base risk; HAND modifies it.
@@ -826,8 +833,11 @@ def flood_score(lat: float, lng: float) -> dict:
             # turning a waterfront property's elevation into a false safety bonus.
             score = max(score, min(score + 10, 95))
 
-    # P95 rainfall modifier: high extreme rainfall + other risk = compound
-    if p95 and has_flood_evidence and p95["p95_mm"] > 25:
+    # Design-rainfall modifier: intense 1% AEP storms + other flood evidence
+    # = compound risk. 70mm/1h is the upper-intensity band (Brisbane 98,
+    # Sydney 59, Melbourne 49), so only genuinely storm-heavy locations with
+    # independent flood evidence take the penalty.
+    if ifd and has_flood_evidence and ifd["ifd_1pct_1h_mm"] > 70:
         score = max(0, score - 5)
 
     score = max(0, min(100, score))
@@ -860,8 +870,8 @@ def flood_score(lat: float, lng: float) -> dict:
         # finer bare-earth), medium = GA DEM-H 30m, low = water/building proxy.
         result_dict["elevation_confidence"] = _ELEV_CONFIDENCE.get(
             hand.get("source"), "low")
-    if p95:
-        result_dict["p95"] = p95
+    if ifd:
+        result_dict["design_rainfall"] = ifd
     if warnings:
         result_dict["warnings"] = warnings
     # Transparency flags: whether an OFFICIAL flood overlay covered this

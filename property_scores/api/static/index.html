@@ -200,7 +200,7 @@ function renderResults(lat, lng, scores) {
       if (s.jrc.nearest_water_m != null) d += `<dt>Nearest Water</dt><dd>${s.jrc.nearest_water_m}m</dd>`;
     }
     if (s.hand) d += `<dt>HAND</dt><dd>${s.hand.hand_m}m above drainage</dd>`;
-    if (s.p95) d += `<dt>P95 Rainfall</dt><dd>${s.p95.p95_mm}mm/day</dd>`;
+    if (s.design_rainfall) d += `<dt>1% AEP Rain (1h)</dt><dd>${s.design_rainfall.ifd_1pct_1h_mm}mm</dd>`;
     html += scoreCard('Flood Risk', s.score, `${s.label} (${s.state || 'N/A'})`, 'bar-flood', 'badge-flood', d);
   } else { html += errorCard('Flood Risk', scores.flood); }
 

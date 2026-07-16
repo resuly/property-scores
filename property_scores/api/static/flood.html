@@ -86,7 +86,7 @@
             <li>ArcGIS Planning Overlays (VIC/NSW/SA/TAS/ACT)</li>
             <li>JRC Global Surface Water, 38-year satellite record</li>
             <li>HAND (Height Above Nearest Drainage): LiDAR bare-earth where covered (NSW/QLD 5m raster, VIC/TAS contours), else GA DEM-H 30m</li>
-            <li>ERA5 P95 extreme rainfall climatology</li>
+            <li>BOM 2016 IFD design rainfall, 1% AEP (CC BY 4.0)</li>
           </ul>
         </div>
         <div>
@@ -95,7 +95,7 @@
             <li>Official overlay check (Floodway/LSIO/SBO zones)</li>
             <li>JRC satellite flood occurrence in 500m radius</li>
             <li>HAND elevation modifier (physical vulnerability)</li>
-            <li>ERA5 extreme rainfall compound risk</li>
+            <li>BOM design-rainfall compound risk</li>
             <li>Final score = min(overlay, JRC) adjusted by HAND</li>
           </ol>
         </div>
@@ -384,12 +384,12 @@ async function query() {
       html += `</div>`;
     }
 
-    // P95 rainfall
-    if (d.p95) {
-      html += `<div class="text-[10px] text-slate-400 uppercase tracking-wide mt-3 mb-1">Extreme Rainfall</div>`;
+    // BOM IFD design rainfall
+    if (d.design_rainfall) {
+      html += `<div class="text-[10px] text-slate-400 uppercase tracking-wide mt-3 mb-1">Design Rainfall (1% AEP)</div>`;
       html += `<div class="text-xs">`;
-      html += stat('95th percentile', d.p95.p95_mm.toFixed(0) + ' mm/day', 'ERA5 climatology');
-      html += stat('99th percentile', d.p95.p99_mm.toFixed(0) + ' mm/day');
+      html += stat('1-hour storm', d.design_rainfall.ifd_1pct_1h_mm.toFixed(0) + ' mm', 'BOM 2016 IFD');
+      if (d.design_rainfall.ifd_1pct_6h_mm) html += stat('6-hour storm', d.design_rainfall.ifd_1pct_6h_mm.toFixed(0) + ' mm');
       html += `</div>`;
     }
 

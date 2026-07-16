@@ -629,23 +629,33 @@ def inundation_grid(lat: float, lng: float, radius_m: int = 500) -> dict | None:
     Uses the same drainage reference as _hand_local so the panel's "height
     above drainage" and the simulation agree: the query point goes under
     exactly when the simulated level passes hand_m. Terrain fill (bathtub)
-    illustration only — not hydraulic modelling. None outside DEM coverage.
+    illustration only — not hydraulic modelling.
+
+    Reads the window from whichever raster produced the HAND: the baked 5 m
+    LiDAR VRT (decimated to ~30 m cells so the payload matches the DEM grid)
+    or the 30 m DEM. On-demand remote HAND sources have no local raster to
+    window-read, so those (rare, gap-filling) reads return None as before.
     """
     try:
-        from property_scores.common import terrain
+        from property_scores.common import lidar_local, terrain
         from property_scores.common.landcover import sampler as _sampler
 
-        if not terrain.available():
-            return None
         hand = _hand_local(lat, lng)
-        if not hand or hand.get("source") != "dem_relief":
+        if not hand or hand.get("drainage_elev_m") is None:
+            return None
+        source = hand.get("source")
+        if source == "lidar_5m_local" and lidar_local.available():
+            vrt_path, scale, nodata = lidar_local.LIDAR_VRT, 0.1, -32768.0
+        elif source == "dem_relief" and terrain.available():
+            vrt_path, scale, nodata = terrain.DEM_VRT, 1.0, None
+        else:
             return None
 
         import numpy as np
         from rasterio.windows import transform as _win_transform
 
         rs = _sampler()
-        src = rs._src(terrain.DEM_VRT)
+        src = rs._src(vrt_path)
         if src is None:
             return None
         x, y = rs._to_raster_xy(src, lat, lng)
@@ -658,29 +668,45 @@ def inundation_grid(lat: float, lng: float, radius_m: int = 500) -> dict | None:
         row, col = src.index(x, y)
         r0, r1 = max(row - half_row, 0), row + half_row + 1
         c0, c1 = max(col - half_col, 0), col + half_col + 1
-        arr = src.read(1, window=((r0, r1), (c0, c1))).astype(float)
+        h, w = r1 - r0, c1 - c0
+        # Decimate finer rasters to ~30 m cells: same payload size and frontend
+        # rendering cost as the original DEM grid, regardless of source.
+        dec = max(int(round(30.0 / (px * 111_320.0))), 1)
+        out_h, out_w = max(h // dec, 1), max(w // dec, 1)
+        arr = src.read(1, window=((r0, r1), (c0, c1)),
+                       out_shape=(out_h, out_w)).astype(float)
         if arr.size == 0:
             return None
+        arr *= scale
 
         wt = _win_transform(((r0, r1), (c0, c1)), src.transform)
-        h, w = arr.shape
         west, north = wt.c, wt.f
         east = west + w * wt.a
         south = north + h * wt.e  # wt.e is negative
-        # The DEM VRT has no nodata (gaps read back 0.0). Gate the window on
-        # tile coverage at its corners; inside a covered 1-degree tile a gap
-        # cannot occur (tiles are complete).
-        for cla, cln in ((north, west), (north, east), (south, west), (south, east)):
-            if not terrain.covered(cla, cln):
+        if nodata is not None:
+            # Cells outside the LiDAR footprint: render dry (well above any
+            # simulated level) rather than faking an elevation.
+            mask = arr <= (nodata * scale + 1)
+            if mask.all():
                 return None
+            arr[mask] = float(hand["drainage_elev_m"]) + 99.0
+        else:
+            # The DEM VRT has no nodata (gaps read back 0.0). Gate the window on
+            # tile coverage at its corners; inside a covered 1-degree tile a gap
+            # cannot occur (tiles are complete).
+            for cla, cln in ((north, west), (north, east),
+                             (south, west), (south, east)):
+                if not terrain.covered(cla, cln):
+                    return None
 
         rel = np.round(arr - float(hand["drainage_elev_m"]), 1)
         return {
             "bbox": [round(west, 6), round(south, 6), round(east, 6), round(north, 6)],
-            "nrows": h,
-            "ncols": w,
+            "nrows": out_h,
+            "ncols": out_w,
             "radius_m": radius_m,
-            "cell_m": round(px * 111_320.0),
+            "cell_m": round((east - west) / out_w * 111_320.0 * max(
+                math.cos(math.radians(lat)), 0.1)),
             "drainage_elev_m": hand["drainage_elev_m"],
             "point_hand_m": hand["hand_m"],
             "rel": rel.tolist(),

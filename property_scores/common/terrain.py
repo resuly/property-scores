@@ -1,4 +1,12 @@
-"""Local Copernicus GLO-30 DEM (data/global/dem.vrt) elevation helper.
+"""Local elevation helper: 5 m LiDAR first, 30 m DEM fallback.
+
+elevation() is the single entry point every score (bushfire slope, walkability
+slope penalty, noise terrain screening, flood HAND fallback) samples through.
+It prefers the baked national 5 m LiDAR bare-earth VRT (common.lidar_local,
+~245,000 km2 of populated coverage) and falls back to the 30 m DEM
+(data/global/dem.vrt) outside the LiDAR footprint. Near the footprint edge a
+multi-point read can mix 5 m and 30 m samples; both are bare-earth AHD, so the
+seam is within the DEM's own vertical error.
 
 Reuses the single shared raster sampler (common.landcover.sampler) so the DEM
 handle is opened once per thread alongside the WorldCover handle.
@@ -51,7 +59,19 @@ def covered(lat: float, lng: float) -> bool:
 
 
 def elevation(lat: float, lng: float) -> float | None:
-    """Elevation in metres from the local DEM, or None outside tile coverage."""
+    """Elevation in metres: 5 m LiDAR where baked, else 30 m DEM, else None."""
+    try:
+        from property_scores.common import lidar_local
+        v = lidar_local.elevation(lat, lng)
+        if v is not None:
+            return v
+    except Exception:
+        pass
+    return dem_elevation(lat, lng)
+
+
+def dem_elevation(lat: float, lng: float) -> float | None:
+    """Elevation in metres from the 30 m DEM only, or None outside tile coverage."""
     if not available() or not covered(lat, lng):
         return None
     try:

@@ -461,6 +461,7 @@ def _water_proximity_local(lat: float, lng: float) -> dict | None:
 # high = survey-grade LiDAR (~5m raster or 1m contour); medium = coarser LiDAR
 # contour or the 30m DEM-H; low = proxy (no elevation coverage).
 _ELEV_CONFIDENCE = {
+    "lidar_5m_local": "high",   # baked national 5 m LiDAR VRT (bare-earth)
     "lidar_5m": "high",
     "lidar_contour_1m": "high",
     "contour_med": "medium",
@@ -529,7 +530,21 @@ def _hand_local(lat: float, lng: float, state: str | None = None) -> dict | None
     2. Local GA DEM-H 30 m (data/global/dem.vrt, on disk) — confidence = medium.
     3. Overture water/building proxy outside DEM tile coverage — confidence = low.
     """
-    # 1. LiDAR (survey-grade where covered)
+    # 0. Baked national 5 m LiDAR VRT (offline, high confidence). Nodata-gated,
+    #    so outside the footprint it returns None and we fall through to the
+    #    live state services / DEM-H. Preferred: no network, deterministic.
+    try:
+        from property_scores.common import lidar_local
+        if lidar_local.available():
+            h = _hand_from_elev(lat, lng, lidar_local.elevation,
+                                "lidar_5m_local", 1.0)
+            if h is not None:
+                return h
+    except Exception as e:
+        logger.debug("local LiDAR HAND failed, falling back: %s", e)
+
+    # 1. On-demand LiDAR (survey-grade where covered, network) — fallback for any
+    #    gap the baked VRT doesn't cover yet (e.g. captures after the 2015 mosaic).
     if state:
         try:
             from property_scores.flood import lidar

@@ -6,6 +6,64 @@
 
 ---
 
+## 0z. 2026-07-16 枚举结果 + 采集路径重大更正(必读,推翻 §3c)
+
+> 跑完 §6 第 1 步(全国 5m 足迹枚举),两个发现直接改写建法。**采集不再走 ELVIS
+> 下单流程(§3c 的 Cognito 逆向可作废),GA 有公开直链 S3 zip。** 全部真查真测:
+
+**发现 1 — ELVIS `downloadables` 的「5 Metre」是两种东西,不是统一瓦片集:**
+- **各州可下载 5m 瓦片**(有 `file_url`+`file_size`):枚举全国 1428 个 1°格发现
+  **几乎全是 NSW**(NSW Spatial Services 8.1万瓦片/50.5GB + NSW DCCEEW 562个/0.06GB),
+  **QLD/VIC/SA/TAS/WA/ACT/NT 一个可下载 5m 州瓦片都没有**。NSW 全州铺满 5m(远西 Broken
+  Hill 都有),东海岸密集格触发 1万条上限(已按 0.5°细分补齐,确认 NSW-only)。**走州瓦片=
+  只拿到 NSW ~100GB 且别的州全空 = 死路,弃。**
+- **GA 全国 5m** 在 `downloadables` 里是**单条虚拟条目**(`file_size:0`,无 file_url,
+  名叫 "5 Metre Digital Elevation Model (DEM) of Australia derived from LiDAR"),
+  按 AOI 下单,不是瓦片枚举。覆盖 WA/SA/NT 等所有 NSW 以外的地方就靠它。
+
+**发现 2 — GA 全国 5m 有公开直链 S3(免下单/免 Cognito/免签名/免收邮件):**
+- 元数据记录 `ecat.ga.gov.au/.../22be4b55-2465-4320-e053-10a3070a5236`(服务 `DEM_LiDAR_5m_2025`)
+  提供**按 UTM zone 的公开 S3 zip 直链**,匿名 curl 200,zip 内是 Float32 5m GeoTIFF:
+  `https://elevation-direct-downloads.s3-ap-southeast-2.amazonaws.com/5m-dem/national_utm_mosaics/<zone>.zip`
+- **实测每个 zip 的 Content-Length(HEAD,权威)**:
+
+  | zip | 大小 | 说明 |
+  |-----|------|------|
+  | waz50.zip | 2.38 GB | WA MGA z50(Perth) |
+  | waz51.zip | 0.06 GB | WA z51 边角 |
+  | ntz52.zip | 0.19 GB | NT z52 |
+  | ntz53.zip | 0.36 GB | NT z53 |
+  | nationalz54ag.zip | 6.55 GB | 东部 z54(SA/VIC西) Ausgeoid |
+  | nationalz55_ag.zip | 11.67 GB | 东部 z55(VIC/NSW/TAS) Ausgeoid |
+  | nationalz56_ag.zip | 10.61 GB | 东部 z56(NSW/QLD海岸) Ausgeoid |
+  | **小计(AHD/Ausgeoid 主集)** | **≈31.8 GB** | **这就是要下的一套** |
+  | mdbaz54/55/56_qg.zip | 2.71+6.58+0.31=9.6 GB | Murray-Darling 洪泛,**Quasigeoid**变体 |
+  | cocos/christmas island | 0.02 GB | 离岸岛,跳过 |
+  | **全 12 个总计** | **41.44 GB** | |
+
+- **实测数据规格**(gdalinfo cocosislandz47.tif):Float32 / **像素 5.0m** / UTM(GDA94 MGA)/
+  nodata `-3.4e38`。→ 完全吻合 §4 配方:gdalwarp 到 4326@0.0000449° → Int16 分米 DEFLATE COG,
+  nodata→-32768。**不用改配方。**
+
+**新采集法(取代 §3c 全部):** 逐 zone 串行(§2 护栏):`curl` 直链 zip → unzip 出 UTM tif →
+§4 配方烤成 Int16 COG → **删 zip+raw** → 下一 zone。7 个主集 zip ~31.8GB,峰值出现在 z55
+(11.67GB zip,解开更大)——**52GB 空闲盘装得下但紧,必须逐 zone 下完即烤即删**,z55/z56 期间挂
+`df`/`free` 看门狗。最终 Int16 COG ~10-12GB(§4 估算不变)。
+
+**待定(建时自决,非 Bo 决策):** `_qg`(Murray-Darling 洪泛,Quasigeoid)是否额外覆盖 vs 与
+`national*_ag` 重叠。命名 "national" 强烈暗示 ag 集已是完整 245k km² 产品、mdba_qg 是同区不同
+垂直基准的冗余版;且 HAND 是相对高程,±基准偏移对筛查无影响。**建法:先只下 national*_ag 主集,
+烤完抽查 MDB 城镇(Shepparton/Echuca/Wagga)覆盖,有洞才补 mdba_qg。**
+
+**足迹核实:** GA 官方元数据 = 236 次 LiDAR survey(2001-2015),**>245,000 km²**,覆盖有人海岸带
++ Murray-Darling 洪泛 + 城镇。我的 1428 格扫描出的 140 个 GA 覆盖格的形状与之吻合(WA海岸/NT/
+SA-VIC/TAS/NSW-QLD海岸)。§3a 的 245k km² 属实,只是**下载量真数=~32GB(不是估的 15-20GB)**。
+
+**本次未碰 Oracle**(全程浏览器枚举 + Mac 本地 + 公开 S3 HEAD,零服务器负载)。**已在此暂停等
+Bo 确认再建**(Bo 指令:先量再建)。
+
+---
+
 ## 0a-goal. 最终目标 + 完成条件(Definition of Done)
 
 **战略目标**:服务北极星(DA Leads = B2B 数据层)。把 flood/高程从软功能变成可辩护、可 licence

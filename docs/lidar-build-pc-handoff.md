@@ -114,6 +114,12 @@ rsync -avz -e "ssh -i <你的key> " \
 
 ---
 
+> **✅ 全链路收口(2026-07-16 晚)**:§4 的代码接线已完成——`common/terrain.py` 现在
+> 5m LiDAR 优先、30m DEM 兜底(commit b0f6509),flood/bushfire/noise/walkability 全升 5m;
+> prod 已部署+restart,跨州实测 SA/NT/NSW 均走 `lidar_5m_local`(confidence high),
+> 无覆盖点正常兜底;季度源校验 cron 已装(每季 3 号 19:00 UTC,`scripts/lidar_check.sh`,
+> CHANGED 时 Telegram 告警)。本文档剩余价值 = §7 重烤 runbook。
+
 ## 5.5 实跑结果(2026-07-16,Windows PC + Docker)— ✅ 已完成并上传
 
 全程 ~9h(14:00–23:00 AEST),7 zone 全出,**成品 10.2 GB** 已 rsync 到 Oracle 并在

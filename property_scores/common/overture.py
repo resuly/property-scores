@@ -285,6 +285,57 @@ def water_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
         return []
 
 
+def building_footprint_m2(db: duckdb.DuckDBPyConnection, lat: float,
+                          lng: float) -> float | None:
+    """Footprint area (m²) of the building CONTAINING the point, else None.
+
+    Whole-building semantics: for strata/apartments this is the tower's
+    footprint, not a unit's share — callers must label it as such. G-NAF
+    points for detached houses often sit in the yard, so a containment miss
+    falls back to the nearest footprint within 30 m (still the same parcel's
+    dwelling at that range); beyond that returns None rather than guessing.
+    """
+    buildings_path = data_path("overture_buildings.parquet")
+    if not buildings_path.exists():
+        return None
+    import math
+    m_per_deg = 111_320 * math.cos(math.radians(lat))
+    sql = f"""
+        SELECT ST_Area(geometry)
+        FROM read_parquet('{buildings_path}')
+        WHERE bbox.xmin <= {lng} AND bbox.xmax >= {lng}
+          AND bbox.ymin <= {lat} AND bbox.ymax >= {lat}
+          AND ST_Contains(geometry, ST_Point({lng}, {lat}))
+        LIMIT 1
+    """
+    try:
+        row = db.sql(sql).fetchone()
+    except Exception:
+        return None
+    if row and row[0] is not None:
+        return float(row[0]) * m_per_deg * 111_320
+
+    fallback_m = 30.0
+    delta_lat = fallback_m / 111_320
+    delta_lng = fallback_m / m_per_deg
+    sql = f"""
+        SELECT ST_Area(geometry),
+               ST_Distance(geometry, ST_Point({lng}, {lat})) * {m_per_deg} AS dist_m
+        FROM read_parquet('{buildings_path}')
+        WHERE bbox.xmin <= {lng + delta_lng} AND bbox.xmax >= {lng - delta_lng}
+          AND bbox.ymin <= {lat + delta_lat} AND bbox.ymax >= {lat - delta_lat}
+        ORDER BY dist_m
+        LIMIT 1
+    """
+    try:
+        row = db.sql(sql).fetchone()
+    except Exception:
+        return None
+    if not row or row[0] is None or row[1] is None or row[1] > fallback_m:
+        return None
+    return float(row[0]) * m_per_deg * 111_320
+
+
 def buildings_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
                    radius_m: int = 500) -> list[tuple]:
     """Find buildings within radius. Returns (height, dist_m, num_floors)."""

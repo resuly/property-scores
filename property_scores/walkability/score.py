@@ -295,6 +295,13 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
         # OSM leisure polygons: council ovals are polygons, not commercial
         # POIs, so Overture misses most of them ("no sports ovals near us").
         pois_full = pois_full + sports_fields_near(db, lat, lng, radius_m)
+        # Beaches/lakes come from OSM natural=beach EXCLUSIVELY: Overture's
+        # beach/lake places are spam pages pinned to arbitrary coordinates
+        # ("Bondi Beach" in Carlton, "Whitehaven Beach" in Brisbane CBD), so
+        # both categories are dropped before the OSM beaches merge in below.
+        # Must happen BEFORE the OSM merge — OSM rows share the 'beach' key.
+        _ghost_beach = {"beach", "lake"}
+        pois_full = [p for p in pois_full if p[0] not in _ghost_beach]
         # OSM public amenities (playground/dog park/public pool/beach):
         # commercial POI recall on public infrastructure is 26-44% holes.
         pois_full = pois_full + osm_amenities_near(db, lat, lng, radius_m)

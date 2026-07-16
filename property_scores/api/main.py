@@ -24,8 +24,30 @@ from property_scores.bushfire import bushfire_score
 from property_scores.heat_island import heat_island_score
 from property_scores.view_quality import view_quality_score
 from property_scores.contamination import contamination_score
+from property_scores.common.overture import building_footprint_m2, get_db
 
 logger = logging.getLogger(__name__)
+
+
+def _solar_with_footprint(lat: float, lng: float) -> dict:
+    """Solar score with roof area auto-derived from the Overture building
+    footprint containing the point, so estimated_annual_kwh populates without
+    the caller supplying roof_area (it never did; the field was always null
+    in the batch payload until 2026-07-16). Whole-building semantics for
+    strata — labelled via roof_area_source."""
+    roof_m2 = None
+    try:
+        roof_m2 = building_footprint_m2(get_db(), lat, lng)
+    except Exception:
+        logger.warning("building footprint lookup failed", exc_info=True)
+    result = solar_score(lat, lng, roof_area_m2=roof_m2)
+    if roof_m2:
+        result["roof_area_m2"] = round(roof_m2)
+        result["roof_area_source"] = (
+            "building_footprint: the whole building containing this point "
+            "(not a per-unit share), panels across the full footprint at 20% "
+            "efficiency")
+    return result
 
 # ---------------------------------------------------------------------------
 # Application-level rate limiter (supplements nginx 5r/s)
@@ -163,7 +185,7 @@ def get_all_scores(
     components = {
         "noise": lambda: noise_score(lat, lng, source=source_roads),
         "walkability": lambda: walkability_score(lat, lng, source=source_pois),
-        "solar": lambda: solar_score(lat, lng),
+        "solar": lambda: _solar_with_footprint(lat, lng),
         "flood": lambda: flood_score(lat, lng),
         "bushfire": lambda: bushfire_score(lat, lng),
         "heat_island": lambda: heat_island_score(lat, lng),

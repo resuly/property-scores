@@ -232,9 +232,15 @@ def bake_zone(zone):
         except OSError:
             pass
 
-    run(["gdal_calc.py", "-A", warp_f,
-         "--outfile", i16, "--calc", "where(A>-9000,rint(A*10),-32768)",
-         "--NoDataValue", "-32768", "--type", "Int16", "--quiet",
+    # gdal raster calc (GDAL 3.11+ C++ engine) replaced gdal_calc.py in the
+    # 2026-07-16 PC bake: the numpy path went pathological on huge sparse warped
+    # rasters (waz51, 11.8e9 px: >2.5 h unfinished vs 4m40s here, ~35x).
+    # Validated on ntz52 against the numpy path: 0.066% of px differ by +/-1 dm,
+    # all at exact half-decimetre ties, where this double-precision math is MORE
+    # faithful to the Float32 source than numpy's float32 multiply.
+    run(["gdal", "raster", "calc", "-i", f"A={warp_f}", "-o", i16,
+         "--calc", "A > -9000 ? rint(A*10) : -32768",
+         "--output-data-type", "Int16", "--nodata", "-32768", "--overwrite",
          "--co", "COMPRESS=DEFLATE", "--co", "PREDICTOR=2", "--co", "BIGTIFF=YES"])
     print(f"    int16: {du(i16)}", flush=True)
 

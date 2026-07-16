@@ -114,6 +114,28 @@ rsync -avz -e "ssh -i <你的key> " \
 
 ---
 
+## 5.5 实跑结果(2026-07-16,Windows PC + Docker)— ✅ 已完成并上传
+
+全程 ~9h(14:00–23:00 AEST),7 zone 全出,**成品 10.2 GB** 已 rsync 到 Oracle 并在
+`.venv` rasterio 实测采样一致(Sydney 217 / Adelaide 449 / Perth 125 / Darwin 253 dm)。
+Adelaide/Darwin 与预期精确一致;Sydney/Perth 差 <1m(坡地邻格,正常)。
+
+本机实际路线(与 §1-2 的差异):
+- **Docker 跑 gdal**(`ghcr.io/osgeo/gdal:ubuntu-small-latest` + apt curl,见 `D:\ps_lidar\Dockerfile`)。
+  Windows conda 的 gdal DLL 坏、WSL 装 gdal 要 sudo 密码,Docker 是唯一免折腾路线。
+  D: 盘 bind mount 实测写 173 MB/s,够用。
+- **zip 在主机预下载**(native curl 23 MB/s),容器内下载被 NAT 限到 1.5 MB/s(15 倍差)。
+- **gdal_calc.py 在巨型稀疏栅格上病态慢**:waz51(11.8e9 px)>2.5h 没跑完,同任务
+  `gdal raster calc`(GDAL 3.11+ C++)4m40s。已换(脚本已改),数值差异仅 0.066% px ±1dm
+  且全在半分米平局点(double 数学更忠实)。ntz52 上三方(脚本官方/手动官方/快路径)对比验证过。
+- **并行排程**:小 zone(waz50/51、ntz52/53)三容器并行;大 zone 只在"裸 tif 占盘阶段"互斥
+  (z55→z56→z54 接力),calc/COG 阶段自由叠加。8 核 11.7G Docker VM 无压力。
+- 各 zone 裸 tif 实测:z55=354G(与预测一致)/ z54=270G / waz50=149G / z56=115G / waz51=37G。
+  waz50(Perth)是隐藏大户,zip 才 2.4G。
+- **PowerShell 5.1 给 docker 传参会吃嵌套双引号**(害 waz50 白跑一遍 calc,输出 59G 未压缩
+  垃圾)——复杂命令一律写成 .sh 文件挂载进容器跑。
+- 产物本地备份留在 `D:\ps_lidar\data\global\lidar\`(含全部 bake 日志)。
+
 ## 6. 关键坑(别重踩)
 
 - **必须 `--unzip`**;不加则大 zone 走 /vsizip 卡死。
@@ -124,3 +146,46 @@ rsync -avz -e "ssh -i <你的key> " \
 - VRT 必须**相对路径**(脚本已在 OUT_DIR 内 cwd 生成),否则传到 Oracle 解析不到瓦片。
 - PROJ 若报 `Invalid SRS`(某些机器有冲突 proj.db):`export PROJ_LIB=<gdal的proj目录>`
   (WSL: `/usr/share/proj`;OSGeo4W: `...\share\proj`;conda: `$CONDA_PREFIX/share/proj`)。
+## 7. 更新 Runbook(下次重烤照这个跑,Windows PC + Docker)
+
+GA 的全国 5m mosaic 自 2015 基本不更新;**触发条件 = 季度 `--check` 报 CHANGED**
+(或新增 zone)。届时在这台 PC(或任何 ≥500G 盘 + Docker 的机器)照下面跑:
+
+```bash
+# 0) 检查哪些 zone 变了(任何机器,不需大盘)
+python3 scripts/bake_lidar_cog.py --check
+
+# 1) 工作区 + 镜像(一次性;已有则跳过)
+#    Windows: 工作区 D:\ps_lidar,repo 的 scripts/ 拷过去或直接 clone 到大盘
+docker build -t gdal-bake:latest -f scripts/lidar_bake/Dockerfile scripts/lidar_bake
+
+# 2) zip 在【主机】预下载到 data/global/lidar/_work/(容器内下载被限速 15 倍,别在容器里下)
+curl.exe -fL -C - --retry 3 -o data/global/lidar/_work/<zone>.zip \
+  https://elevation-direct-downloads.s3-ap-southeast-2.amazonaws.com/5m-dem/national_utm_mosaics/<zone>.zip
+
+# 3) 烤(每 zone 一个容器,日志各自落盘)
+docker run -d --name bake_<zone> -v D:\ps_lidar:/work -w /work gdal-bake:latest \
+  bash -c "python3 scripts/bake_lidar_cog.py --unzip <zone> > /work/bake_<zone>.log 2>&1"
+```
+
+**排程规则(磁盘是唯一互斥资源):**
+- 裸 tif 实测:z55=354G / z54=270G / waz50=149G / z56=115G / waz51=37G / ntz52·53=零头。
+  **同一时刻只允许一个大 zone 处于"解压→warp"占盘阶段**;它的 warp 一完(裸 tif 被脚本删掉、
+  磁盘跳回)下一个大 zone 进场。calc/COG 阶段占盘极小,随便叠加。小 zone 全并行无所谓。
+- 观察进度:`bash scripts/lidar_bake/watch_bakes.sh`(容器退出/新 COG/磁盘水位,10min 心跳);
+  **COG 文件出现 ≠ 写完,容器退出才算完成**。
+- warp 期间输出字节可能长时间不动(走到 nodata 区)——看容器 CPU(~50% = 正常在跑),别急着杀。
+
+**烤完(§3 同款验证,一条命令):**
+```bash
+docker run --rm -v D:\ps_lidar:/work -w /work gdal-bake:latest bash scripts/lidar_bake/final_verify.sh
+# 过了再 rsync(§4 命令不变;Windows 上从 WSL 跑,key 先 cp 进 ~/.ssh 并 chmod 600)
+```
+
+**红线:**
+- 复杂 docker 命令**必须写成 .sh 文件挂载执行**——PowerShell 5.1 会吃嵌套双引号,
+  曾把 `--calc "A > -9000 ..."` 打散成恒等式 + 裸 `>` 重定向,白烤一遍还写了 59G 垃圾。
+- calc 步骤用的是 `gdal raster calc`(脚本里已写死),别改回 gdal_calc.py(巨型稀疏栅格上病态慢)。
+- Oracle 端接收目录 `/var/www/property-scores/data/global/lidar/`;传完用 `.venv` rasterio
+  采样四城对一遍(Sydney~217/Adelaide~449/Perth~125/Darwin~253 dm)。
+

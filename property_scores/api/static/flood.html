@@ -85,7 +85,7 @@
           <ul class="list-disc ml-4 space-y-0.5">
             <li>ArcGIS Planning Overlays (VIC/NSW/SA/TAS/ACT)</li>
             <li>JRC Global Surface Water, 38-year satellite record</li>
-            <li>HAND (Height Above Nearest Drainage): LiDAR bare-earth where covered (NSW/QLD 5m raster, VIC/TAS contours), else GA DEM-H 30m</li>
+            <li>HAND (Height Above Nearest Drainage): GA national 5m LiDAR bare-earth (baked, ~245,000 km2 populated coverage; live state LiDAR/contour services fill gaps), else GA DEM-H 30m</li>
             <li>BOM 2016 IFD design rainfall, 1% AEP (CC BY 4.0)</li>
           </ul>
         </div>
@@ -104,7 +104,7 @@
           <ul class="list-disc ml-4 space-y-0.5">
             <li>QLD, WA, NT lack public ArcGIS overlay data (satellite and terrain signals still apply)</li>
             <li>JRC 30m resolution may miss localized drainage</li>
-            <li>Elevation is a 30m grid (~1-3m vertical uncertainty); terrain-based risk is a directional screening signal, not survey grade</li>
+            <li>Elevation is 5m LiDAR where covered (decimetre-class vertical) and a 30m grid elsewhere (~1-3m); terrain-based risk is a directional screening signal, not a hydraulic model</li>
             <li>Not FEMA/BFE determination-grade or an insurance-pricing input, and not a substitute for a professional flood assessment</li>
           </ul>
         </div>

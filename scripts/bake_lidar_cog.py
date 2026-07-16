@@ -64,6 +64,17 @@ os.environ["PYTHONNOUSERSITE"] = "1"
 # re-release (the national 5 m mosaic is otherwise static since 2015).
 MANIFEST = os.path.join(OUT_DIR, "manifest.json")
 
+# --unzip: extract each zone's tif to disk before warping instead of streaming
+# through /vsizip. REQUIRED for the big zones (z54/z55/z56): their tif is stored
+# DEFLATE-compressed inside the zip and expands to hundreds of GB uncompressed
+# (z55 = 137974x641646 = 88.5e9 px = ~354 GB). gdalwarp reading that through
+# /vsizip must re-inflate the whole stream for every random block read and
+# effectively stalls (verified on Mac AND Oracle). From a LOCAL uncompressed tif
+# the same warp does cheap block seeks and skips nodata, finishing in minutes.
+# Needs a big scratch disk (>=500 GB for z55: 354 GB tif + ~10 GB warp). Set by
+# --unzip; leave off only for the small zones on a small disk.
+UNZIP = False
+
 # Force a clean PROJ data dir — the EclipseSUMO framework's stale proj.db
 # (LAYOUT.VERSION.MINOR=4) otherwise hijacks the gdal CLI and breaks EPSG:4326.
 # Prefer homebrew's (where the gdal CLI lives); fall back to rasterio's bundle.
@@ -96,15 +107,26 @@ def run(cmd):
 
 
 def du(path):
-    if not os.path.exists(path):
+    """Human-readable size of a file (portable; no `du`)."""
+    try:
+        n = os.path.getsize(path)
+    except OSError:
         return "0"
-    out = subprocess.run(["du", "-h", path], capture_output=True, text=True)
-    return out.stdout.split("\t")[0] if out.stdout else "?"
+    for u in ("B", "K", "M", "G", "T"):
+        if n < 1024 or u == "T":
+            return f"{n:.0f}{u}" if u == "B" else f"{n:.1f}{u}"
+        n /= 1024
+    return f"{n:.1f}T"
 
 
 def df_free():
-    out = subprocess.run(["df", "-h", REPO], capture_output=True, text=True)
-    return out.stdout.strip().splitlines()[-1]
+    """Free / total on the repo's volume (portable; no `df`)."""
+    u = shutil.disk_usage(REPO)
+    return f"{u.free/1e9:.0f}G free / {u.total/1e9:.0f}G"
+
+
+def free_gb():
+    return shutil.disk_usage(REPO).free / 1e9
 
 
 def load_manifest():
@@ -166,9 +188,28 @@ def bake_zone(zone):
         raise SystemExit(f"{zone}: no .tif in zip")
     print(f"  {len(members)} tif member(s): {members[:3]}"
           f"{' ...' if len(members) > 3 else ''}", flush=True)
-    vsi = [f"/vsizip/{zip_path}/{m}" for m in members]
 
-    run(["gdalbuildvrt", "-q", src_vrt, *vsi])
+    raw_tifs = []
+    if UNZIP:
+        # Extract the tif(s) to disk, then drop the zip — a local uncompressed
+        # tif lets gdalwarp seek/skip blocks cheaply (see UNZIP note).
+        print(f"  unzip -> disk (free: {df_free()}) ...", flush=True)
+        t = time.time()
+        with zipfile.ZipFile(zip_path) as z:
+            for m in members:
+                z.extract(m, WORK)
+                raw_tifs.append(os.path.join(WORK, m))
+        print(f"    extracted {sum(os.path.getsize(p) for p in raw_tifs)/1e9:.0f}G"
+              f" in {time.time()-t:.0f}s (free: {df_free()})", flush=True)
+        try:
+            os.remove(zip_path)
+        except OSError:
+            pass
+        src_inputs = raw_tifs
+    else:
+        src_inputs = [f"/vsizip/{zip_path}/{m}" for m in members]
+
+    run(["gdalbuildvrt", "-q", src_vrt, *src_inputs])
     # -r near: source and target are both 5 m, so this is a reprojection not a
     # downsample — nearest preserves the real bare-earth LiDAR value (no
     # smoothing) and is faster than average. The slow part is decompressing the
@@ -183,9 +224,9 @@ def bake_zone(zone):
          "--config", "GDAL_CACHEMAX", "2048",
          "-multi", "-overwrite", src_vrt, warp_f])
     print(f"    warped float: {du(warp_f)}", flush=True)
-    # zip + src VRT are only needed by the warp; drop them now so the big-zone
-    # peak (zip + warped + int16 + cog coexisting) never overflows the disk.
-    for f in (zip_path, src_vrt):
+    # zip / raw tifs / src VRT are only needed by the warp; drop them now so the
+    # peak (raw + warped + int16 + cog coexisting) never overflows the disk.
+    for f in (zip_path, src_vrt, *raw_tifs):
         try:
             os.remove(f)
         except OSError:
@@ -289,7 +330,12 @@ def main():
                     help="compare S3 zip sizes to manifest (quarterly refresh)")
     ap.add_argument("--apply", action="store_true",
                     help="with --check: re-bake changed zones")
+    ap.add_argument("--unzip", action="store_true",
+                    help="extract tif to disk before warp (REQUIRED for big "
+                         "zones; needs a big scratch disk, e.g. 500 GB)")
     a = ap.parse_args()
+    global UNZIP
+    UNZIP = a.unzip
     if a.vrt_only:
         build_vrt()
         return

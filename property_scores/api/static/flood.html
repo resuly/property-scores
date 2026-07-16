@@ -359,6 +359,28 @@ async function query() {
         html += `<div class="mt-1.5 inline-flex items-center gap-1 text-[11px] border rounded px-1.5 py-0.5 ${cfg.c}">`;
         html += `<span class="font-medium">${cfg.t}</span><span class="opacity-70">· ${cfg.s}</span></div>`;
       }
+      // Self-reported floor height (prototype): terrain gives ground level; the
+      // occupant knows how far their floor sits above it (steps, garage slab,
+      // stumps). Adds user metres to HAND client-side — display only, clearly
+      // labelled user-provided, never survey-grade, does not change the score.
+      html += `<div class="mt-2 pt-2 border-t border-slate-100">`;
+      html += `<div class="text-[11px] text-slate-500 mb-1">Know your floor height? Refine the read (e.g. door sits 1.0m above ground):</div>`;
+      html += `<div class="flex items-center gap-1.5">`;
+      html += `<input id="ffe-input" type="number" min="0" max="5" step="0.1" placeholder="0.0" class="w-16 text-xs border border-slate-300 rounded px-1.5 py-0.5"/>`;
+      html += `<span class="text-[11px] text-slate-500">m above ground</span>`;
+      html += `<span id="ffe-out" class="text-[11px] font-medium text-slate-700"></span></div>`;
+      html += `<div class="text-[10px] text-slate-400 mt-0.5">Self-reported, not surveyed. Refines the display only.</div></div>`;
+      setTimeout(() => {
+        const inp = document.getElementById('ffe-input');
+        const out = document.getElementById('ffe-out');
+        if (inp && out) inp.addEventListener('input', () => {
+          const v = parseFloat(inp.value);
+          if (!isFinite(v) || v <= 0) { out.textContent = ''; return; }
+          const eff = Math.round((hm + v) * 10) / 10;
+          const lbl = eff < 1 ? 'still very low' : eff < 3 ? 'still low' : eff < 5 ? 'moderate clearance' : 'good clearance';
+          out.textContent = `→ floor ≈ ${eff}m above drainage (${lbl})`;
+        });
+      }, 0);
       html += `</div>`;
     }
 

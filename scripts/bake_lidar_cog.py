@@ -29,11 +29,13 @@ Usage:
   python scripts/bake_lidar_cog.py --vrt-only            # just rebuild the VRT
 """
 import argparse
+import json
 import os
 import shutil
 import subprocess
 import sys
 import time
+import urllib.request
 import zipfile
 
 BASE = ("https://elevation-direct-downloads.s3-ap-southeast-2.amazonaws.com/"
@@ -52,6 +54,9 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(REPO, "data", "global", "lidar")
 WORK = os.path.join(REPO, "data", "global", "lidar", "_work")
+# Records each baked zone's source zip Content-Length so --check can detect a GA
+# re-release (the national 5 m mosaic is otherwise static since 2015).
+MANIFEST = os.path.join(OUT_DIR, "manifest.json")
 
 # Force a clean PROJ data dir — the EclipseSUMO framework's stale proj.db
 # (LAYOUT.VERSION.MINOR=4) otherwise hijacks the gdal CLI and breaks EPSG:4326.
@@ -96,6 +101,32 @@ def df_free():
     return out.stdout.strip().splitlines()[-1]
 
 
+def load_manifest():
+    try:
+        with open(MANIFEST) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_manifest(m):
+    tmp = MANIFEST + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(m, f, indent=2, sort_keys=True)
+    os.replace(tmp, MANIFEST)
+
+
+def head_size(zone):
+    """Current Content-Length of the zone's S3 zip (bytes), or None on failure."""
+    req = urllib.request.Request(f"{BASE}/{zone}.zip", method="HEAD",
+                                 headers={"User-Agent": UA})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return int(r.headers.get("Content-Length") or 0) or None
+    except Exception:
+        return None
+
+
 def download(zone, zip_path):
     url = f"{BASE}/{zone}.zip"
     print(f"  download {url}", flush=True)
@@ -123,6 +154,7 @@ def bake_zone(zone):
 
     if not os.path.exists(zip_path):
         download(zone, zip_path)
+    zip_bytes = os.path.getsize(zip_path)
     members = tif_members(zip_path)
     if not members:
         raise SystemExit(f"{zone}: no .tif in zip")
@@ -168,6 +200,9 @@ def bake_zone(zone):
             os.remove(f)
         except OSError:
             pass
+    m = load_manifest()
+    m[zone] = {"zip_bytes": zip_bytes, "tif": os.path.basename(out)}
+    save_manifest(m)
     print(f"  -> {out}  ({du(out)})  in {time.time() - t0:.0f}s"
           f"  (free after: {df_free()})", flush=True)
 
@@ -190,18 +225,79 @@ def build_vrt():
     print(f"VRT: {os.path.join(OUT_DIR, 'au_lidar_5m.vrt')}  ({len(tifs)} tiles)")
 
 
+def check(apply):
+    """Compare each mainland zone's live S3 zip size to the manifest; report
+    zones GA has re-released (or never baked). With apply=True, re-bake them and
+    rebuild the VRT. This is the quarterly-cron entry point (the national 5 m
+    mosaic is static since 2015, so normally nothing changes and this no-ops)."""
+    m = load_manifest()
+    changed, missing_head = [], []
+    for z in ZONES_MAIN:
+        live = head_size(z)
+        if live is None:
+            missing_head.append(z)
+            print(f"  {z}: HEAD failed (skip)")
+            continue
+        was = (m.get(z) or {}).get("zip_bytes")
+        baked = os.path.exists(os.path.join(OUT_DIR, f"{z}_5m.tif"))
+        if not baked or was != live:
+            changed.append(z)
+            print(f"  {z}: CHANGED (baked={baked} manifest={was} live={live})")
+        else:
+            print(f"  {z}: up-to-date ({live} bytes)")
+    if not changed:
+        print("all zones up-to-date; nothing to do")
+        return
+    if not apply:
+        print(f"\n{len(changed)} zone(s) need re-bake: {changed}  (run with --apply)")
+        return
+    print(f"\nre-baking {len(changed)} changed zone(s): {changed}")
+    for z in changed:
+        bake_zone(z)
+    build_vrt()
+
+
+def seed_manifest():
+    """Backfill manifest.json from the current S3 zip sizes for zones already
+    baked on disk. Use once after a bake that predates manifest support; right
+    after a bake the baked tile == current release, so live size is the baseline."""
+    m = load_manifest()
+    for z in ZONES_MAIN:
+        if os.path.exists(os.path.join(OUT_DIR, f"{z}_5m.tif")):
+            live = head_size(z)
+            if live:
+                m[z] = {"zip_bytes": live, "tif": f"{z}_5m.tif"}
+                print(f"  seeded {z}: {live} bytes")
+    save_manifest(m)
+    print(f"manifest: {MANIFEST}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("zones", nargs="*")
     ap.add_argument("--all", action="store_true", help="mainland AHD set")
     ap.add_argument("--vrt-only", action="store_true")
+    ap.add_argument("--seed-manifest", action="store_true",
+                    help="backfill manifest from S3 sizes for already-baked zones")
+    ap.add_argument("--check", action="store_true",
+                    help="compare S3 zip sizes to manifest (quarterly refresh)")
+    ap.add_argument("--apply", action="store_true",
+                    help="with --check: re-bake changed zones")
     a = ap.parse_args()
     if a.vrt_only:
         build_vrt()
         return
+    if a.seed_manifest:
+        seed_manifest()
+        return
+    if a.check:
+        check(a.apply)
+        if os.path.isdir(WORK) and not os.listdir(WORK):
+            shutil.rmtree(WORK, ignore_errors=True)
+        return
     zones = ZONES_MAIN if a.all else a.zones
     if not zones:
-        ap.error("give zone name(s) or --all")
+        ap.error("give zone name(s), --all, or --check")
     for z in zones:
         bake_zone(z)
     build_vrt()

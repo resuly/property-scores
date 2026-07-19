@@ -1,5 +1,7 @@
 # Bushfire Risk Score — Technical Specification
 
+> ⚠️ 部分过时 (2026-07-19):现役模型已含真实植被燃料(ESA WorldCover 10m,_vegetation_fuel)+ 全州本地 DEM 坡度(_terrain_slope,_CONTOUR_ENDPOINTS 已删)+ 本地火史。本文「无植被密度」limitation 与「WorldCover 属 Future」均已过时;现状以 bushfire/score.py + 记忆 project_property_scores 为准。
+
 ## Status: v1 Functional
 
 | Item | Status |

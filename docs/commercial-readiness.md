@@ -1,5 +1,7 @@
 # Commercial Readiness Assessment (2026-04-24, updated)
 
+> ⚠️ 补充 (2026-07-19):walkability 坡度惩罚已完成(commit 23cd101),本文 line16「no slope penalty」及 remaining #7 均已过时。仍准确的剩余项 = auth/rate-limit(#3)+ DA Leads /map 集成(#4)。
+
 > ⚠️ **2026-04-24 snapshot, several items now stale — code is the source of truth**
 > (reconciled 2026-07-02). Known inaccuracies: heat-island latency 18s → now a
 > local MODIS median mosaic at **~1.2s** (17x); bushfire "MODIS coverage patchy"

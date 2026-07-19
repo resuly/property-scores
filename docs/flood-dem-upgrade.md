@@ -1,5 +1,7 @@
 # Flood Score DEM Upgrade — Research, Plan & Progress Tracker
 
+> ⚠️ 补充 (2026-07-19):P3 全国 5m LiDAR 本地基座已于 07-16 上线并成为主高程层(terrain.py:64);本文 line 216/230「国家 GA 5m = EE-only 死路」结论**是错的**(有公开 S3 zip + live WCS DEM_LiDAR_5m_2025,见 lidar-build-pc-handoff.md:107)。P1/P2 段为 07-15 快照;高程架构现状以 lidar-build-pc-handoff.md + 记忆 project_lidar_5m_national_cog 为准。
+
 > 起因: 2026-07-15 LinkedIn flood 帖(21.4k 曝光)评论区两位地理空间专家公开批评当前高程数据。
 > Hugh Saalmans: "Copernicus elevation is well outside the tolerance for financial & insurance risk modelling. Look at LIDAR / aerial derived elevation models available as open data."
 > Naveen Ragu Ramalingam: "Careful that CopernicusDEM is actually a DSM product not bare earth elevation."

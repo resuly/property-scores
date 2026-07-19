@@ -1,5 +1,7 @@
 # Solar Score — Technical Specification
 
+> ⚠️ 部分过时 (2026-07-19):现役锚点为 750→2000(非 800-1800)且乘 ORIENTATION_FACTOR(朝向因子);kWh 已去掉 ×0.80 PR。评分公式以 solar/score.py:98-103 为准。对外硬约束:禁称有 shading/太阳位置模型。
+
 ## Status: v1 Stable
 
 | Item | Status |

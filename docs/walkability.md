@@ -1,5 +1,7 @@
 # Walkability Score — Technical Specification
 
+> ⚠️ 部分过时 (2026-07-19):现役为 24 个 scenario(SCENARIO_CONFIG,从旧 13/14 类重写)+ 坡度惩罚(_slope_penalty)+ highway barrier penalty。本文 14 类表与因子集为旧版;现状以 walkability/score.py 为准。
+
 ## Status: v1 Functional
 
 | Item | Status |

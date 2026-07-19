@@ -1,5 +1,7 @@
 # State-by-State Data Coverage
 
+> ⚠️ 部分过时 (2026-07-19):坡度已改为全州统一本地 DEM(5m LiDAR→30m 兜底),per-state contour 端点已全删;矩阵「Terrain slope (contour) VIC/NSW/QLD/TAS only」低估其余州能力(现只有 DEM 瓦片未覆盖处才 not_assessed)。现状以 bushfire/score.py + 记忆 project_property_scores_roadmap 为准。
+
 > ⚠️ **Reconciled with code 2026-07-02.** Three rows below were overstated and
 > are corrected inline: "JRC satellite (38yr)" is actually local Overture water
 > proximity (the remote JRC path is dead code); "MODIS fire history" runs VIC/NSW

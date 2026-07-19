@@ -1,5 +1,7 @@
 # View Quality Score
 
+> ⚠️ 部分过时 (2026-07-19):海拔因子已改读本地 dem.vrt(GLO-30,Open-Meteo 仅兜底);绿化因子已从 park-POI 关键词改为 ESA WorldCover 植被覆盖率。数据源描述以 view_quality/score.py 为准。
+
 Estimates visual amenity potential at a location using five open-data factors.
 
 ## Scoring

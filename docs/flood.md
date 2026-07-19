@@ -1,5 +1,7 @@
 # Flood Risk Score — Technical Specification
 
+> ⚠️ SUPERSEDED (2026-07-19):本文所述架构已过时。JRC Global Surface Water 是**死代码**(flood/score.py:237 明确警告勿引用为 live 数据源);现役水体信号 = 本地 Overture water proximity(_water_proximity_local)。HAND(5m LiDAR 底座)+ BOM IFD 1% AEP 降雨(非 ERA5)是**已部署核心**,不是「Future」。现状以 flood/score.py + 记忆 project_flood_dem_upgrade 为准。
+
 ## Status: v2 (Overlay + JRC Satellite)
 
 | Item | Status |

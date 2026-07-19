@@ -1,5 +1,7 @@
 # 全澳 5m LiDAR Flood 高程层 — 一次性实施 Handoff
 
+> ⚠️ SUPERSEDED (2026-07-19):全国 5m LiDAR 基座已于 2026-07-16 烤完并部署为所有评分的主高程层(common/terrain.py:64,lidar_local 5m 优先/30m 兜底)。本文的「先量再建/等 Bo 确认再建」计划已完成;且 bake-on-Oracle 方案已被 lidar-build-pc-handoff.md(需 ≥500GB PC)取代——★勿据此去 Oracle 重建已建基座(该机曾多次 OOM)。当前重烤 runbook = docs/lidar-build-pc-handoff.md §7。本文仅留作数据源/枚举细节参考。
+
 > 目的:新开对话照此**一步到位**建完。本文自包含,所有端点/命令/坑/资源约束/数字都是
 > 2026-07-15 本人真查真测出来的(不是文档二手结论)。关联主文档:
 > [flood-dem-upgrade.md](flood-dem-upgrade.md) 第五/六节;记忆 `project_flood_dem_upgrade`。

@@ -1,0 +1,604 @@
+[
+  {
+    "label": "Melbourne CBD",
+    "context": "dense urban, no bush",
+    "expectation": "LOW",
+    "result": {
+      "indicative_bal": "BAL-LOW",
+      "bal_range": [
+        "BAL-LOW",
+        "BAL-LOW"
+      ],
+      "confidence": "high",
+      "state": "VIC",
+      "fdi": 100,
+      "fdi_basis": "Table 2.1 Victoria (general)",
+      "inputs": {
+        "vegetation": "No classified vegetation (>=1 ha, within 100 m) detected in WorldCover 10m.",
+        "patch_pixels": {
+          "10": 41,
+          "20": 0,
+          "30": 0
+        }
+      },
+      "official_overlay": {
+        "status": "outside",
+        "zones": []
+      },
+      "method": "AS 3959-2009 Method 1 (indicative)",
+      "assumptions": [
+        "Indicative pre-screen only \u2014 NOT a certified BAL. A compliant assessment requires an accredited assessor measuring distance/slope and classifying vegetation on site per quadrant.",
+        "FDI: Table 2.1 Victoria (general)."
+      ],
+      "disclaimer": "Indicative BAL pre-screen from open data (AS 3959 Method 1). This is NOT a certified Bushfire Attack Level assessment and must not be used for a building permit. A compliant BAL requires a site assessment by an accredited bushfire hazard assessor. Vegetation is classified from 10 m satellite land cover, which cannot resolve canopy density or fine on-ground detail; distances and slope are modelled, not surveyed.",
+      "lat": -37.8136,
+      "lng": 144.9631
+    }
+  },
+  {
+    "label": "Geelong CBD",
+    "context": "regional urban",
+    "expectation": "LOW",
+    "result": {
+      "indicative_bal": "BAL-LOW",
+      "bal_range": [
+        "BAL-LOW",
+        "BAL-LOW"
+      ],
+      "confidence": "high",
+      "state": "VIC",
+      "fdi": 100,
+      "fdi_basis": "Table 2.1 Victoria (general)",
+      "inputs": {
+        "vegetation": "No classified vegetation (>=1 ha, within 100 m) detected in WorldCover 10m.",
+        "patch_pixels": {
+          "10": 15,
+          "20": 0,
+          "30": 0
+        }
+      },
+      "official_overlay": {
+        "status": "outside",
+        "zones": []
+      },
+      "method": "AS 3959-2009 Method 1 (indicative)",
+      "assumptions": [
+        "Indicative pre-screen only \u2014 NOT a certified BAL. A compliant assessment requires an accredited assessor measuring distance/slope and classifying vegetation on site per quadrant.",
+        "FDI: Table 2.1 Victoria (general)."
+      ],
+      "disclaimer": "Indicative BAL pre-screen from open data (AS 3959 Method 1). This is NOT a certified Bushfire Attack Level assessment and must not be used for a building permit. A compliant BAL requires a site assessment by an accredited bushfire hazard assessor. Vegetation is classified from 10 m satellite land cover, which cannot resolve canopy density or fine on-ground detail; distances and slope are modelled, not surveyed.",
+      "lat": -38.1499,
+      "lng": 144.3617
+    }
+  },
+  {
+    "label": "Glen Waverley",
+    "context": "established SE Melb suburb",
+    "expectation": "LOW",
+    "result": {
+      "indicative_bal": "BAL-LOW",
+      "bal_range": [
+        "BAL-LOW",
+        "BAL-LOW"
+      ],
+      "confidence": "high",
+      "state": "VIC",
+      "fdi": 100,
+      "fdi_basis": "Table 2.1 Victoria (general)",
+      "inputs": {
+        "vegetation": "No classified vegetation (>=1 ha, within 100 m) detected in WorldCover 10m.",
+        "patch_pixels": {
+          "10": 58,
+          "20": 0,
+          "30": 16
+        }
+      },
+      "official_overlay": {
+        "status": "outside",
+        "zones": []
+      },
+      "method": "AS 3959-2009 Method 1 (indicative)",
+      "assumptions": [
+        "Indicative pre-screen only \u2014 NOT a certified BAL. A compliant assessment requires an accredited assessor measuring distance/slope and classifying vegetation on site per quadrant.",
+        "FDI: Table 2.1 Victoria (general)."
+      ],
+      "disclaimer": "Indicative BAL pre-screen from open data (AS 3959 Method 1). This is NOT a certified Bushfire Attack Level assessment and must not be used for a building permit. A compliant BAL requires a site assessment by an accredited bushfire hazard assessor. Vegetation is classified from 10 m satellite land cover, which cannot resolve canopy density or fine on-ground detail; distances and slope are modelled, not surveyed.",
+      "lat": -37.88,
+      "lng": 145.165
+    }
+  },
+  {
+    "label": "Warrandyte",
+    "context": "Yarra bush-suburb interface (VIC)",
+    "expectation": "mid/high",
+    "result": {
+      "indicative_bal": "BAL-FZ",
+      "bal_range": [
+        "BAL-FZ",
+        "BAL-FZ"
+      ],
+      "confidence": "moderate",
+      "state": "VIC",
+      "fdi": 100,
+      "fdi_basis": "Table 2.1 Victoria (general)",
+      "inputs": {
+        "vegetation": {
+          "esa_worldcover": "Forest (tree cover)",
+          "as3959_class": "A (Forest)",
+          "distance_m": 0.0,
+          "in_vegetation": true,
+          "patch_pixels": {
+            "10": 1306,
+            "20": 0,
+            "30": 9
+          },
+          "formation_uncertainty": "WorldCover 10m cannot resolve canopy-cover %; assumed heaviest plausible class (A); lighter plausible = B. This is the dominant confidence driver."
+        },
+        "slope": {
+          "band": "flat",
+          "deg": 6.9,
+          "direction": "flat/upslope",
+          "basis": "site 85 m vs vegetation 85 m (drop 0 m) -> flat/upslope; slope 6.9 deg",
+          "measured": true
+        },
+        "distance_cutoff_m": 100,
+        "min_patch_ha": 1.0
+      },
+      "official_overlay": {
+        "status": "in_zone",
+        "zones": [
+          "Bushfire Management Overlay (BMO)"
+        ],
+        "category": "BMO",
+        "basis": "state_service"
+      },
+      "method": "AS 3959-2009 Method 1 (indicative, simplified procedure)",
+      "assumptions": [
+        "Indicative pre-screen only \u2014 NOT a certified BAL. A compliant assessment requires an accredited assessor measuring distance/slope and classifying vegetation on site per quadrant.",
+        "FDI: Table 2.1 Victoria (general)."
+      ],
+      "disclaimer": "Indicative BAL pre-screen from open data (AS 3959 Method 1). This is NOT a certified Bushfire Attack Level assessment and must not be used for a building permit. A compliant BAL requires a site assessment by an accredited bushfire hazard assessor. Vegetation is classified from 10 m satellite land cover, which cannot resolve canopy density or fine on-ground detail; distances and slope are modelled, not surveyed.",
+      "lat": -37.745,
+      "lng": 145.215
+    }
+  },
+  {
+    "label": "Kalorama (Dandenongs)",
+    "context": "forest interface (VIC BMO)",
+    "expectation": "high",
+    "result": {
+      "indicative_bal": "BAL-FZ",
+      "bal_range": [
+        "BAL-FZ",
+        "BAL-FZ"
+      ],
+      "confidence": "moderate",
+      "state": "VIC",
+      "fdi": 100,
+      "fdi_basis": "Table 2.1 Victoria (general)",
+      "inputs": {
+        "vegetation": {
+          "esa_worldcover": "Forest (tree cover)",
+          "as3959_class": "A (Forest)",
+          "distance_m": 0.0,
+          "in_vegetation": true,
+          "patch_pixels": {
+            "10": 1352,
+            "20": 0,
+            "30": 0
+          },
+          "formation_uncertainty": "WorldCover 10m cannot resolve canopy-cover %; assumed heaviest plausible class (A); lighter plausible = B. This is the dominant confidence driver."
+        },
+        "slope": {
+          "band": "flat",
+          "deg": 22.2,
+          "direction": "flat/upslope",
+          "basis": "site 350 m vs vegetation 350 m (drop 0 m) -> flat/upslope; slope 22.2 deg",
+          "measured": true
+        },
+        "distance_cutoff_m": 100,
+        "min_patch_ha": 1.0
+      },
+      "official_overlay": {
+        "status": "in_zone",
+        "zones": [
+          "Bushfire Management Overlay (BMO)"
+        ],
+        "category": "BMO",
+        "basis": "state_service"
+      },
+      "method": "AS 3959-2009 Method 1 (indicative, simplified procedure)",
+      "assumptions": [
+        "Indicative pre-screen only \u2014 NOT a certified BAL. A compliant assessment requires an accredited assessor measuring distance/slope and classifying vegetation on site per quadrant.",
+        "FDI: Table 2.1 Victoria (general)."
+      ],
+      "disclaimer": "Indicative BAL pre-screen from open data (AS 3959 Method 1). This is NOT a certified Bushfire Attack Level assessment and must not be used for a building permit. A compliant BAL requires a site assessment by an accredited bushfire hazard assessor. Vegetation is classified from 10 m satellite land cover, which cannot resolve canopy density or fine on-ground detail; distances and slope are modelled, not surveyed.",
+      "lat": -37.818,
+      "lng": 145.36
+    }
+  },
+  {
+    "label": "Anglesea edge",
+    "context": "coastal heath/forest (VIC)",
+    "expectation": "mid/high",
+    "result": {
+      "indicative_bal": "BAL-LOW",
+      "bal_range": [
+        "BAL-LOW",
+        "BAL-LOW"
+      ],
+      "confidence": "moderate",
+      "state": "VIC",
+      "fdi": 100,
+      "fdi_basis": "Table 2.1 Victoria (general)",
+      "inputs": {
+        "vegetation": {
+          "esa_worldcover": "Grassland",
+          "as3959_class": "G (G)",
+          "distance_m": 89.6,
+          "in_vegetation": false,
+          "patch_pixels": {
+            "10": 74,
+            "20": 0,
+            "30": 181
+          },
+          "formation_uncertainty": "WorldCover 10m cannot resolve canopy-cover %; assumed heaviest plausible class (G); lighter plausible = G. This is the dominant confidence driver."
+        },
+        "slope": {
+          "band": "d5",
+          "deg": 1.0,
+          "direction": "downslope",
+          "basis": "site 5 m is 3 m above nearest vegetation 2 m -> downslope; slope 1.0 deg",
+          "measured": true
+        },
+        "distance_cutoff_m": 100,
+        "min_patch_ha": 1.0
+      },
+      "official_overlay": {
+        "status": "in_zone",
+        "zones": [
+          "Bushfire Management Overlay (BMO)"
+        ],
+        "category": "BMO",
+        "basis": "state_service"
+      },
+      "method": "AS 3959-2009 Method 1 (indicative, simplified procedure)",
+      "assumptions": [
+        "Indicative pre-screen only \u2014 NOT a certified BAL. A compliant assessment requires an accredited assessor measuring distance/slope and classifying vegetation on site per quadrant.",
+        "FDI: Table 2.1 Victoria (general).",
+        "Nearest vegetation is grassland; under FDI 100 grassland is not assessed for BAL (AS 3959) -> BAL-LOW on the grassland input."
+      ],
+      "disclaimer": "Indicative BAL pre-screen from open data (AS 3959 Method 1). This is NOT a certified Bushfire Attack Level assessment and must not be used for a building permit. A compliant BAL requires a site assessment by an accredited bushfire hazard assessor. Vegetation is classified from 10 m satellite land cover, which cannot resolve canopy density or fine on-ground detail; distances and slope are modelled, not surveyed.",
+      "lat": -38.408,
+      "lng": 144.188
+    }
+  },
+  {
+    "label": "Lorne",
+    "context": "steep Otways forest (VIC)",
+    "expectation": "high",
+    "result": {
+      "indicative_bal": "BAL-29",
+      "bal_range": [
+        "BAL-19",
+        "BAL-40"
+      ],
+      "confidence": "moderate",
+      "state": "VIC",
+      "fdi": 100,
+      "fdi_basis": "Table 2.1 Victoria (general)",
+      "inputs": {
+        "vegetation": {
+          "esa_worldcover": "Forest (tree cover)",
+          "as3959_class": "A (Forest)",
+          "distance_m": 28.9,
+          "in_vegetation": false,
+          "patch_pixels": {
+            "10": 239,
+            "20": 0,
+            "30": 377
+          },
+          "formation_uncertainty": "WorldCover 10m cannot resolve canopy-cover %; assumed heaviest plausible class (A); lighter plausible = B. This is the dominant confidence driver."
+        },
+        "slope": {
+          "band": "flat",
+          "deg": 3.9,
+          "direction": "flat/upslope",
+          "basis": "site 11 m vs vegetation 14 m (drop -3 m) -> flat/upslope; slope 3.9 deg",
+          "measured": true
+        },
+        "distance_cutoff_m": 100,
+        "min_patch_ha": 1.0
+      },
+      "official_overlay": {
+        "status": "in_zone",
+        "zones": [
+          "Bushfire Management Overlay (BMO)"
+        ],
+        "category": "BMO1",
+        "basis": "state_service"
+      },
+      "method": "AS 3959-2009 Method 1 (indicative, simplified procedure)",
+      "assumptions": [
+        "Indicative pre-screen only \u2014 NOT a certified BAL. A compliant assessment requires an accredited assessor measuring distance/slope and classifying vegetation on site per quadrant.",
+        "FDI: Table 2.1 Victoria (general)."
+      ],
+      "disclaimer": "Indicative BAL pre-screen from open data (AS 3959 Method 1). This is NOT a certified Bushfire Attack Level assessment and must not be used for a building permit. A compliant BAL requires a site assessment by an accredited bushfire hazard assessor. Vegetation is classified from 10 m satellite land cover, which cannot resolve canopy density or fine on-ground detail; distances and slope are modelled, not surveyed.",
+      "lat": -38.54,
+      "lng": 143.975
+    }
+  },
+  {
+    "label": "Kinglake township",
+    "context": "Black Saturday forest (VIC)",
+    "expectation": "high",
+    "result": {
+      "indicative_bal": "BAL-FZ",
+      "bal_range": [
+        "BAL-FZ",
+        "BAL-FZ"
+      ],
+      "confidence": "moderate",
+      "state": "VIC",
+      "fdi": 100,
+      "fdi_basis": "Table 2.1 Victoria (general)",
+      "inputs": {
+        "vegetation": {
+          "esa_worldcover": "Forest (tree cover)",
+          "as3959_class": "A (Forest)",
+          "distance_m": 0.0,
+          "in_vegetation": true,
+          "patch_pixels": {
+            "10": 620,
+            "20": 0,
+            "30": 697
+          },
+          "formation_uncertainty": "WorldCover 10m cannot resolve canopy-cover %; assumed heaviest plausible class (A); lighter plausible = B. This is the dominant confidence driver."
+        },
+        "slope": {
+          "band": "flat",
+          "deg": 2.2,
+          "direction": "flat/upslope",
+          "basis": "site 540 m vs vegetation 540 m (drop 0 m) -> flat/upslope; slope 2.2 deg",
+          "measured": true
+        },
+        "distance_cutoff_m": 100,
+        "min_patch_ha": 1.0
+      },
+      "official_overlay": {
+        "status": "in_zone",
+        "zones": [
+          "Bushfire Management Overlay (BMO)"
+        ],
+        "category": "BMO1",
+        "basis": "state_service"
+      },
+      "method": "AS 3959-2009 Method 1 (indicative, simplified procedure)",
+      "assumptions": [
+        "Indicative pre-screen only \u2014 NOT a certified BAL. A compliant assessment requires an accredited assessor measuring distance/slope and classifying vegetation on site per quadrant.",
+        "FDI: Table 2.1 Victoria (general)."
+      ],
+      "disclaimer": "Indicative BAL pre-screen from open data (AS 3959 Method 1). This is NOT a certified Bushfire Attack Level assessment and must not be used for a building permit. A compliant BAL requires a site assessment by an accredited bushfire hazard assessor. Vegetation is classified from 10 m satellite land cover, which cannot resolve canopy density or fine on-ground detail; distances and slope are modelled, not surveyed.",
+      "lat": -37.524,
+      "lng": 145.34
+    }
+  },
+  {
+    "label": "Halls Gap",
+    "context": "Grampians forest (VIC)",
+    "expectation": "high",
+    "result": {
+      "indicative_bal": "BAL-FZ",
+      "bal_range": [
+        "BAL-40",
+        "BAL-FZ"
+      ],
+      "confidence": "moderate",
+      "state": "VIC",
+      "fdi": 100,
+      "fdi_basis": "Table 2.1 Victoria (general)",
+      "inputs": {
+        "vegetation": {
+          "esa_worldcover": "Forest (tree cover)",
+          "as3959_class": "A (Forest)",
+          "distance_m": 12.0,
+          "in_vegetation": false,
+          "patch_pixels": {
+            "10": 1147,
+            "20": 0,
+            "30": 35
+          },
+          "formation_uncertainty": "WorldCover 10m cannot resolve canopy-cover %; assumed heaviest plausible class (A); lighter plausible = B. This is the dominant confidence driver."
+        },
+        "slope": {
+          "band": "flat",
+          "deg": 1.9,
+          "direction": "flat/upslope",
+          "basis": "site 229 m vs vegetation 229 m (drop 0 m) -> flat/upslope; slope 1.9 deg",
+          "measured": true
+        },
+        "distance_cutoff_m": 100,
+        "min_patch_ha": 1.0
+      },
+      "official_overlay": {
+        "status": "in_zone",
+        "zones": [
+          "Bushfire Management Overlay (BMO)"
+        ],
+        "category": "BMO",
+        "basis": "state_service"
+      },
+      "method": "AS 3959-2009 Method 1 (indicative, simplified procedure)",
+      "assumptions": [
+        "Indicative pre-screen only \u2014 NOT a certified BAL. A compliant assessment requires an accredited assessor measuring distance/slope and classifying vegetation on site per quadrant.",
+        "FDI: Table 2.1 Victoria (general)."
+      ],
+      "disclaimer": "Indicative BAL pre-screen from open data (AS 3959 Method 1). This is NOT a certified Bushfire Attack Level assessment and must not be used for a building permit. A compliant BAL requires a site assessment by an accredited bushfire hazard assessor. Vegetation is classified from 10 m satellite land cover, which cannot resolve canopy density or fine on-ground detail; distances and slope are modelled, not surveyed.",
+      "lat": -37.137,
+      "lng": 142.521
+    }
+  },
+  {
+    "label": "Blackheath",
+    "context": "Blue Mtns forest (NSW)",
+    "expectation": "high",
+    "result": {
+      "indicative_bal": "BAL-FZ",
+      "bal_range": [
+        "BAL-29",
+        "BAL-FZ"
+      ],
+      "confidence": "low",
+      "state": "NSW",
+      "fdi": 100,
+      "fdi_basis": "Table 2.1 NSW \u2014 conservative: listed coastal regions = 100 (general/inland NSW = 80; region not resolved from coordinate)",
+      "inputs": {
+        "vegetation": {
+          "esa_worldcover": "Forest (tree cover)",
+          "as3959_class": "A (Forest)",
+          "distance_m": 18.1,
+          "in_vegetation": false,
+          "patch_pixels": {
+            "10": 858,
+            "20": 0,
+            "30": 21
+          },
+          "formation_uncertainty": "WorldCover 10m cannot resolve canopy-cover %; assumed heaviest plausible class (A); lighter plausible = B. This is the dominant confidence driver."
+        },
+        "slope": {
+          "band": "flat",
+          "deg": 4.4,
+          "direction": "flat/upslope",
+          "basis": "site 1059 m vs vegetation 1059 m (drop 0 m) -> flat/upslope; slope 4.4 deg",
+          "measured": true
+        },
+        "distance_cutoff_m": 100,
+        "min_patch_ha": 1.0
+      },
+      "official_overlay": {
+        "status": "outside",
+        "zones": [],
+        "category": null,
+        "basis": "state_service"
+      },
+      "method": "AS 3959-2009 Method 1 (indicative, simplified procedure)",
+      "assumptions": [
+        "Indicative pre-screen only \u2014 NOT a certified BAL. A compliant assessment requires an accredited assessor measuring distance/slope and classifying vegetation on site per quadrant.",
+        "FDI: Table 2.1 NSW \u2014 conservative: listed coastal regions = 100 (general/inland NSW = 80; region not resolved from coordinate).",
+        "Official overlay says OUTSIDE mapped bushfire-prone land yet WorldCover fuel is close \u2014 treat with caution."
+      ],
+      "disclaimer": "Indicative BAL pre-screen from open data (AS 3959 Method 1). This is NOT a certified Bushfire Attack Level assessment and must not be used for a building permit. A compliant BAL requires a site assessment by an accredited bushfire hazard assessor. Vegetation is classified from 10 m satellite land cover, which cannot resolve canopy density or fine on-ground detail; distances and slope are modelled, not surveyed.",
+      "lat": -33.635,
+      "lng": 150.287
+    }
+  },
+  {
+    "label": "Lismore VIC plains",
+    "context": "open grazing/grassland (VIC)",
+    "expectation": "LOW (grass)",
+    "result": {
+      "indicative_bal": "BAL-LOW",
+      "bal_range": [
+        "BAL-LOW",
+        "BAL-LOW"
+      ],
+      "confidence": "moderate",
+      "state": "VIC",
+      "fdi": 100,
+      "fdi_basis": "Table 2.1 Victoria (general)",
+      "inputs": {
+        "vegetation": {
+          "esa_worldcover": "Grassland",
+          "as3959_class": "G (G)",
+          "distance_m": 0.0,
+          "in_vegetation": true,
+          "patch_pixels": {
+            "10": 320,
+            "20": 0,
+            "30": 837
+          },
+          "formation_uncertainty": "WorldCover 10m cannot resolve canopy-cover %; assumed heaviest plausible class (G); lighter plausible = G. This is the dominant confidence driver."
+        },
+        "slope": {
+          "band": "flat",
+          "deg": 1.2,
+          "direction": "flat/upslope",
+          "basis": "site 173 m vs vegetation 174 m (drop -1 m) -> flat/upslope; slope 1.2 deg",
+          "measured": true
+        },
+        "distance_cutoff_m": 100,
+        "min_patch_ha": 1.0
+      },
+      "official_overlay": {
+        "status": "outside",
+        "zones": [],
+        "category": null,
+        "basis": "state_service"
+      },
+      "method": "AS 3959-2009 Method 1 (indicative, simplified procedure)",
+      "assumptions": [
+        "Indicative pre-screen only \u2014 NOT a certified BAL. A compliant assessment requires an accredited assessor measuring distance/slope and classifying vegetation on site per quadrant.",
+        "FDI: Table 2.1 Victoria (general).",
+        "Nearest vegetation is grassland; under FDI 100 grassland is not assessed for BAL (AS 3959) -> BAL-LOW on the grassland input."
+      ],
+      "disclaimer": "Indicative BAL pre-screen from open data (AS 3959 Method 1). This is NOT a certified Bushfire Attack Level assessment and must not be used for a building permit. A compliant BAL requires a site assessment by an accredited bushfire hazard assessor. Vegetation is classified from 10 m satellite land cover, which cannot resolve canopy density or fine on-ground detail; distances and slope are modelled, not surveyed.",
+      "lat": -37.956,
+      "lng": 143.34
+    }
+  },
+  {
+    "label": "Mount Dandenong",
+    "context": "in forest (VIC BMO)",
+    "expectation": "FZ/40",
+    "result": {
+      "indicative_bal": "BAL-FZ",
+      "bal_range": [
+        "BAL-FZ",
+        "BAL-FZ"
+      ],
+      "confidence": "moderate",
+      "state": "VIC",
+      "fdi": 100,
+      "fdi_basis": "Table 2.1 Victoria (general)",
+      "inputs": {
+        "vegetation": {
+          "esa_worldcover": "Forest (tree cover)",
+          "as3959_class": "A (Forest)",
+          "distance_m": 0.0,
+          "in_vegetation": true,
+          "patch_pixels": {
+            "10": 1353,
+            "20": 0,
+            "30": 0
+          },
+          "formation_uncertainty": "WorldCover 10m cannot resolve canopy-cover %; assumed heaviest plausible class (A); lighter plausible = B. This is the dominant confidence driver."
+        },
+        "slope": {
+          "band": "flat",
+          "deg": 9.0,
+          "direction": "flat/upslope",
+          "basis": "site 588 m vs vegetation 588 m (drop 0 m) -> flat/upslope; slope 9.0 deg",
+          "measured": true
+        },
+        "distance_cutoff_m": 100,
+        "min_patch_ha": 1.0
+      },
+      "official_overlay": {
+        "status": "in_zone",
+        "zones": [
+          "Bushfire Management Overlay (BMO)"
+        ],
+        "category": "BMO",
+        "basis": "state_service"
+      },
+      "method": "AS 3959-2009 Method 1 (indicative, simplified procedure)",
+      "assumptions": [
+        "Indicative pre-screen only \u2014 NOT a certified BAL. A compliant assessment requires an accredited assessor measuring distance/slope and classifying vegetation on site per quadrant.",
+        "FDI: Table 2.1 Victoria (general)."
+      ],
+      "disclaimer": "Indicative BAL pre-screen from open data (AS 3959 Method 1). This is NOT a certified Bushfire Attack Level assessment and must not be used for a building permit. A compliant BAL requires a site assessment by an accredited bushfire hazard assessor. Vegetation is classified from 10 m satellite land cover, which cannot resolve canopy density or fine on-ground detail; distances and slope are modelled, not surveyed.",
+      "lat": -37.8306,
+      "lng": 145.356
+    }
+  }
+]

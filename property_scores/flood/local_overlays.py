@@ -49,8 +49,71 @@ _NSW_CATEGORY_KIND = {
 }
 
 
+# --- reg-09: graded flood hazard (ARR/AIDR combined depth x velocity) -------
+# Council flood studies classify the 1% AEP floodplain into H1..H6 by combined
+# depth x velocity hazard, not a single binary "in the flood zone". H1 is
+# shallow/slow nuisance water; H6 is life-threatening to people and all
+# building types. Baking that class lets the score separate a 0.1 m ponding
+# hit from a 2 m floodway hit instead of flagging both the same (the Skirving
+# St over-report class). Dormant until the da_leads library is re-baked with a
+# hazard class in props; existing extent-only sources are untouched.
+_HAZARD_CLASS_KIND = {
+    "H1": "moderate",   # generally safe for people, vehicles and buildings
+    "H2": "flood",      # unsafe for small vehicles
+    "H3": "flood",      # unsafe for vehicles, children and the elderly
+    "H4": "floodway",   # unsafe for people and vehicles
+    "H5": "floodway",   # unsafe for vehicles and people; buildings vulnerable
+    "H6": "floodway",   # unsafe for all; all building types vulnerable
+}
+_HAZARD_CLASS_DESC = {
+    "H1": "H1 - shallow/slow, generally safe",
+    "H2": "H2 - unsafe for small vehicles",
+    "H3": "H3 - unsafe for vehicles, children, elderly",
+    "H4": "H4 - unsafe for people and vehicles",
+    "H5": "H5 - dangerous; buildings vulnerable",
+    "H6": "H6 - extreme; all buildings vulnerable",
+}
+# Coarse low/medium/high hazard maps (councils that publish 3 classes, not 6).
+_COARSE_HAZARD = {"low": "H1", "medium": "H3", "med": "H3", "high": "H5"}
+
+
+def _hazard_class(props: dict) -> str | None:
+    """Normalise a baked hazard attribute to H1..H6, else None.
+
+    Accepts the encodings councils actually publish: an explicit H-class
+    ('H3'/'h3'), an ARR gridcode 1..6, or a coarse low/medium/high band.
+    Reads a normalised `hazard_class` first (set at bake time), then falls
+    back to raw source fields so the classifier is robust to bake naming."""
+    raw = props.get("hazard_class")
+    if raw is None:
+        for key in ("gridcode", "HAZARD", "Hazard", "hazard", "OVL2_DESC",
+                    "class", "category", "desc"):
+            if props.get(key) not in (None, ""):
+                raw = props[key]
+                break
+    if raw is None:
+        return None
+    s = str(raw).strip().lower()
+    if s.startswith("h") and s[1:2].isdigit():
+        return f"H{s[1]}" if s[1] in "123456" else None
+    if s in ("1", "2", "3", "4", "5", "6"):
+        return f"H{s}"
+    for word, hcls in _COARSE_HAZARD.items():
+        if word in s:
+            return hcls
+    return None
+
+
 def _classify(source: str, props: dict) -> tuple[str, str] | None:
     """(severity_kind, label) for a whitelisted source hit, else None."""
+    # reg-09: graded hazard sources (suffix _flood_hazard) carry an H-class
+    # that drives severity; a coarse-extent hit on the same council is
+    # superseded by the graded read where present.
+    if source.endswith("_flood_hazard"):
+        hcls = _hazard_class(props)
+        if hcls is None:
+            return None  # hazard source but unclassifiable value: don't move the number
+        return _HAZARD_CLASS_KIND[hcls], _HAZARD_CLASS_DESC[hcls]
     if source in ("vic_hazard_flood", "vic_hazard_flood_lsio"):
         return "flood", props.get("category") or "LSIO - Land Subject to Inundation Overlay"
     if source == "vic_hazard_flood_fo":
@@ -131,6 +194,7 @@ def check(state: str, lat: float, lng: float) -> dict | None:
 
     worst: str | None = None
     labels: list[str] = []
+    hazard: dict | None = None  # reg-09: worst graded H-class hit + provenance
     for source, props_raw in rows:
         try:
             props = json.loads(props_raw) if isinstance(props_raw, str) else (props_raw or {})
@@ -144,7 +208,22 @@ def check(state: str, lat: float, lng: float) -> dict | None:
             labels.append(label)
         if worst is None or _SEVERITY_RANK[kind] < _SEVERITY_RANK[worst]:
             worst = kind
-    return {"worst": worst, "hit_zones": labels, "trust": trust}
+        # capture the most severe graded hazard, with provenance for the report
+        if source.endswith("_flood_hazard"):
+            hcls = _hazard_class(props)
+            if hcls is not None and (hazard is None or hcls > hazard["hazard_class"]):
+                hazard = {
+                    "hazard_class": hcls,
+                    "description": _HAZARD_CLASS_DESC[hcls],
+                    "source": props.get("study") or source,
+                    "aep": props.get("aep") or "1% AEP",
+                    "year": props.get("year"),
+                    "licence": props.get("licence"),
+                }
+    result = {"worst": worst, "hit_zones": labels, "trust": trust}
+    if hazard is not None:
+        result["hazard"] = hazard
+    return result
 
 
 # ---------------------------------------------------------------------------

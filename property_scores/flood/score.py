@@ -775,10 +775,12 @@ def flood_score(lat: float, lng: float) -> dict:
     from property_scores.flood.local_overlays import check as _local_check
 
     local = _local_check(state, lat, lng)
+    hazard_detail: dict | None = None  # reg-09: graded ARR H-class + provenance
     if local is not None:
         worst_severity, hit_zones, warnings = local["worst"], local["hit_zones"], []
         overlay_trust: str | None = local["trust"]
         overlay_basis: str | None = "local_library"
+        hazard_detail = local.get("hazard")
     else:
         worst_severity, hit_zones, warnings = _overlay_check(state, lat, lng)
         if not ENDPOINTS.get(state):
@@ -913,6 +915,23 @@ def flood_score(lat: float, lng: float) -> dict:
     )
     if overlay_basis:
         result_dict["overlay_basis"] = overlay_basis
+    # reg-09: graded ARR flood-hazard class (H1..H6) with study provenance,
+    # surfaced when the library carries it. Turns a binary "in the flood zone"
+    # into "H2 - unsafe for small vehicles, source <study>" so shallow nuisance
+    # water and life-threatening floodway read differently.
+    if hazard_detail:
+        prov = hazard_detail.get("source")
+        yr = hazard_detail.get("year")
+        result_dict["flood_hazard"] = {
+            "class": hazard_detail["hazard_class"],
+            "description": hazard_detail["description"],
+            "aep": hazard_detail.get("aep", "1% AEP"),
+            "provenance": f"{prov}{f' ({yr})' if yr else ''}" if prov else None,
+            "licence": hazard_detail.get("licence"),
+        }
+        result_dict["flood_hazard_summary"] = (
+            f"{hazard_detail['description']} at {hazard_detail.get('aep', '1% AEP')}"
+        )
     if overlay_trust is None and not jrc:
         result_dict["note"] = (
             f"No official flood overlay for {state} and no water-proximity "

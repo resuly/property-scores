@@ -86,8 +86,10 @@ def _hazard_class(props: dict) -> str | None:
     back to raw source fields so the classifier is robust to bake naming."""
     raw = props.get("hazard_class")
     if raw is None:
-        for key in ("gridcode", "HAZARD", "Hazard", "hazard", "OVL2_DESC",
-                    "class", "category", "desc"):
+        # 'severity' is the da_leads bake canonical key the Newcastle Hazard
+        # field (1..6) maps onto via states.yaml `fields: {severity: Hazard}`.
+        for key in ("severity", "gridcode", "HAZARD", "Hazard", "hazard",
+                    "OVL2_DESC", "class", "category", "desc"):
             if props.get(key) not in (None, ""):
                 raw = props[key]
                 break

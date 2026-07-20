@@ -17,6 +17,8 @@ from property_scores.flood import score as fs
 @pytest.mark.parametrize("props,expected", [
     ({"hazard_class": "H3"}, "H3"),
     ({"hazard_class": "h6"}, "H6"),
+    ({"severity": "5"}, "H5"),          # da_leads bake canonical key (Hazard->severity)
+    ({"severity": 3}, "H3"),
     ({"gridcode": 1}, "H1"),
     ({"gridcode": "5"}, "H5"),
     ({"HAZARD": "High"}, "H5"),

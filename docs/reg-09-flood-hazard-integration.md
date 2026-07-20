@@ -65,6 +65,41 @@ service (heavier — raster reclass, not a simple feature bake). #5 Federation i
 a local slice → local :8001 before/after on a known over-report point → Bo verify →
 deploy), then #2/#4, then decide on #3 (raster) and #5 (tabular) separately.
 
+## Reference council DONE + locally verified (2026-07-21): Newcastle
+
+Newcastle turned out to be the clean reference: its already-configured extent source
+(`flood_newcastle`, states.yaml) reads FeatureServer layers 2–5 whose **`Hazard` field is
+the ARR class 1..6** — the graded data was there all along, the extent bake just discarded
+it. So the production wiring is a one-line config add, not a new source.
+
+**Local before/after (real data, no production DB touched):** built a local
+`features.duckdb` slice from **27,833 real Newcastle hazard polygons**
+(H1:5994 H2:8510 H3:5503 H4:4230 H5:2676 H6:920 within a Hunter bbox), pointed
+`FEATURES_DB` at it, ran the patched score. Evidence: `reg09_localtest/RESULTS.txt`.
+
+| Point | BEFORE (binary extent) | AFTER (graded) | flood_score |
+|---|---|---|---|
+| H1 (shallow/slow) | severity `flood`, band (20,40) — same as any hit | severity `moderate` (40,60), `flood_hazard=H1` | **60 (Moderate)** |
+| H2 | `flood` (20,40) | `flood` (20,40), `H2` | — |
+| H5 (dangerous) | `flood` (20,40) | severity `floodway` (10,20), `H5` | — |
+| H6 (extreme) | `flood` (20,40) | `floodway` (10,20), `H6` | **20 (High)** |
+
+Binary collapsed every hit to one band; graded spreads the same address type across a
+40-point score range with full provenance (study / 2020 / CC BY 4.0). That is the Skirving
+St over-report fix, verified locally.
+
+### Exact production path (GATED — needs Bo go + resource guard)
+
+1. `da_leads` states.yaml `flood_newcastle`: `fields: {severity: Hazard}` added (branch
+   `reg-09-flood-hazard-bake`). ⚠️ **Re-bake must dissolve BY `severity`**, not a whole-
+   source dissolve (a full dissolve erases the per-polygon H-class — `dissolve_ndjson.py`
+   needs a group-by-severity flag for this source).
+2. Re-fetch + re-bake `flood_newcastle` into the production `features.duckdb`
+   (server-side, ~9.4 GB library → **resource guard: no parallel bakes, mem check,
+   monitor**; per server_resource_guard) → deploy.
+3. property-scores branch `reg-09-flood-depth` is already backward-compatible & dormant;
+   it starts grading the moment the re-baked library carries `severity`/`hazard_class`.
+
 ## Test path before any deploy (per feedback_test_before_show)
 
 1. Build a **local** `features.duckdb` slice with council #1's hazard source (download is

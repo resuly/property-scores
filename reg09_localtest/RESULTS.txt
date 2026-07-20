@@ -1,0 +1,25 @@
+baked 27833 Newcastle graded-hazard polygons into local slice /private/tmp/claude-502/-Users-bwwan3-Documents-GitHub-limon-ops/98ee46b2-b919-4858-9d0c-9058240f1f31/scratchpad/reg09_newcastle_slice.duckdb
+hazard class distribution: {'H1': 5994, 'H2': 8510, 'H3': 5503, 'H4': 4230, 'H5': 2676, 'H6': 920}
+
+=== BEFORE (binary extent) vs AFTER (graded hazard) — overlay contribution ===
+binary flood extent -> severity 'flood' -> overlay_score band (20, 40)  (same for every hit)
+
+  H1 point (-32.88009,151.73747):
+    AFTER graded: worst_severity=moderate band=(40, 60)  hazard=H1 'H1 - shallow/slow, generally safe'
+    provenance: City of Newcastle Floodplain Risk Management (1% AEP hazard) (2020), CC BY 4.0 (council open data)
+
+  H2 point (-32.87997,151.73734):
+    AFTER graded: worst_severity=flood band=(20, 40)  hazard=H2 'H2 - unsafe for small vehicles'
+    provenance: City of Newcastle Floodplain Risk Management (1% AEP hazard) (2020), CC BY 4.0 (council open data)
+
+  H5 point (-32.88000,151.73740):
+    AFTER graded: worst_severity=floodway band=(10, 20)  hazard=H5 'H5 - dangerous; buildings vulnerable'
+    provenance: City of Newcastle Floodplain Risk Management (1% AEP hazard) (2020), CC BY 4.0 (council open data)
+
+  H6 point (-32.88355,151.74595):
+    AFTER graded: worst_severity=floodway band=(10, 20)  hazard=H6 'H6 - extreme; all buildings vulnerable'
+    provenance: City of Newcastle Floodplain Risk Management (1% AEP hazard) (2020), CC BY 4.0 (council open data)
+
+=== FULL flood_score (with JRC/HAND/IFD live) — final number + surfaced hazard ===
+  H1 point: score=60 (Moderate Risk) | flood_hazard=H1 prov=City of Newcastle Floodplain Risk Management (1% AEP hazard) (2020) | summary=H1 - shallow/slow, generally safe at 1% AEP
+  H6 point: score=20 (High Risk) | flood_hazard=H6 prov=City of Newcastle Floodplain Risk Management (1% AEP hazard) (2020) | summary=H6 - extreme; all buildings vulnerable at 1% AEP

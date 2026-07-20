@@ -893,7 +893,9 @@ def bushfire_score(lat: float, lng: float, *, quick: bool = False) -> dict:
     result: dict = {
         "score": score,
         "label": label,
-        "disclaimer": "Estimate based on open data. Not equivalent to a BAL (Bushfire Attack Level) assessment.",
+        "disclaimer": ("Estimate based on open data. The indicative BAL is a "
+                       "pre-screen, not a certified Bushfire Attack Level "
+                       "assessment (which requires an accredited assessor on site)."),
         "bushfire_zones": hits,
         "state": state,
         "category": worst_category,
@@ -917,6 +919,32 @@ def bushfire_score(lat: float, lng: float, *, quick: bool = False) -> dict:
         result["slope_assessment"] = "not_assessed"
     if fire:
         result["fire_history"] = fire
+
+    # Indicative BAL (AS 3959 Method 1 pre-screen). Reuses the overlay + slope +
+    # state already computed above, so it adds only one land-cover window read.
+    # This is the domain-language layer on top of the 0-100 risk score: designers
+    # and buyers in bushfire-prone areas think in BAL, not an abstract number.
+    if not quick:
+        try:
+            from property_scores.bal_prescreen import bal_prescreen
+            bal = bal_prescreen(
+                lat, lng, state=state,
+                elevation=slope.get("elevation_m") if slope else None,
+                slope_deg=slope.get("mean_slope_deg") if slope else None,
+                overlay=(worst_severity, hits, worst_category, overlay_ok, overlay_basis),
+            )
+            if bal.get("indicative_bal"):
+                result["indicative_bal"] = {
+                    "bal": bal["indicative_bal"],
+                    "range": bal.get("bal_range"),
+                    "confidence": bal.get("confidence"),
+                    "fdi": bal.get("fdi"),
+                    "fdi_basis": bal.get("fdi_basis"),
+                    "inputs": bal.get("inputs"),
+                    "method": bal.get("method"),
+                }
+        except Exception:
+            logger.exception("indicative BAL computation failed")
 
     if not quick:
         cache_put(lat, lng, result)

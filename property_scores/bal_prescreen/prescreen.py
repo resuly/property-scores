@@ -131,23 +131,29 @@ def _nearest_vegetation(lat: float, lng: float) -> dict | None:
             "patch_pixels": counts, "veg_lat": plat, "veg_lng": plng}
 
 
-def _effective_slope(lat, lng, veg_lat, veg_lng) -> dict:
+def _effective_slope(lat, lng, veg_lat, veg_lng, *, slope_deg=None) -> dict:
     """Effective slope magnitude + direction (upslope/flat vs downslope).
 
     Downslope (site above the vegetation, land falling away toward the veg) is the
     more dangerous case in AS 3959. We approximate direction from the elevation
     difference between the site and the nearest-vegetation pixel, and magnitude
     from the local terrain slope. Returns {band, deg, direction, basis, measured}.
+
+    slope_deg may be injected by a caller that has already measured the local
+    terrain slope (e.g. bushfire_score), to avoid a redundant DEM read.
     """
-    from property_scores.bushfire.score import _terrain_slope
     from property_scores.common import terrain
 
-    slope = _terrain_slope(lat, lng)
-    if slope is None:
-        return {"band": "flat", "deg": None, "direction": "unknown",
-                "basis": "slope not measurable (outside DEM coverage) — "
-                         "assumed flat (0 deg)", "measured": False}
-    mag = slope["mean_slope_deg"]
+    if slope_deg is None:
+        from property_scores.bushfire.score import _terrain_slope
+        slope = _terrain_slope(lat, lng)
+        if slope is None:
+            return {"band": "flat", "deg": None, "direction": "unknown",
+                    "basis": "slope not measurable (outside DEM coverage) — "
+                             "assumed flat (0 deg)", "measured": False}
+        mag = slope["mean_slope_deg"]
+    else:
+        mag = slope_deg
 
     direction = "flat/upslope"
     basis = f"terrain slope {mag} deg; direction not resolved -> flat/upslope (conservative-neutral)"
@@ -176,23 +182,37 @@ def _effective_slope(lat, lng, veg_lat, veg_lng) -> dict:
             "basis": basis, "measured": True}
 
 
-def bal_prescreen(lat: float, lng: float) -> dict:
-    """Indicative BAL pre-screen for an Australian coordinate (AS 3959 Method 1)."""
+def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
+                  slope_deg=None, overlay=None) -> dict:
+    """Indicative BAL pre-screen for an Australian coordinate (AS 3959 Method 1).
+
+    Optional injected inputs let a caller that has already computed them (e.g.
+    bushfire_score) avoid redundant fetches:
+      state       — AU state code (skips border detection)
+      elevation   — metres (skips a DEM read; used for the alpine-FDI override)
+      slope_deg   — local terrain slope magnitude (skips a DEM slope read)
+      overlay     — the _overlay_check tuple
+                    (worst_sev, hits, worst_cat, overlay_ok, overlay_basis)
+    """
     from property_scores.bushfire.score import _detect_state, _overlay_check
     from property_scores.common import terrain
 
-    state = _detect_state(lat, lng)
+    if state is None:
+        state = _detect_state(lat, lng)
     if not state:
         return {"indicative_bal": None, "reason": "Outside Australia coverage",
                 "lat": lat, "lng": lng}
 
-    elev = terrain.elevation(lat, lng)
+    elev = elevation if elevation is not None else terrain.elevation(lat, lng)
     fdi, fdi_basis = tables.resolve_fdi(state, elev)
     fdi_table, fdi_used, fdi_sub = tables.table_for_fdi(fdi)
 
     veg = _nearest_vegetation(lat, lng)
     # official state overlay (independent cross-check)
-    worst_sev, hits, worst_cat, overlay_ok, overlay_basis = _overlay_check(state, lat, lng)
+    if overlay is not None:
+        worst_sev, hits, worst_cat, overlay_ok, overlay_basis = overlay
+    else:
+        worst_sev, hits, worst_cat, overlay_ok, overlay_basis = _overlay_check(state, lat, lng)
     overlay_clear = worst_sev is None and overlay_ok and overlay_basis is not None
     overlay_status = ("in_zone" if hits else "outside" if overlay_clear else "unavailable")
 
@@ -249,7 +269,7 @@ def bal_prescreen(lat: float, lng: float) -> dict:
     wc = veg["wc_class"]
     point_class, light_class, veg_label = VEG_MAP[wc]
 
-    slope = _effective_slope(lat, lng, veg["veg_lat"], veg["veg_lng"])
+    slope = _effective_slope(lat, lng, veg["veg_lat"], veg["veg_lng"], slope_deg=slope_deg)
 
     # grassland only assessed under FDI 50 (AS 3959)
     grass_ignored = wc == WC_GRASS and fdi_used == 100

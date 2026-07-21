@@ -818,6 +818,20 @@ def flood_score(lat: float, lng: float) -> dict:
     # --- Phase 4: BOM IFD design rainfall (1% AEP) ---
     ifd = _query_ifd(lat, lng)
 
+    # --- Phase 5: modelled study depth (reg-09) ---
+    # Council hydraulic-study depth grids are the most authoritative flood signal
+    # we have: physics, calibrated to real floods. Where a grid covers the point,
+    # a positive depth is a definitive floodplain hit and must set the score — a
+    # 1.2 m depth cannot read "Very Low Risk" just because the coarse state overlay
+    # missed it. depth (m) -> score band mirrors the overlay severity scale.
+    from property_scores.flood.study_depth import depth_at as _depth_at
+    depth = _depth_at(lat, lng)
+    depth_score: int | None = None
+    if depth:
+        d = depth["depth_m"]
+        depth_score = (15 if d >= 1.2 else 30 if d >= 0.5
+                       else 45 if d >= 0.2 else 58)
+
     # --- Combine ---
     # Overlay + JRC determine base risk; HAND modifies it.
     # JRC water occurrence is satellite classification, not physics: dense dark
@@ -828,7 +842,7 @@ def flood_score(lat: float, lng: float) -> dict:
     # fully neutral at 20 m+. Official overlays are NOT discounted (overland
     # flow paths can flag genuinely hilly lots).
     jrc_score = _hand_discounted_jrc(jrc_score, hand)
-    base_scores = [s for s in (overlay_score, jrc_score) if s is not None]
+    base_scores = [s for s in (overlay_score, jrc_score, depth_score) if s is not None]
     if base_scores:
         score = min(base_scores)
     else:
@@ -931,6 +945,15 @@ def flood_score(lat: float, lng: float) -> dict:
         }
         result_dict["flood_hazard_summary"] = (
             f"{hazard_detail['description']} at {hazard_detail.get('aep', '1% AEP')}"
+        )
+    # reg-09: address-level modelled DEPTH (metres) from council study grids —
+    # "how deep", not just "in the zone". Sampled in Phase 5 above (where it also
+    # sets the score); surfaced here with provenance.
+    if depth:
+        result_dict["flood_depth"] = depth
+        result_dict["flood_depth_summary"] = (
+            f"~{depth['depth_m']} m modelled depth at {depth['aep']} "
+            f"({depth['source']}, {depth['licence']})"
         )
     if overlay_trust is None and not jrc:
         result_dict["note"] = (

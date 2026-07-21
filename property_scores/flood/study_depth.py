@@ -98,7 +98,11 @@ def depth_at(lat: float, lng: float) -> dict | None:
         if ds is None:
             continue
         try:
-            val = float(next(ds.sample([(lng, lat)]))[0])
+            # GDAL dataset handles are NOT thread-safe: concurrent sample() on a
+            # shared handle can crash under API load. Serialise reads — a point
+            # sample is sub-ms, so the lock costs nothing in practice.
+            with _lock:
+                val = float(next(ds.sample([(lng, lat)]))[0])
         except (StopIteration, ValueError, Exception):
             continue
         if val < _NODATA_FLOOR or val < _MIN_DEPTH_M:

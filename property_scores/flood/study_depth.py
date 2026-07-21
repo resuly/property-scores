@@ -15,6 +15,7 @@ CC-BY-open council proven in reg-09.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 from threading import Lock
@@ -24,7 +25,12 @@ log = logging.getLogger(__name__)
 # Registry of council depth grids. `cog` is an env-overridable path so the same
 # code runs against a local slice (dev) or the deployed COG store (prod). bbox is
 # (xmin, ymin, xmax, ymax) in WGS84 — a cheap pre-filter before opening the raster.
-_REGISTRY = [
+#
+# Entries come from two places, merged: this built-in (the reg-09 reference council)
+# plus an optional manifest JSON written by the batch COG builder
+# (reg09_localtest/build_depth_cogs.py) so "all councils" is data-driven, not code.
+# Manifest path via STUDY_DEPTH_MANIFEST, else the deployed store's manifest.
+_BUILTIN = [
     {
         "key": "central_coast_northern_lakes",
         "cog": os.environ.get(
@@ -37,6 +43,25 @@ _REGISTRY = [
         "bounds": (151.4549, -33.3022, 151.6015, -33.1826),
     },
 ]
+
+
+def _load_registry():
+    reg = list(_BUILTIN)
+    manifest = os.environ.get("STUDY_DEPTH_MANIFEST",
+                              "/data/flood/study_depth/manifest.json")
+    try:
+        if os.path.exists(manifest):
+            entries = json.load(open(manifest))
+            keys = {e["key"] for e in reg}
+            for e in entries:
+                if e.get("key") not in keys and e.get("cog") and e.get("bounds"):
+                    reg.append(e)
+    except Exception:
+        log.warning("study depth manifest unreadable: %s", manifest, exc_info=True)
+    return reg
+
+
+_REGISTRY = _load_registry()
 
 _NODATA_FLOOR = -1000.0   # reprojected NoData sentinel (~ -9999) sits well below this
 _MIN_DEPTH_M = 0.05       # below this = effectively dry / model noise, not a flood hit

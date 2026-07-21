@@ -1,21 +1,21 @@
 # Indicative BAL Pre-screen (AS 3959 Method 1)
 
 Status: **verification prototype** (reg-08, 2026-07-20). Not wired into the API or
-the customer surface. Built to answer one question — *can we produce an indicative
-Bushfire Attack Level from a coordinate, cheaply, on open data?* — and to serve as
+the customer surface. Built to answer one question, *can we produce an indicative
+Bushfire Attack Level from a coordinate, cheaply, on open data?*, and to serve as
 the proof artifact for the venture registry.
 
 ## What it does
 
 `property_scores.bal_prescreen.bal_prescreen(lat, lng)` returns an **indicative**
 BAL (`BAL-LOW` / `BAL-12.5` / `BAL-19` / `BAL-29` / `BAL-40` / `BAL-FZ`) plus a
-confidence band and full input transparency — the three AS 3959 Method 1 inputs a
+confidence band and full input transparency, the three AS 3959 Method 1 inputs a
 free calculator makes a designer hand-enter, automated from the coordinate:
 
-1. **FDI region** — AS 3959 Table 2.1 by state (+ elevation-based alpine override).
-2. **Vegetation class + distance** — nearest classified vegetation patch (>=1 ha,
+1. **FDI region**, AS 3959 Table 2.1 by state (+ elevation-based alpine override).
+2. **Vegetation class + distance**, nearest classified vegetation patch (>=1 ha,
    within 100 m) from ESA WorldCover 10m, geodesic distance to the site.
-3. **Effective slope + direction** — local DEM / 5 m LiDAR slope, with up/down
+3. **Effective slope + direction**, local DEM / 5 m LiDAR slope, with up/down
    direction inferred from site-vs-vegetation elevation.
 
 It then looks up the indicative BAL in the AS 3959 Method 1 distance tables, takes
@@ -37,7 +37,7 @@ classifying vegetation on the ground, per quadrant. Specific limits:
 - **>=1 ha contiguity is approximated** by a pixel-count threshold in the search
   window, not true patch segmentation. AS 3959 excludes <1 ha patches and isolated
   trees; our proxy can over- or under-call small patches.
-- **Slope direction is inferred**, not surveyed — from the elevation difference
+- **Slope direction is inferred**, not surveyed, from the elevation difference
   between the site and the nearest vegetation pixel.
 - **Distances are modelled** from 10 m rasters, not measured. Sub-10 m setbacks
   (which decide FZ vs BAL-40) are below the input resolution.
@@ -53,7 +53,7 @@ classifying vegetation on the ground, per quadrant. Specific limits:
   `bal_prescreen/tables.py`. FDI-100 Forest band cross-checked against multiple
   Victorian building guides.
 - **FDI by jurisdiction (Table 2.1):** Geoscience Australia **BAL Toolbox** docs
-  (open-source, GA 2017) — `background.html` / `bal.html`. The toolbox is GA's own
+  (open-source, GA 2017), `background.html` / `bal.html`. The toolbox is GA's own
   open implementation of AS 3959 Method 1 and is the registry's cited method
   背书.
 - **AS 3959-2018** revised construction provisions but the Method 1 distance tables
@@ -93,16 +93,16 @@ confidence band.
 
 What the demo proves and honestly shows:
 
-- **End-to-end automation works** — coordinate in, indicative BAL + transparent
+- **End-to-end automation works**, coordinate in, indicative BAL + transparent
   inputs out, no hand-entry.
-- **Results track reality and the official overlay** — urban = LOW/outside,
+- **Results track reality and the official overlay**, urban = LOW/outside,
   forest = high/in_zone.
 - **The graded middle works** (Lorne BAL-29, range 19..40 at ~29 m from forest).
-- **Confidence banding + overlay cross-check earn their keep** — Blackheath is
+- **Confidence banding + overlay cross-check earn their keep**, Blackheath is
   flagged *low* confidence because WorldCover fuel is close but the official overlay
   reads "outside" (`*` disagreement surfaced, not hidden).
-- **The AS 3959 grassland rule fires** — Lismore plains grassland → BAL-LOW under
+- **The AS 3959 grassland rule fires**, Lismore plains grassland → BAL-LOW under
   FDI 100 (grassland is not assessed except in FDI-50 jurisdictions).
-- **Centroid caveat** — several localities read BAL-FZ because the centroid sits
+- **Centroid caveat**, several localities read BAL-FZ because the centroid sits
   literally in bush (distance 0). Production must screen the address/lot point, not a
   suburb centroid; Lorne is the representative real-lot-style result.

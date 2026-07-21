@@ -1,4 +1,4 @@
-"""Indicative BAL pre-screen — AS 3959 Method 1 over open data.
+"""Indicative BAL pre-screen, AS 3959 Method 1 over open data.
 
 Pipeline (all inputs automated from a coordinate):
   1. State + FDI region        -> tables.resolve_fdi  (AS 3959 Table 2.1)
@@ -92,7 +92,7 @@ def _nearest_vegetation(lat: float, lng: float) -> dict | None:
     dlng = (east - west) / ncols
 
     # count classified pixels per class for the >=1 ha patch test (window-wide
-    # proxy for contiguity — honest approximation, flagged in output)
+    # proxy for contiguity, honest approximation, flagged in output)
     counts = {WC_TREE: 0, WC_SHRUB: 0, WC_GRASS: 0}
     for r in range(nrows):
         row = classes[r]
@@ -149,7 +149,7 @@ def _effective_slope(lat, lng, veg_lat, veg_lng, *, slope_deg=None) -> dict:
         slope = _terrain_slope(lat, lng)
         if slope is None:
             return {"band": "flat", "deg": None, "direction": "unknown",
-                    "basis": "slope not measurable (outside DEM coverage) — "
+                    "basis": "slope not measurable (outside DEM coverage), "
                              "assumed flat (0 deg)", "measured": False}
         mag = slope["mean_slope_deg"]
     else:
@@ -188,10 +188,10 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
 
     Optional injected inputs let a caller that has already computed them (e.g.
     bushfire_score) avoid redundant fetches:
-      state       — AU state code (skips border detection)
-      elevation   — metres (skips a DEM read; used for the alpine-FDI override)
-      slope_deg   — local terrain slope magnitude (skips a DEM slope read)
-      overlay     — the _overlay_check tuple
+      state      , AU state code (skips border detection)
+      elevation  , metres (skips a DEM read; used for the alpine-FDI override)
+      slope_deg  , local terrain slope magnitude (skips a DEM slope read)
+      overlay    , the _overlay_check tuple
                     (worst_sev, hits, worst_cat, overlay_ok, overlay_basis)
     """
     from property_scores.bushfire.score import _detect_state, _overlay_check
@@ -217,7 +217,7 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
     overlay_status = ("in_zone" if hits else "outside" if overlay_clear else "unavailable")
 
     assumptions = [
-        "Indicative pre-screen only — NOT a certified BAL. A compliant assessment "
+        "Indicative pre-screen only, NOT a certified BAL. A compliant assessment "
         "requires an accredited assessor measuring distance/slope and classifying "
         "vegetation on site per quadrant.",
         f"FDI: {fdi_basis}.",
@@ -225,7 +225,7 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
     if fdi_sub:
         assumptions.append(
             f"FDI {fdi} is not tabulated in the public Method 1 tables; substituted "
-            f"the nearest more-conservative table (FDI {fdi_used}) — widen confidence.")
+            f"the nearest more-conservative table (FDI {fdi_used}), widen confidence.")
 
     # --- No classified vegetation within 100 m -> BAL-LOW -------------------
     if veg is None:
@@ -237,7 +237,7 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
             "inputs": {"vegetation": "ESA WorldCover unavailable at this location"},
             "official_overlay": {"status": overlay_status, "zones": hits},
             "method": "AS 3959-2009 Method 1 (indicative)",
-            "assumptions": assumptions + ["WorldCover mosaic missing — vegetation "
+            "assumptions": assumptions + ["WorldCover mosaic missing, vegetation "
                                           "input could not be automated here."],
             "disclaimer": _DISCLAIMER, "lat": lat, "lng": lng,
         }
@@ -249,7 +249,7 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
                 "WorldCover 10m.")
         if overlay_status == "in_zone":
             conf = "low"
-            note += (" NOTE: official overlay flags this lot as bushfire-prone — "
+            note += (" NOTE: official overlay flags this lot as bushfire-prone, "
                      "vegetation may be finer than 10 m resolution or just beyond "
                      "the window; a site check is warranted.")
         return {
@@ -316,7 +316,7 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
     if overlay_status == "outside" and _bal_rank(point_bal) >= _bal_rank("BAL-29"):
         conf = "low"
         assumptions.append("Official overlay says OUTSIDE mapped bushfire-prone land "
-                           "yet WorldCover fuel is close — treat with caution.")
+                           "yet WorldCover fuel is close, treat with caution.")
 
     result = {
         "indicative_bal": point_bal,
@@ -365,7 +365,7 @@ def _fmt(result: dict) -> str:
     lines = [
         f"Indicative BAL: {result['indicative_bal']}  (range {lo}..{hi}, "
         f"confidence: {result['confidence']})",
-        f"State: {result['state']}   FDI: {result['fdi']} — {result['fdi_basis']}",
+        f"State: {result['state']}   FDI: {result['fdi']}, {result['fdi_basis']}",
     ]
     veg = result["inputs"].get("vegetation")
     if isinstance(veg, dict):

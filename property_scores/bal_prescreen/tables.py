@@ -7,7 +7,7 @@ Method 1 Tables 2.4.x for FDI 100 and FDI 50 verbatim). Fetched and transcribed
 band quoted by multiple Victorian building guides. FDI table (2.1) source:
 Geoscience Australia BAL Toolbox docs (open-source, GA 2017).
 
-IMPORTANT — scope of these numbers:
+IMPORTANT, scope of these numbers:
   * These are the AS 3959-2009 tables. AS 3959-2018 revised some construction
     provisions but the Method 1 distance tables are materially the same; this is
     an INDICATIVE pre-screen, not a certified assessment, so 2009 tables are an
@@ -140,7 +140,7 @@ TABLES = {
 # fmt: on
 
 # ---------------------------------------------------------------------------
-# FDI by jurisdiction — AS 3959 Table 2.1 (via GA BAL Toolbox docs).
+# FDI by jurisdiction, AS 3959 Table 2.1 (via GA BAL Toolbox docs).
 # Returns (fdi_value, human_basis). Region-within-state precision (e.g. NSW
 # listed coastal = 100 vs general = 80) cannot be resolved from a coordinate
 # alone here, so we take the CONSERVATIVE (higher) value for populated states
@@ -148,7 +148,7 @@ TABLES = {
 # ---------------------------------------------------------------------------
 FDI_BY_STATE = {
     "VIC": (100, "Table 2.1 Victoria (general)"),
-    "NSW": (100, "Table 2.1 NSW — conservative: listed coastal regions = 100 "
+    "NSW": (100, "Table 2.1 NSW, conservative: listed coastal regions = 100 "
                  "(general/inland NSW = 80; region not resolved from coordinate)"),
     "ACT": (100, "Table 2.1 ACT"),
     "SA":  (80,  "Table 2.1 South Australia"),
@@ -163,7 +163,7 @@ ALPINE_ELEV_M = 1200  # rough alpine threshold; VIC/NSW alpine areas use FDI 50
 
 def resolve_fdi(state: str, elevation_m: float | None) -> tuple[int, str]:
     """Return (fdi, basis) for a state, with an elevation-based alpine override."""
-    fdi, basis = FDI_BY_STATE.get(state, (100, "unknown state — default FDI 100"))
+    fdi, basis = FDI_BY_STATE.get(state, (100, "unknown state, default FDI 100"))
     if elevation_m is not None and elevation_m >= ALPINE_ELEV_M and state in ("VIC", "NSW"):
         return 50, f"Table 2.1 {state} alpine (elevation {round(elevation_m)} m >= {ALPINE_ELEV_M} m)"
     return fdi, basis

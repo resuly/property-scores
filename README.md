@@ -12,7 +12,7 @@ Built by [Limon Tech](https://limontech.net) as the scoring backend for [DA Lead
 | Walkability | Live | Overture POI (227k Melbourne) | Distance-decay across 13 categories |
 | Solar Potential | Live | Global Solar Atlas API | GHI/DNI + orientation + tilt |
 | Flood Risk | Live | State government planning overlays (VIC/NSW/SA/TAS/ACT) | ArcGIS REST point-in-polygon |
-| Bushfire Risk | Live | State government overlays (VIC/NSW/WA/SA/TAS) | BMO/BPL severity classification |
+| Bushfire Risk | Live | State government overlays (VIC/NSW/WA/SA/TAS) | BMO/BPL severity classification + indicative BAL pre-screen (AS 3959 Method 1, see docs/bal-prescreen.md) |
 | Heat Island | Live | Open-Meteo ERA5 + Overture buildings/POI | 5-year summer P90 + density + green space |
 
 ## Quick Start

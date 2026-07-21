@@ -775,10 +775,12 @@ def flood_score(lat: float, lng: float) -> dict:
     from property_scores.flood.local_overlays import check as _local_check
 
     local = _local_check(state, lat, lng)
+    hazard_detail: dict | None = None  # reg-09: graded ARR H-class + provenance
     if local is not None:
         worst_severity, hit_zones, warnings = local["worst"], local["hit_zones"], []
         overlay_trust: str | None = local["trust"]
         overlay_basis: str | None = "local_library"
+        hazard_detail = local.get("hazard")
     else:
         worst_severity, hit_zones, warnings = _overlay_check(state, lat, lng)
         if not ENDPOINTS.get(state):
@@ -816,6 +818,20 @@ def flood_score(lat: float, lng: float) -> dict:
     # --- Phase 4: BOM IFD design rainfall (1% AEP) ---
     ifd = _query_ifd(lat, lng)
 
+    # --- Phase 5: modelled study depth (reg-09) ---
+    # Council hydraulic-study depth grids are the most authoritative flood signal
+    # we have: physics, calibrated to real floods. Where a grid covers the point,
+    # a positive depth is a definitive floodplain hit and must set the score — a
+    # 1.2 m depth cannot read "Very Low Risk" just because the coarse state overlay
+    # missed it. depth (m) -> score band mirrors the overlay severity scale.
+    from property_scores.flood.study_depth import depth_at as _depth_at
+    depth = _depth_at(lat, lng)
+    depth_score: int | None = None
+    if depth:
+        d = depth["depth_m"]
+        depth_score = (15 if d >= 1.2 else 30 if d >= 0.5
+                       else 45 if d >= 0.2 else 58)
+
     # --- Combine ---
     # Overlay + JRC determine base risk; HAND modifies it.
     # JRC water occurrence is satellite classification, not physics: dense dark
@@ -826,7 +842,7 @@ def flood_score(lat: float, lng: float) -> dict:
     # fully neutral at 20 m+. Official overlays are NOT discounted (overland
     # flow paths can flag genuinely hilly lots).
     jrc_score = _hand_discounted_jrc(jrc_score, hand)
-    base_scores = [s for s in (overlay_score, jrc_score) if s is not None]
+    base_scores = [s for s in (overlay_score, jrc_score, depth_score) if s is not None]
     if base_scores:
         score = min(base_scores)
     else:
@@ -913,6 +929,32 @@ def flood_score(lat: float, lng: float) -> dict:
     )
     if overlay_basis:
         result_dict["overlay_basis"] = overlay_basis
+    # reg-09: graded ARR flood-hazard class (H1..H6) with study provenance,
+    # surfaced when the library carries it. Turns a binary "in the flood zone"
+    # into "H2 - unsafe for small vehicles, source <study>" so shallow nuisance
+    # water and life-threatening floodway read differently.
+    if hazard_detail:
+        prov = hazard_detail.get("source")
+        yr = hazard_detail.get("year")
+        result_dict["flood_hazard"] = {
+            "class": hazard_detail["hazard_class"],
+            "description": hazard_detail["description"],
+            "aep": hazard_detail.get("aep", "1% AEP"),
+            "provenance": f"{prov}{f' ({yr})' if yr else ''}" if prov else None,
+            "licence": hazard_detail.get("licence"),
+        }
+        result_dict["flood_hazard_summary"] = (
+            f"{hazard_detail['description']} at {hazard_detail.get('aep', '1% AEP')}"
+        )
+    # reg-09: address-level modelled DEPTH (metres) from council study grids —
+    # "how deep", not just "in the zone". Sampled in Phase 5 above (where it also
+    # sets the score); surfaced here with provenance.
+    if depth:
+        result_dict["flood_depth"] = depth
+        result_dict["flood_depth_summary"] = (
+            f"~{depth['depth_m']} m modelled depth at {depth['aep']} "
+            f"({depth['source']}, {depth['licence']})"
+        )
     if overlay_trust is None and not jrc:
         result_dict["note"] = (
             f"No official flood overlay for {state} and no water-proximity "

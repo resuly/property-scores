@@ -76,6 +76,15 @@ _HAZARD_CLASS_DESC = {
 # Coarse low/medium/high hazard maps (councils that publish 3 classes, not 6).
 _COARSE_HAZARD = {"low": "H1", "medium": "H3", "med": "H3", "high": "H5"}
 
+# Canonical source IDs in da_leads' features.duckdb that carry a verified
+# ARR H1-H6 class. Keep the legacy suffix check below for compatible future
+# sources, but production IDs do not necessarily use that suffix.
+_GRADED_HAZARD_SOURCES = {"nsw_hazard_flood_newcastle"}
+
+
+def _is_graded_hazard_source(source: str) -> bool:
+    return source in _GRADED_HAZARD_SOURCES or source.endswith("_flood_hazard")
+
 
 def _hazard_class(props: dict) -> str | None:
     """Normalise a baked hazard attribute to H1..H6, else None.
@@ -111,7 +120,7 @@ def _classify(source: str, props: dict) -> tuple[str, str] | None:
     # reg-09: graded hazard sources (suffix _flood_hazard) carry an H-class
     # that drives severity; a coarse-extent hit on the same council is
     # superseded by the graded read where present.
-    if source.endswith("_flood_hazard"):
+    if _is_graded_hazard_source(source):
         hcls = _hazard_class(props)
         if hcls is None:
             return None  # hazard source but unclassifiable value: don't move the number
@@ -211,7 +220,7 @@ def check(state: str, lat: float, lng: float) -> dict | None:
         if worst is None or _SEVERITY_RANK[kind] < _SEVERITY_RANK[worst]:
             worst = kind
         # capture the most severe graded hazard, with provenance for the report
-        if source.endswith("_flood_hazard"):
+        if _is_graded_hazard_source(source):
             hcls = _hazard_class(props)
             if hcls is not None and (hazard is None or hcls > hazard["hazard_class"]):
                 hazard = {

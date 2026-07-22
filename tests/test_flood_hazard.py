@@ -43,6 +43,15 @@ def test_classify_hazard_source_grades_severity():
     assert lo._SEVERITY_RANK[kind5] < lo._SEVERITY_RANK[kind1]
 
 
+def test_classify_production_newcastle_source_id():
+    kind, label = lo._classify(
+        "nsw_hazard_flood_newcastle",
+        {"severity": "6", "source": "nsw_flood_newcastle"},
+    )
+    assert kind == "floodway"
+    assert label == lo._HAZARD_CLASS_DESC["H6"]
+
+
 def test_classify_hazard_source_unclassifiable_does_not_score():
     # a hazard source whose value can't be parsed must not move the number
     assert lo._classify("qld_om_flood_hazard", {"category": "Development Constraints"}) is None

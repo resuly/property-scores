@@ -50,6 +50,21 @@ def test_deep_water_cannot_read_very_low(monkeypatch):
     assert r["score"] < 40 and r["label"] != "Very Low Risk"
 
 
+def test_high_confidence_hand_does_not_discount_study_depth(monkeypatch):
+    _isolate(monkeypatch)
+    monkeypatch.setattr(fs, "_hand_local", lambda *a, **k: {
+        "hand_m": 10.8,
+        "point_elev_m": 30.8,
+        "drainage_elev_m": 20.0,
+        "uncertain": False,
+        "source": "lidar_5m",
+    })
+    monkeypatch.setattr(sd, "depth_at", _fake_depth(1.2))
+    r = fs.flood_score(-33.26, 151.55)
+    assert r["score"] == 15
+    assert r["label"] == "Very High Risk"
+
+
 def test_no_depth_grid_is_inert(monkeypatch):
     # point outside every grid: score unchanged, no flood_depth field (backward compat)
     _isolate(monkeypatch)

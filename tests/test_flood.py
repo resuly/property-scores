@@ -9,8 +9,14 @@ import pytest
 from property_scores.flood.score import _hand_discounted_jrc, _jrc_to_score
 
 
-def _hand(hand_m, drainage=50.0, uncertain=False):
-    return {"hand_m": hand_m, "drainage_elev_m": drainage, "uncertain": uncertain}
+def _hand(hand_m, drainage=50.0, uncertain=False, source=None, point_elev=None):
+    return {
+        "hand_m": hand_m,
+        "drainage_elev_m": drainage,
+        "uncertain": uncertain,
+        "source": source,
+        "point_elev_m": point_elev,
+    }
 
 
 def test_no_hand_passthrough():
@@ -50,6 +56,27 @@ def test_hilltop_fully_neutral():
 def test_monotone_in_hand():
     vals = [_hand_discounted_jrc(55, _hand(h)) for h in (5, 12, 15, 18, 25)]
     assert vals == sorted(vals)
+
+
+def test_skirving_lidar_vertical_separation_materially_reduces_jrc_risk():
+    # Skirving St anchor: 58% occurrence / 137 m proximity produced JRC score
+    # 20 and final 26 High Risk despite survey-grade HAND 10.8 m. LiDAR makes
+    # that vertical separation strong enough to move the JRC signal to 50.
+    assert _hand_discounted_jrc(20, _hand(10.8, source="lidar_5m")) == 50
+
+
+@pytest.mark.parametrize("name,hand_m", [
+    ("Parramatta riverbank", 1.0),
+    ("Elwood floodplain", 0.9),
+    ("North Ryde", 4.1),
+])
+def test_low_hand_lidar_regression_anchors_keep_full_jrc_evidence(name, hand_m):
+    assert _hand_discounted_jrc(20, _hand(hand_m, source="lidar_5m")) == 20, name
+
+
+def test_medium_confidence_skirving_height_keeps_conservative_ramp():
+    # A 10.8 m coarse DEM read is not strong enough to use the LiDAR curve.
+    assert _hand_discounted_jrc(20, _hand(10.8, source="dem_relief")) == 26
 
 
 def test_jrc_to_score_no_water_safe():

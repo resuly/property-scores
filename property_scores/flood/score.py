@@ -721,13 +721,13 @@ def inundation_grid(lat: float, lng: float, radius_m: int = 500) -> dict | None:
 # ---------------------------------------------------------------------------
 
 def _hand_discounted_jrc(jrc_score: int | None, hand: dict | None) -> int | None:
-    """Blend the JRC score toward neutral (95) as HAND rises through 10-20 m.
+    """Blend JRC toward neutral as measured vertical separation increases.
 
-    Physics gate on classification evidence: a point 20 m+ above its drainage
-    cannot flood from the water JRC sees nearby (or falsely sees in dark forest
-    and terrain shadow). Guards reused from the HAND boost branch: uncertain
-    DEM relief and the coastal 0 m drainage artefact leave JRC untouched, so
-    genuine floodplains (hand < 10 m) keep the full satellite evidence.
+    Survey-grade LiDAR supports an earlier 8-15 m ramp; coarser or unknown
+    elevation keeps the conservative 10-20 m ramp. This only discounts JRC
+    satellite classification, never official overlays or study depth. Guards
+    reused from the HAND boost branch leave uncertain relief and coastal 0 m
+    artefacts untouched.
     """
     if jrc_score is None or not hand:
         return jrc_score
@@ -741,7 +741,10 @@ def _hand_discounted_jrc(jrc_score: int | None, hand: dict | None) -> int | None
         # storm surge + king tide combination by an order of magnitude.
         if (hand.get("point_elev_m") or 0) < 15.0:
             return jrc_score
-    w = max(0.0, min(1.0, (hand["hand_m"] - 10.0) / 10.0))
+    confidence = _ELEV_CONFIDENCE.get(hand.get("source"), "low")
+    ramp_start, ramp_end = (8.0, 15.0) if confidence == "high" else (10.0, 20.0)
+    w = max(0.0, min(1.0, (hand["hand_m"] - ramp_start) /
+                         (ramp_end - ramp_start)))
     if w <= 0.0:
         return jrc_score
     return round(jrc_score * (1.0 - w) + 95 * w)
@@ -838,8 +841,9 @@ def flood_score(lat: float, lng: float) -> dict:
     # forest and terrain shadow read as "water" (North Wahroonga hilltop: 49 wet
     # cells at hand 51.9 m scored 65 "Moderate"). When the point sits well above
     # any real drainage, surface flooding is physically impossible, so JRC
-    # proximity loses its evidentiary standing: discounted from 10 m HAND,
-    # fully neutral at 20 m+. Official overlays are NOT discounted (overland
+    # proximity loses its evidentiary standing: survey-grade LiDAR uses an
+    # 8-15 m ramp; coarser elevation keeps the conservative 10-20 m ramp.
+    # Official overlays and modelled study depth are NOT discounted (overland
     # flow paths can flag genuinely hilly lots).
     jrc_score = _hand_discounted_jrc(jrc_score, hand)
     base_scores = [s for s in (overlay_score, jrc_score, depth_score) if s is not None]

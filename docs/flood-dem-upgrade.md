@@ -311,3 +311,19 @@ Country(真 SRTM fill)→low; VIC/SA/WA/TAS(无端点)0.2-0.6s→medium dem_reli
 User-Agent(限流消失, Bourke 从 12.4s→proxy 变 0.4s→high);②fail-fast(超时 6s→5s, 重试 1→0),
 慢/被限的 cell 最坏只加一次 5s 就兜底 DEM-H(medium), 不为重试阻塞 live 分。warm 覆盖点稳定
 0.1-3s 拿 LiDAR。⚠️生产低频逐址+缓存, 正常不会自限流。
+
+### Skirving Street HAND 垂直分离修正(2026-07-22 已部署)
+
+Steven Walker/WSP 的 Morningside 案例显示：高置信 LiDAR `HAND=10.8m` 时，水平水体
+`137m / occurrence 58%` 仍把评分压到 `26 High Risk`。commit `c051dc7` 将 JRC-only 物理闸改为
+来源感知曲线：high LiDAR 用 `8-15m` 渐进折减，medium/low/unknown 保留原 `10-20m`；官方
+overlay 和 council study depth 不折减。
+
+- 合成锚点：Skirving JRC `20 -> 50 Moderate`。
+- 低 HAND 生产回归逐值不变：North Ryde `65 / 3.9m`，Parramatta 河道点 `19 / 1.4m`，
+  Elwood `14 / 0.9m`。
+- 权威证据回归：Nundah `official=hit`、study depth `0.69m`，仍为 `8 Very High`。
+- 本地全仓 `121 passed`；生产虚拟环境未安装 pytest，因此服务器侧改跑进程内合成锚点、四个
+  live API 地址和 DA Leads 公网代理链路，均通过。
+- 生产：Oracle `/var/www/property-scores`，`property-scores.service` active，代码部署后 HEAD
+  `c051dc7`；公网代理 Nundah/North Ryde 与 localhost 同值。

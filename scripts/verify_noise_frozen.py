@@ -233,8 +233,17 @@ def main() -> int:
     # non-distance fields are already proven an identical multiset above, so
     # sorting both sides by that identity pairs them correctly.
     def _by_identity(rows):
-        return sorted(rows, key=lambda s: json.dumps(
-            {k: v for k, v in s.items() if k != "distance_m"}, sort_keys=True))
+        # Distance is the LAST key, not excluded: some rows are genuinely
+        # indistinguishable otherwise. The Overture rail fallback returns no
+        # coordinates, so Canberra's tram segments differ only in distance --
+        # identity alone pairs them crosswise and invents a -2 m "shrink"
+        # against its own +2 m. Ordering ties by distance makes the pairing
+        # unambiguous; a real shrink still shows, because then the two
+        # multisets genuinely differ.
+        return sorted(rows, key=lambda s: (
+            json.dumps({k: v for k, v in s.items() if k != "distance_m"},
+                       sort_keys=True),
+            s["distance_m"] if s["distance_m"] is not None else -1))
 
     deltas = [(c_s["distance_m"] - p_s["distance_m"], p, p_s)
               for p, c in zip(prod, cur)

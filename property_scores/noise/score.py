@@ -736,6 +736,16 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
                 "offpeak_svc_hr": round(offpeak_svc, 1),
                 "db": round(l_db_screened, 1),
                 "screening_db": round(screening, 1),
+                # The closest approach on the route. dominant_road has always
+                # carried one and dominant_rail never did, which a customer
+                # noticed and asked about (Foundit, 2026-07-24: "the dominant
+                # rail source also comes without a coordinate"). Both values
+                # were already in scope here, used two lines down for the
+                # facade bearing. gtfs_rail_near pre-scales longitude by
+                # cos(lat), so its distance_m is already true metres and needs
+                # no correction, unlike the road paths.
+                "src_lng": src_lng,
+                "src_lat": src_lat,
             }))
             _all_directional_sources.append((l_db_screened, _bearing(lat, lng, src_lat, src_lng), True))
 

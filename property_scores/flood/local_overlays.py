@@ -151,31 +151,59 @@ _conn_lock = Lock()
 
 
 def _get_conn():
-    """Read-only DuckDB handle, reopened when the bake swaps the file (the
-    atomic rename changes the inode; a held handle would pin the old file)."""
+    """A per-call CURSOR off one shared read-only DuckDB handle.
+
+    The base handle is reopened when the bake swaps the file (the atomic rename
+    changes the inode; a held handle would pin the old file).
+
+    The cursor matters. A single DuckDB connection is not safe to drive from
+    several threads at once, and this module is called from exactly that: the
+    /scores batch path scores flood and bushfire in parallel, and both land
+    here. Sharing the raw handle produced
+
+        _duckdb.InternalException: Attempted to dereference unique_ptr
+        that is NULL!
+
+    which check() catches and turns into "the library cannot answer", so the
+    flood score silently fell back off the official overlay. Measured against
+    production on 2026-07-25 at 100 Sherwood Road Rocklea, a flood-plain
+    address: serial calls returned 35 "High Risk" with the overlay hit every
+    time, while at concurrency 4 two of eight and at concurrency 8 four of
+    sixteen came back 60 "Moderate Risk" with official_layer
+    checked_partial_coverage and no zones. Wrong, in the reassuring direction,
+    on the score that matters most, and then cached for 90 days downstream.
+
+    Separate cursors off one database instance are the supported multi-thread
+    pattern, and every query here is read-only, so they cannot collide on
+    catalog state. This mirrors common/overture.get_db(), which already
+    documents the same reasoning; this module never picked it up.
+    """
     global _conn, _conn_ino
     try:
         ino = os.stat(FEATURES_DB).st_ino
     except OSError:
         return None
     with _conn_lock:
-        if _conn is not None and ino == _conn_ino:
-            return _conn
-        if _conn is not None:
+        if _conn is None or ino != _conn_ino:
+            if _conn is not None:
+                try:
+                    _conn.close()
+                except Exception:
+                    pass
+                _conn = None
             try:
-                _conn.close()
-            except Exception:
-                pass
-            _conn = None
-        try:
-            import duckdb
+                import duckdb
 
-            c = duckdb.connect(FEATURES_DB, read_only=True)
-            c.execute("LOAD spatial")
-            _conn, _conn_ino = c, ino
-            return _conn
+                c = duckdb.connect(FEATURES_DB, read_only=True)
+                c.execute("LOAD spatial")
+                _conn, _conn_ino = c, ino
+            except Exception:
+                log.warning("local flood overlay library unavailable", exc_info=True)
+                return None
+        try:
+            return _conn.cursor()
         except Exception:
-            log.warning("local flood overlay library unavailable", exc_info=True)
+            log.warning("local flood overlay cursor unavailable", exc_info=True)
             return None
 
 

@@ -27,13 +27,22 @@ from pathlib import Path
 
 import numpy as np
 
+from property_scores.noise import model_registry as _registry
 from property_scores.noise import raster_sample as rs
 
 logger = logging.getLogger(__name__)
 
 _DATA_DIR = Path(__file__).parent.parent.parent / "data"
-RF_PATH = _DATA_DIR / "noise_transfer_rf.pkl"
-CALIB_PATH = _DATA_DIR / "noise_state_calibration.json"
+
+# Resolved through the registry (property_scores/noise/model_registry.py) so
+# "which model is live?" has an answer and rollback is one env var, not a file
+# copy. Falls back to the historical flat paths when no registry is present, so
+# an unmigrated box keeps serving its model instead of dropping to physics.
+# Module-level for backwards compatibility: several scripts import RF_PATH.
+_MODEL = _registry.resolve()
+RF_PATH = _MODEL["rf"]
+CALIB_PATH = _MODEL["calibration"]
+MODEL_ID = _MODEL["id"]
 
 # Feature geometry (must match the POC that produced the model)
 CLASSES = ["motorway", "trunk", "primary", "secondary", "tertiary",
@@ -119,8 +128,9 @@ def _load() -> bool:
         with open(CALIB_PATH) as f:
             _CALIB = json.load(f)
         _FEATURE_KEYS = list(_CALIB["_feature_keys"])
-        logger.info("Loaded noise transfer RF (%d features, %d trees)",
-                    len(_FEATURE_KEYS), getattr(_RF, "n_estimators", -1))
+        logger.info("Loaded noise transfer model %s via %s (%d features, %d trees)",
+                    MODEL_ID, _MODEL["source"], len(_FEATURE_KEYS),
+                    getattr(_RF, "n_estimators", -1))
         return True
     except Exception as e:
         logger.exception("Failed to load transfer model: %s", e)

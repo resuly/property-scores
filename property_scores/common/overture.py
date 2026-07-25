@@ -58,6 +58,45 @@ def _metres_from_closest_point(lng: float, lat: float, m_per_deg: float,
             f"POW((ST_Y({cp}) - {lat}) * {_M_PER_DEG_LAT}, 2))")
 
 
+# --- legacy_distance: why a known-wrong formula is kept on purpose -----------
+#
+# Production noise does not use the physics Lden. `NOISE_TRANSFER=1` (set in the
+# systemd unit, NOT in .env) swaps in an EU(NL+UK) random forest plus a per-state
+# affine, and that forest was FITTED on features computed with the pre-2026-07
+# distance formula. For a fitted model an input formula is a feature definition,
+# not a correctness question -- so "fixing" it feeds the forest out-of-
+# distribution inputs and puts the physics anchor and the RF features on
+# different rulers, which flips `noise_score`'s threshold gates and swings the
+# blended score by up to 39 points in BOTH directions.
+#
+# Retraining on corrected geometry WAS built and measured (2026-07-26,
+# scripts/poc_eu_transfer6_geodist.py, 96 s to regenerate all features). Across
+# 4 variants x 5 seeds it made the production path slightly WORSE, consistently
+# and at ~8x the seed noise: gate MAE 3.798 -> 3.852, r 0.696 -> 0.687. The
+# uncalibrated transfer improved (raw bias -5.18 -> -3.95 dB) but the per-state
+# affine already absorbs that, because within a city cos(lat) is near-constant
+# and an affine is exactly what absorbs a per-city constant.
+#
+# So noise stays on the old ruler deliberately, and everything else -- flood,
+# bushfire, walkability, heat island, view quality, contamination -- gets true
+# metres. `legacy_distance=True` is passed ONLY from property_scores/noise/, and
+# it exists so that dependency is explicit in code instead of implicit in a
+# formula nobody may touch. Delete the parameter if the RF is ever retrained.
+#
+# Evidence: limon-ops logs/da-leads/2026-07-26_noise-model-handoff.md
+_LEGACY_DISTANCE_DOC = """legacy_distance: reproduce the pre-2026-07 formula
+        (scale a mixed-axis degree distance by the longitude factor, and let the
+        degree prefilter be the only radius test). Wrong on the ground, but it is
+        the ruler the noise transfer RF was fitted on -- see the module comment
+        above. Noise callers pass True; every other caller must not."""
+
+
+def _legacy_dist_sql(lng: float, lat: float, m_per_deg: float,
+                     geom: str = "geometry") -> str:
+    """The pre-2026-07 distance expression, kept verbatim for the noise model."""
+    return f"ST_Distance({geom}, ST_Point({lng}, {lat})) * {m_per_deg}"
+
+
 def get_db() -> duckdb.DuckDBPyConnection:
     """Return a per-call cursor off one shared, spatial-loaded base connection.
 
@@ -93,12 +132,36 @@ def _local_or_fail(filename: str) -> str:
 
 
 def roads_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
-               radius_m: int = 1000, *, source: str | None = None) -> list[tuple]:
+               radius_m: int = 1000, *, source: str | None = None,
+               legacy_distance: bool = False) -> list[tuple]:
+    f"""Road segments within radius. Returns (class, dist_m, speed_kmh, near_lng, near_lat).
+
+    {_LEGACY_DISTANCE_DOC}
+    """
     table = f"read_parquet('{source or _local_or_fail(ROADS_FILE)}')"
     delta = radius_m / 111_000 * 1.5
     import math
     m_per_deg = 111_320 * math.cos(math.radians(lat))
     deg_thresh = radius_m / m_per_deg
+    speed_expr = """CASE WHEN speed_limits IS NOT NULL AND len(speed_limits) > 0
+                         THEN speed_limits[1].max_speed.value
+                         ELSE NULL END"""
+    # Shared prefilter: identical in both modes, so they can never drift apart.
+    where = f"""bbox.xmin BETWEEN {lng - delta} AND {lng + delta}
+                  AND bbox.ymin BETWEEN {lat - delta} AND {lat + delta}
+                  AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
+                  AND subtype = 'road'"""
+    if legacy_distance:
+        sql = f"""
+            SELECT class,
+                   {_legacy_dist_sql(lng, lat, m_per_deg)} AS dist_m,
+                   {speed_expr} AS speed_kmh,
+                   ST_X({_closest_point_sql('geometry', lng, lat)}) AS near_lng,
+                   ST_Y({_closest_point_sql('geometry', lng, lat)}) AS near_lat
+            FROM {table}
+            WHERE {where}
+        """
+        return db.sql(sql).fetchall()
     # The degree threshold is a SUPERSET of radius_m metres (it over-reaches
     # north-south by 1/cos(lat)), so it stays as the cheap indexed prefilter and
     # the exact metric filter runs over the survivors.
@@ -110,14 +173,9 @@ def roads_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
                    speed_kmh
             FROM (
                 SELECT class, {_closest_point_sql('geometry', lng, lat)} AS cp,
-                       CASE WHEN speed_limits IS NOT NULL AND len(speed_limits) > 0
-                            THEN speed_limits[1].max_speed.value
-                            ELSE NULL END AS speed_kmh
+                       {speed_expr} AS speed_kmh
                 FROM {table}
-                WHERE bbox.xmin BETWEEN {lng - delta} AND {lng + delta}
-                  AND bbox.ymin BETWEEN {lat - delta} AND {lat + delta}
-                  AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
-                  AND subtype = 'road'
+                WHERE {where}
             )
         )
         WHERE dist_m < {radius_m}
@@ -126,23 +184,35 @@ def roads_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
 
 
 def rail_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
-              radius_m: int = 1000, *, source: str | None = None) -> list[tuple]:
-    """Find tram/train segments within radius. Returns (class, dist_m)."""
+              radius_m: int = 1000, *, source: str | None = None,
+              legacy_distance: bool = False) -> list[tuple]:
+    f"""Find tram/train segments within radius. Returns (class, dist_m).
+
+    {_LEGACY_DISTANCE_DOC}
+    """
     table = f"read_parquet('{source or _local_or_fail(ROADS_FILE)}')"
     delta = radius_m / 111_000 * 1.5
     import math
     m_per_deg = 111_320 * math.cos(math.radians(lat))
     deg_thresh = radius_m / m_per_deg
+    where = f"""bbox.xmin BETWEEN {lng - delta} AND {lng + delta}
+                  AND bbox.ymin BETWEEN {lat - delta} AND {lat + delta}
+                  AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
+                  AND subtype = 'rail'"""
+    if legacy_distance:
+        sql = f"""
+            SELECT class, {_legacy_dist_sql(lng, lat, m_per_deg)} AS dist_m
+            FROM {table}
+            WHERE {where}
+        """
+        return db.sql(sql).fetchall()
     sql = f"""
         SELECT class, dist_m FROM (
             SELECT class, {_metres_from_closest_point(lng, lat, m_per_deg)} AS dist_m
             FROM (
                 SELECT class, {_closest_point_sql('geometry', lng, lat)} AS cp
                 FROM {table}
-                WHERE bbox.xmin BETWEEN {lng - delta} AND {lng + delta}
-                  AND bbox.ymin BETWEEN {lat - delta} AND {lat + delta}
-                  AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
-                  AND subtype = 'rail'
+                WHERE {where}
             )
         )
         WHERE dist_m < {radius_m}
@@ -151,11 +221,13 @@ def rail_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
 
 
 def aadt_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
-              radius_m: int = 500) -> list[tuple]:
-    """Find measured AADT segments within radius, across all state parquets.
+              radius_m: int = 500, *, legacy_distance: bool = False) -> list[tuple]:
+    f"""Find measured AADT segments within radius, across all state parquets.
 
     Reads every data/aadt_*.parquet (one per state) together. Returns
     (aadt, hv_pct, road_name, dist_m, nearest_lng, nearest_lat).
+
+    {_LEGACY_DISTANCE_DOC}
     """
     files = sorted(glob.glob(str(data_path(AADT_GLOB))))
     if not files:
@@ -166,6 +238,20 @@ def aadt_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
     import math
     m_per_deg = 111_320 * math.cos(math.radians(lat))
     deg_thresh = radius_m / m_per_deg
+    where = f"""xmin BETWEEN {lng - delta} AND {lng + delta}
+                  AND ymin BETWEEN {lat - delta} AND {lat + delta}
+                  AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}"""
+    if legacy_distance:
+        sql = f"""
+            SELECT aadt, hv_pct, road_name,
+                   {_legacy_dist_sql(lng, lat, m_per_deg)} AS dist_m,
+                   ST_X({_closest_point_sql('geometry', lng, lat)}) AS near_lng,
+                   ST_Y({_closest_point_sql('geometry', lng, lat)}) AS near_lat
+            FROM {table}
+            WHERE {where}
+            ORDER BY dist_m
+        """
+        return db.sql(sql).fetchall()
     sql = f"""
         SELECT aadt, hv_pct, road_name, dist_m,
                ST_X(cp) AS near_lng, ST_Y(cp) AS near_lat
@@ -176,9 +262,7 @@ def aadt_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
                 SELECT aadt, hv_pct, road_name,
                        {_closest_point_sql('geometry', lng, lat)} AS cp
                 FROM {table}
-                WHERE xmin BETWEEN {lng - delta} AND {lng + delta}
-                  AND ymin BETWEEN {lat - delta} AND {lat + delta}
-                  AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
+                WHERE {where}
             )
         )
         WHERE dist_m < {radius_m}
@@ -305,11 +389,13 @@ ptv_rail_near = gtfs_rail_near
 
 
 def water_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
-               radius_m: int = 5000) -> list[tuple]:
-    """Find water features within radius.
+               radius_m: int = 5000, *, legacy_distance: bool = False) -> list[tuple]:
+    f"""Find water features within radius.
 
     Returns (class, subtype, dist_m) sorted by distance.
     class: ocean, lake, river, reservoir, pond, stream, etc.
+
+    {_LEGACY_DISTANCE_DOC}
     """
     water_path = data_path(WATER_FILE)
     if not water_path.exists():
@@ -320,24 +406,34 @@ def water_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
     deg_thresh = radius_m / m_per_deg
     # Use overlap logic (not BETWEEN) so large polygons (ocean, bay)
     # whose bbox spans the search area are included.
-    sql = f"""
-        SELECT class, subtype, dist_m FROM (
-            SELECT class, subtype,
-                   {_metres_from_closest_point(lng, lat, m_per_deg)} AS dist_m
-            FROM (
-                SELECT class, subtype,
-                       {_closest_point_sql('geometry', lng, lat)} AS cp
-                FROM read_parquet('{water_path}')
-                WHERE bbox.xmin <= {lng + delta}
+    where = f"""bbox.xmin <= {lng + delta}
                   AND bbox.xmax >= {lng - delta}
                   AND bbox.ymin <= {lat + delta}
                   AND bbox.ymax >= {lat - delta}
-                  AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
+                  AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}"""
+    if legacy_distance:
+        sql = f"""
+            SELECT class, subtype,
+                   {_legacy_dist_sql(lng, lat, m_per_deg)} AS dist_m
+            FROM read_parquet('{water_path}')
+            WHERE {where}
+            ORDER BY dist_m
+        """
+    else:
+        sql = f"""
+            SELECT class, subtype, dist_m FROM (
+                SELECT class, subtype,
+                       {_metres_from_closest_point(lng, lat, m_per_deg)} AS dist_m
+                FROM (
+                    SELECT class, subtype,
+                           {_closest_point_sql('geometry', lng, lat)} AS cp
+                    FROM read_parquet('{water_path}')
+                    WHERE {where}
+                )
             )
-        )
-        WHERE dist_m < {radius_m}
-        ORDER BY dist_m
-    """
+            WHERE dist_m < {radius_m}
+            ORDER BY dist_m
+        """
     try:
         return db.sql(sql).fetchall()
     except Exception:
@@ -430,12 +526,28 @@ def buildings_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
 
 
 def pois_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
-              radius_m: int = 1500, *, source: str | None = None) -> list[tuple]:
+              radius_m: int = 1500, *, source: str | None = None,
+              legacy_distance: bool = False) -> list[tuple]:
+    f"""POIs within radius. Returns (category, dist_m).
+
+    {_LEGACY_DISTANCE_DOC}
+    """
     table = f"read_parquet('{source or _local_or_fail(POIS_FILE)}')"
     delta = radius_m / 111_000 * 1.5
     import math
     m_per_deg = 111_320 * math.cos(math.radians(lat))
     deg_thresh = radius_m / m_per_deg
+    where = f"""bbox.xmin BETWEEN {lng - delta} AND {lng + delta}
+                  AND bbox.ymin BETWEEN {lat - delta} AND {lat + delta}
+                  AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}"""
+    if legacy_distance:
+        sql = f"""
+            SELECT categories.primary AS category,
+                   {_legacy_dist_sql(lng, lat, m_per_deg)} AS dist_m
+            FROM {table}
+            WHERE {where}
+        """
+        return db.sql(sql).fetchall()
     sql = f"""
         SELECT category, dist_m FROM (
             SELECT category, {_metres_from_closest_point(lng, lat, m_per_deg)} AS dist_m
@@ -443,9 +555,7 @@ def pois_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
                 SELECT categories.primary AS category,
                        {_closest_point_sql('geometry', lng, lat)} AS cp
                 FROM {table}
-                WHERE bbox.xmin BETWEEN {lng - delta} AND {lng + delta}
-                  AND bbox.ymin BETWEEN {lat - delta} AND {lat + delta}
-                  AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
+                WHERE {where}
             )
         )
         WHERE dist_m < {radius_m}

@@ -79,12 +79,12 @@ _RAIL_RECAL_TYPES = ("train", "vline")
 # live model (the overlay choropleth reads cached `score`). The AADT / quiet-recal
 # suffixes only appear when their flag is ON, so enabling either invalidates the
 # old cache (forcing regen) while default-OFF keeps the existing prod cache valid.
-# 2026-07-25-geodist: source distances are now measured per axis instead of
-# scaling a mixed-axis degree distance by the longitude factor, which had
-# understated north-south offsets by cos(lat) (21% at Melbourne) and fed those
-# short distances straight into the CRTN level. Every precomputed grid built
-# before this is wrong and must not shadow the live model.
-NOISE_MODEL_VERSION = ("2026-07-25-geodist"
+# NOT bumped for the 2026-07-25 geodistance fix, deliberately. Every noise call
+# site passes `legacy_distance=True`, so noise output is bit-identical to what
+# these grids were baked with (asserted by scripts/verify_noise_frozen.py).
+# Bumping would invalidate every precomputed grid and force a full re-bake for a
+# change noise does not see. Bump it if legacy_distance is ever removed.
+NOISE_MODEL_VERSION = ("2026-06-09-quincunx"
                        + ("-aadt" if _AADT_ADJUST_ENABLED else "")
                        + ("-nswquiet" if _QUIET_RECAL_ENABLED else "")
                        + ("-nswrail" if _RAIL_RECAL_ENABLED else ""))
@@ -536,7 +536,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     _all_directional_sources: list[tuple[float, float, bool]] = []
 
     # --- Measured AADT: per-state aadt_*.parquet ---
-    aadt_segments_raw = aadt_near(db, lat, lng, radius_m)
+    aadt_segments_raw = aadt_near(db, lat, lng, radius_m, legacy_distance=True)
     # Collapse to ONE source per road, keeping the NEAREST point. A road must
     # contribute once (from its closest approach), not once per sample point —
     # otherwise dense point datasets (e.g. QLD has a point every ~10 m along the
@@ -606,7 +606,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     # Dedup: skip Overture major roads within 80m of any measured AADT source
     measured_distances = ([d for _, _, _, d, _, _ in aadt_segments]
                          + [d for _, _, _, d, _, _ in nfdh_stations])
-    roads = roads_near(db, lat, lng, radius_m, source=source)
+    roads = roads_near(db, lat, lng, radius_m, source=source, legacy_distance=True)
     overture_levels: list[tuple[float, dict]] = []
     roads_with_speed = 0
 
@@ -716,7 +716,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
             _all_directional_sources.append((l_db_screened, _bearing(lat, lng, src_lat, src_lng), True))
 
     if not gtfs_found:
-        rails = rail_near(db, lat, lng, radius_m, source=source)
+        rails = rail_near(db, lat, lng, radius_m, source=source, legacy_distance=True)
         for rail_class, dist_m in rails:
             l_db = _rail_noise_fallback(rail_class, dist_m)
             if l_db > 0:
@@ -944,7 +944,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
         poi_noise_count, poi_noise_min_dist, poi_total_count = 0, 500, 0
         try:
             from property_scores.common.overture import pois_near
-            pois = pois_near(db, lat, lng, 500)
+            pois = pois_near(db, lat, lng, 500, legacy_distance=True)
             poi_total_count = len(pois)
             noise_cats = {"bar", "nightclub", "pub", "restaurant", "cafe",
                           "construction", "factory", "industrial"}
@@ -1146,7 +1146,8 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     try:
         from property_scores.common.overture import water_near
         ocean_classes = {"ocean", "sea", "bay"}
-        ocean_hits = [w for w in water_near(db, lat, lng, radius_m=2000)
+        ocean_hits = [w for w in water_near(db, lat, lng, radius_m=2000,
+                                            legacy_distance=True)
                       if w[0] in ocean_classes]
         if ocean_hits:
             nearest_ocean = ocean_hits[0][2]

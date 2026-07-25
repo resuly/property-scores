@@ -108,7 +108,8 @@ def noise_debug(lat: float, lng: float, radius_m: int = 500,
         return barrier_attenuation(nearby_buildings, src_lng, src_lat, lng, lat, dist_m)
 
     aadt_sources = []
-    for aadt, hv_pct, road_name, dist_m, src_lng, src_lat in aadt_near(db, lat, lng, radius_m):
+    for aadt, hv_pct, road_name, dist_m, src_lng, src_lat in aadt_near(
+            db, lat, lng, radius_m, legacy_distance=True):
         hv_val = (hv_pct * 100) if hv_pct else 0.0
         l_db = _crtn_noise(int(aadt), dist_m, hv_pct=hv_val, speed_kmh=DEFAULT_SPEED_KMH)
         screening = _screening(src_lng, src_lat, dist_m)
@@ -163,7 +164,8 @@ def noise_debug(lat: float, lng: float, radius_m: int = 500,
         })
 
     if not gtfs_routes:
-        for rail_class, dist_m in rail_near(db, lat, lng, radius_m):
+        for rail_class, dist_m in rail_near(db, lat, lng, radius_m,
+                                            legacy_distance=True):
             l_db = _rail_noise_fallback(rail_class, dist_m)
             if l_db > 0:
                 rail_sources.append({
@@ -184,7 +186,8 @@ def noise_debug(lat: float, lng: float, radius_m: int = 500,
     # of segments in dense CBD blocks).
     candidates = []
     if include_overture_roads:
-        for road_class, dist_m, speed_kmh, src_lng, src_lat in roads_near(db, lat, lng, radius_m):
+        for road_class, dist_m, speed_kmh, src_lng, src_lat in roads_near(
+                db, lat, lng, radius_m, legacy_distance=True):
             if road_class in ("footway", "path", "steps", "cycleway", "pedestrian", "track"):
                 continue
             aadt_est = CLASS_TO_AADT.get(road_class, 400)

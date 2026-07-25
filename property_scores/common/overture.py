@@ -26,6 +26,37 @@ AU_RAIL_FREQ_FILE = "au_rail_frequency.parquet"
 _install_lock = threading.Lock()
 _base_db = None
 
+# Metres per degree of latitude. Longitude degrees are shorter by cos(latitude)
+# and must be scaled separately -- see _metres_from_closest_point.
+_M_PER_DEG_LAT = 111_320.0
+
+
+def _closest_point_sql(geom: str, lng: float, lat: float) -> str:
+    """The point on `geom` nearest the query point, computed once per row."""
+    return f"ST_ClosestPoint({geom}, ST_Point({lng}, {lat}))"
+
+
+def _metres_from_closest_point(lng: float, lat: float, m_per_deg: float,
+                               cp: str = "cp") -> str:
+    """SQL for ground metres between the query point and a closest-point column.
+
+    ``ST_Distance`` returns DEGREES, and a degree of longitude is only cos(lat)
+    as long as a degree of latitude -- 88.0 km against 111.3 km at Melbourne,
+    81.6 km at Hobart. Scaling a mixed-axis degree distance by one factor
+    therefore understates any north-south offset by cos(lat) and lets a radius
+    over-reach north-south by 1/cos(lat). Measured before this was fixed: noise
+    sources up to 21% too close (Clayton's Centre Rd reported at 376 m when it
+    is 474 m), 27 of 302 returned rows actually outside the stated 500 m, and
+    7.2% of Melbourne walkability POIs outside the 1500 m radius against 0.3%
+    in Darwin -- a latitude-dependent bias that made scores incomparable
+    between cities.
+
+    Project each axis, then combine. ``nfdh_near`` and ``gtfs_rail_near``
+    already did this correctly and are the pattern this follows.
+    """
+    return (f"SQRT(POW((ST_X({cp}) - {lng}) * {m_per_deg}, 2) + "
+            f"POW((ST_Y({cp}) - {lat}) * {_M_PER_DEG_LAT}, 2))")
+
 
 def get_db() -> duckdb.DuckDBPyConnection:
     """Return a per-call cursor off one shared, spatial-loaded base connection.
@@ -68,19 +99,28 @@ def roads_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
     import math
     m_per_deg = 111_320 * math.cos(math.radians(lat))
     deg_thresh = radius_m / m_per_deg
+    # The degree threshold is a SUPERSET of radius_m metres (it over-reaches
+    # north-south by 1/cos(lat)), so it stays as the cheap indexed prefilter and
+    # the exact metric filter runs over the survivors.
     sql = f"""
-        SELECT class,
-               ST_Distance(geometry, ST_Point({lng}, {lat})) * {m_per_deg} AS dist_m,
-               CASE WHEN speed_limits IS NOT NULL AND len(speed_limits) > 0
-                    THEN speed_limits[1].max_speed.value
-                    ELSE NULL END AS speed_kmh,
-               ST_X(ST_ClosestPoint(geometry, ST_Point({lng}, {lat}))) AS near_lng,
-               ST_Y(ST_ClosestPoint(geometry, ST_Point({lng}, {lat}))) AS near_lat
-        FROM {table}
-        WHERE bbox.xmin BETWEEN {lng - delta} AND {lng + delta}
-          AND bbox.ymin BETWEEN {lat - delta} AND {lat + delta}
-          AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
-          AND subtype = 'road'
+        SELECT class, dist_m, speed_kmh, ST_X(cp) AS near_lng, ST_Y(cp) AS near_lat
+        FROM (
+            SELECT class, cp,
+                   {_metres_from_closest_point(lng, lat, m_per_deg)} AS dist_m,
+                   speed_kmh
+            FROM (
+                SELECT class, {_closest_point_sql('geometry', lng, lat)} AS cp,
+                       CASE WHEN speed_limits IS NOT NULL AND len(speed_limits) > 0
+                            THEN speed_limits[1].max_speed.value
+                            ELSE NULL END AS speed_kmh
+                FROM {table}
+                WHERE bbox.xmin BETWEEN {lng - delta} AND {lng + delta}
+                  AND bbox.ymin BETWEEN {lat - delta} AND {lat + delta}
+                  AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
+                  AND subtype = 'road'
+            )
+        )
+        WHERE dist_m < {radius_m}
     """
     return db.sql(sql).fetchall()
 
@@ -94,13 +134,18 @@ def rail_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
     m_per_deg = 111_320 * math.cos(math.radians(lat))
     deg_thresh = radius_m / m_per_deg
     sql = f"""
-        SELECT class,
-               ST_Distance(geometry, ST_Point({lng}, {lat})) * {m_per_deg} AS dist_m
-        FROM {table}
-        WHERE bbox.xmin BETWEEN {lng - delta} AND {lng + delta}
-          AND bbox.ymin BETWEEN {lat - delta} AND {lat + delta}
-          AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
-          AND subtype = 'rail'
+        SELECT class, dist_m FROM (
+            SELECT class, {_metres_from_closest_point(lng, lat, m_per_deg)} AS dist_m
+            FROM (
+                SELECT class, {_closest_point_sql('geometry', lng, lat)} AS cp
+                FROM {table}
+                WHERE bbox.xmin BETWEEN {lng - delta} AND {lng + delta}
+                  AND bbox.ymin BETWEEN {lat - delta} AND {lat + delta}
+                  AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
+                  AND subtype = 'rail'
+            )
+        )
+        WHERE dist_m < {radius_m}
     """
     return db.sql(sql).fetchall()
 
@@ -122,14 +167,21 @@ def aadt_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
     m_per_deg = 111_320 * math.cos(math.radians(lat))
     deg_thresh = radius_m / m_per_deg
     sql = f"""
-        SELECT aadt, hv_pct, road_name,
-               ST_Distance(geometry, ST_Point({lng}, {lat})) * {m_per_deg} AS dist_m,
-               ST_X(ST_ClosestPoint(geometry, ST_Point({lng}, {lat}))) AS near_lng,
-               ST_Y(ST_ClosestPoint(geometry, ST_Point({lng}, {lat}))) AS near_lat
-        FROM {table}
-        WHERE xmin BETWEEN {lng - delta} AND {lng + delta}
-          AND ymin BETWEEN {lat - delta} AND {lat + delta}
-          AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
+        SELECT aadt, hv_pct, road_name, dist_m,
+               ST_X(cp) AS near_lng, ST_Y(cp) AS near_lat
+        FROM (
+            SELECT aadt, hv_pct, road_name, cp,
+                   {_metres_from_closest_point(lng, lat, m_per_deg)} AS dist_m
+            FROM (
+                SELECT aadt, hv_pct, road_name,
+                       {_closest_point_sql('geometry', lng, lat)} AS cp
+                FROM {table}
+                WHERE xmin BETWEEN {lng - delta} AND {lng + delta}
+                  AND ymin BETWEEN {lat - delta} AND {lat + delta}
+                  AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
+            )
+        )
+        WHERE dist_m < {radius_m}
         ORDER BY dist_m
     """
     return db.sql(sql).fetchall()
@@ -269,14 +321,21 @@ def water_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
     # Use overlap logic (not BETWEEN) so large polygons (ocean, bay)
     # whose bbox spans the search area are included.
     sql = f"""
-        SELECT class, subtype,
-               ST_Distance(geometry, ST_Point({lng}, {lat})) * {m_per_deg} AS dist_m
-        FROM read_parquet('{water_path}')
-        WHERE bbox.xmin <= {lng + delta}
-          AND bbox.xmax >= {lng - delta}
-          AND bbox.ymin <= {lat + delta}
-          AND bbox.ymax >= {lat - delta}
-          AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
+        SELECT class, subtype, dist_m FROM (
+            SELECT class, subtype,
+                   {_metres_from_closest_point(lng, lat, m_per_deg)} AS dist_m
+            FROM (
+                SELECT class, subtype,
+                       {_closest_point_sql('geometry', lng, lat)} AS cp
+                FROM read_parquet('{water_path}')
+                WHERE bbox.xmin <= {lng + delta}
+                  AND bbox.xmax >= {lng - delta}
+                  AND bbox.ymin <= {lat + delta}
+                  AND bbox.ymax >= {lat - delta}
+                  AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
+            )
+        )
+        WHERE dist_m < {radius_m}
         ORDER BY dist_m
     """
     try:
@@ -319,11 +378,16 @@ def building_footprint_m2(db: duckdb.DuckDBPyConnection, lat: float,
     delta_lat = fallback_m / 111_320
     delta_lng = fallback_m / m_per_deg
     sql = f"""
-        SELECT ST_Area(geometry),
-               ST_Distance(geometry, ST_Point({lng}, {lat})) * {m_per_deg} AS dist_m
-        FROM read_parquet('{buildings_path}')
-        WHERE bbox.xmin <= {lng + delta_lng} AND bbox.xmax >= {lng - delta_lng}
-          AND bbox.ymin <= {lat + delta_lat} AND bbox.ymax >= {lat - delta_lat}
+        SELECT area, dist_m FROM (
+            SELECT area, {_metres_from_closest_point(lng, lat, m_per_deg)} AS dist_m
+            FROM (
+                SELECT ST_Area(geometry) AS area,
+                       {_closest_point_sql('geometry', lng, lat)} AS cp
+                FROM read_parquet('{buildings_path}')
+                WHERE bbox.xmin <= {lng + delta_lng} AND bbox.xmax >= {lng - delta_lng}
+                  AND bbox.ymin <= {lat + delta_lat} AND bbox.ymax >= {lat - delta_lat}
+            )
+        )
         ORDER BY dist_m
         LIMIT 1
     """
@@ -347,13 +411,19 @@ def buildings_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
     delta = radius_m / 111_000 * 1.5
     deg_thresh = radius_m / m_per_deg
     sql = f"""
-        SELECT height,
-               ST_Distance(geometry, ST_Point({lng}, {lat})) * {m_per_deg} AS dist_m,
-               num_floors
-        FROM read_parquet('{buildings_path}')
-        WHERE bbox.xmin BETWEEN {lng - delta} AND {lng + delta}
-          AND bbox.ymin BETWEEN {lat - delta} AND {lat + delta}
-          AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
+        SELECT height, dist_m, num_floors FROM (
+            SELECT height, num_floors,
+                   {_metres_from_closest_point(lng, lat, m_per_deg)} AS dist_m
+            FROM (
+                SELECT height, num_floors,
+                       {_closest_point_sql('geometry', lng, lat)} AS cp
+                FROM read_parquet('{buildings_path}')
+                WHERE bbox.xmin BETWEEN {lng - delta} AND {lng + delta}
+                  AND bbox.ymin BETWEEN {lat - delta} AND {lat + delta}
+                  AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
+            )
+        )
+        WHERE dist_m < {radius_m}
         ORDER BY dist_m
     """
     return db.sql(sql).fetchall()
@@ -367,12 +437,18 @@ def pois_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
     m_per_deg = 111_320 * math.cos(math.radians(lat))
     deg_thresh = radius_m / m_per_deg
     sql = f"""
-        SELECT categories.primary AS category,
-               ST_Distance(geometry, ST_Point({lng}, {lat})) * {m_per_deg} AS dist_m
-        FROM {table}
-        WHERE bbox.xmin BETWEEN {lng - delta} AND {lng + delta}
-          AND bbox.ymin BETWEEN {lat - delta} AND {lat + delta}
-          AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
+        SELECT category, dist_m FROM (
+            SELECT category, {_metres_from_closest_point(lng, lat, m_per_deg)} AS dist_m
+            FROM (
+                SELECT categories.primary AS category,
+                       {_closest_point_sql('geometry', lng, lat)} AS cp
+                FROM {table}
+                WHERE bbox.xmin BETWEEN {lng - delta} AND {lng + delta}
+                  AND bbox.ymin BETWEEN {lat - delta} AND {lat + delta}
+                  AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
+            )
+        )
+        WHERE dist_m < {radius_m}
     """
     return db.sql(sql).fetchall()
 
@@ -388,15 +464,22 @@ def pois_near_detailed(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
     m_per_deg = 111_320 * math.cos(math.radians(lat))
     deg_thresh = radius_m / m_per_deg
     sql = f"""
-        SELECT categories.primary AS category,
-               ST_Distance(geometry, ST_Point({lng}, {lat})) * {m_per_deg} AS dist_m,
-               ST_X(geometry) AS poi_lng,
-               ST_Y(geometry) AS poi_lat,
-               names.primary AS name
-        FROM read_parquet('{pois_path}')
-        WHERE bbox.xmin BETWEEN {lng - delta} AND {lng + delta}
-          AND bbox.ymin BETWEEN {lat - delta} AND {lat + delta}
-          AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
+        SELECT category, dist_m, poi_lng, poi_lat, name FROM (
+            SELECT category, poi_lng, poi_lat, name,
+                   {_metres_from_closest_point(lng, lat, m_per_deg)} AS dist_m
+            FROM (
+                SELECT categories.primary AS category,
+                       ST_X(geometry) AS poi_lng,
+                       ST_Y(geometry) AS poi_lat,
+                       names.primary AS name,
+                       {_closest_point_sql('geometry', lng, lat)} AS cp
+                FROM read_parquet('{pois_path}')
+                WHERE bbox.xmin BETWEEN {lng - delta} AND {lng + delta}
+                  AND bbox.ymin BETWEEN {lat - delta} AND {lat + delta}
+                  AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
+            )
+        )
+        WHERE dist_m < {radius_m}
         ORDER BY dist_m
     """
     return db.sql(sql).fetchall()

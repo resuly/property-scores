@@ -79,7 +79,12 @@ _RAIL_RECAL_TYPES = ("train", "vline")
 # live model (the overlay choropleth reads cached `score`). The AADT / quiet-recal
 # suffixes only appear when their flag is ON, so enabling either invalidates the
 # old cache (forcing regen) while default-OFF keeps the existing prod cache valid.
-NOISE_MODEL_VERSION = ("2026-06-09-quincunx"
+# 2026-07-25-geodist: source distances are now measured per axis instead of
+# scaling a mixed-axis degree distance by the longitude factor, which had
+# understated north-south offsets by cos(lat) (21% at Melbourne) and fed those
+# short distances straight into the CRTN level. Every precomputed grid built
+# before this is wrong and must not shadow the live model.
+NOISE_MODEL_VERSION = ("2026-07-25-geodist"
                        + ("-aadt" if _AADT_ADJUST_ENABLED else "")
                        + ("-nswquiet" if _QUIET_RECAL_ENABLED else "")
                        + ("-nswrail" if _RAIL_RECAL_ENABLED else ""))

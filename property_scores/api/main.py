@@ -49,6 +49,26 @@ def _solar_with_footprint(lat: float, lng: float) -> dict:
             "efficiency")
     return result
 
+
+def _noise_for_batch(lat: float, lng: float, source: str | None = None,
+                     detail: bool = False) -> dict:
+    """Batch noise component, optionally carrying its per-source breakdown.
+
+    The detail path skips the Overture road segments: they are ODbL-1.0 and the
+    only consumer of this path (the licensed property feed) strips them anyway,
+    so computing barrier screening for ~30 segments per address would be pure
+    waste.
+    """
+    if not detail:
+        return noise_score(lat, lng, source=source)
+    debug = noise_debug(lat, lng, 500, include_overture_roads=False)
+    result = dict(debug.get("score") or {})
+    if debug.get("sources"):
+        result["sources"] = debug["sources"]
+    if debug.get("terrain_source"):
+        result["terrain_source"] = debug["terrain_source"]
+    return result
+
 # ---------------------------------------------------------------------------
 # Application-level rate limiter (supplements nginx 5r/s)
 # ---------------------------------------------------------------------------
@@ -179,11 +199,13 @@ def get_all_scores(
     lng: float = Query(..., description="Longitude (WGS84)"),
     source_roads: str | None = Query(None, description="Local roads parquet"),
     source_pois: str | None = Query(None, description="Local POI parquet"),
+    noise_detail: bool = Query(False, description="Include road/rail source details"),
 ):
     from concurrent.futures import ThreadPoolExecutor
 
     components = {
-        "noise": lambda: noise_score(lat, lng, source=source_roads),
+        "noise": lambda: _noise_for_batch(lat, lng, source=source_roads,
+                                          detail=noise_detail),
         "walkability": lambda: walkability_score(lat, lng, source=source_pois),
         "solar": lambda: _solar_with_footprint(lat, lng),
         "flood": lambda: flood_score(lat, lng),

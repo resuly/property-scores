@@ -16,6 +16,12 @@ from property_scores.noise.buildings import buildings_in_radius, barrier_attenua
 
 _STOPS_FILE = "au_rail_stops.parquet"
 
+# State GTFS feeds carry replacement-bus and coach stops in the same stops file
+# as the rail stops. Naming a rail source after "... Rail Replacement Bus Stop"
+# reads as a data error to anyone looking at the output, so skip those rows and
+# fall back to the next-nearest real stop.
+_NON_RAIL_STOP_PATTERNS = ("rail replacement", "bus stop", "coach", "shuttle")
+
 
 def _nearest_stop_name(db, lat: float, lng: float, max_dist_m: int = 500) -> str:
     stops_path = data_path(_STOPS_FILE)
@@ -24,15 +30,20 @@ def _nearest_stop_name(db, lat: float, lng: float, max_dist_m: int = 500) -> str
     try:
         m_per_deg = 111_320 * math.cos(math.radians(lat))
         delta = max_dist_m / 111_000 * 1.5
-        row = db.execute(f"""
+        rows = db.execute(f"""
             SELECT stop_name,
                    SQRT(POW((lng - {lng}) * {m_per_deg}, 2) + POW((lat - {lat}) * 111320, 2)) AS dist
             FROM read_parquet('{stops_path}')
             WHERE lng BETWEEN {lng - delta} AND {lng + delta}
               AND lat BETWEEN {lat - delta} AND {lat + delta}
-            ORDER BY dist LIMIT 1
-        """).fetchone()
-        return row[0] if row else ""
+            ORDER BY dist LIMIT 10
+        """).fetchall()
+        for name, _dist in rows:
+            lowered = (name or "").lower()
+            if any(p in lowered for p in _NON_RAIL_STOP_PATTERNS):
+                continue
+            return name
+        return ""
     except Exception:
         return ""
 
@@ -78,8 +89,15 @@ def _rail_shapes_near(db, lat: float, lng: float, radius_m: int = 1000) -> list[
             for k, v in routes.items()]
 
 
-def noise_debug(lat: float, lng: float, radius_m: int = 500) -> dict:
-    """Full noise score plus source coordinates for map visualization."""
+def noise_debug(lat: float, lng: float, radius_m: int = 500,
+                include_overture_roads: bool = True) -> dict:
+    """Full noise score plus source coordinates for map visualization.
+
+    ``include_overture_roads`` covers the modelled background segments used by
+    the map's ripple animation. Callers that discard them (the licensed feed,
+    where ODbL segments cannot ship) should pass False: screening those ~30
+    segments is the most expensive part of this function.
+    """
     result = noise_score(lat, lng, radius_m)
     db = get_db()
 
@@ -165,15 +183,16 @@ def noise_debug(lat: float, lng: float, radius_m: int = 500) -> dict:
     # expensive barrier_attenuation only on those (avoids screening hundreds
     # of segments in dense CBD blocks).
     candidates = []
-    for road_class, dist_m, speed_kmh, src_lng, src_lat in roads_near(db, lat, lng, radius_m):
-        if road_class in ("footway", "path", "steps", "cycleway", "pedestrian", "track"):
-            continue
-        aadt_est = CLASS_TO_AADT.get(road_class, 400)
-        l_db = _crtn_noise(aadt_est, dist_m)
-        if l_db < 35:
-            continue
-        candidates.append((l_db, road_class, dist_m, src_lng, src_lat))
-    candidates.sort(key=lambda x: -x[0])
+    if include_overture_roads:
+        for road_class, dist_m, speed_kmh, src_lng, src_lat in roads_near(db, lat, lng, radius_m):
+            if road_class in ("footway", "path", "steps", "cycleway", "pedestrian", "track"):
+                continue
+            aadt_est = CLASS_TO_AADT.get(road_class, 400)
+            l_db = _crtn_noise(aadt_est, dist_m)
+            if l_db < 35:
+                continue
+            candidates.append((l_db, road_class, dist_m, src_lng, src_lat))
+        candidates.sort(key=lambda x: -x[0])
 
     overture_sources = []
     for l_db, road_class, dist_m, src_lng, src_lat in candidates[:30]:

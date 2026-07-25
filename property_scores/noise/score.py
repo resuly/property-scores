@@ -302,6 +302,28 @@ def _bearing(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     return math.atan2(dx, dy) % (2 * math.pi)
 
 
+def _true_metres(lat: float, lng: float, src_lat: float, src_lng: float) -> float:
+    """Ground metres to a source's closest-approach point, measured per axis.
+
+    REPORTING ONLY. The noise model itself runs on `legacy_distance=True` (see
+    the module comment in common/overture.py): its distances scale a mixed-axis
+    degree distance by the longitude factor and so run short by up to cos(lat)
+    -- 21% north-south at Melbourne, 27% at Hobart. That ruler must not change,
+    because the transfer RF was fitted on it and retraining measured worse.
+
+    But `distance_m` in the payload is a MEASUREMENT a customer can check
+    against a map, not a model input, so it is reported honestly. The source
+    coordinates come from ST_ClosestPoint and are identical in both modes, so
+    this recovers the exact distance the corrected helper would have returned.
+
+    Note the two are then intentionally inconsistent: the dB attributed to a
+    source was computed from the legacy distance. That is the deliberate trade
+    -- a checkable number is right, an unverifiable modelled one is unchanged.
+    """
+    return math.sqrt(((src_lng - lng) * 111_320 * math.cos(math.radians(lat))) ** 2
+                     + ((src_lat - lat) * 111_320) ** 2)
+
+
 def _facade_lden(sources: list[tuple[float, float]], aircraft_db: float) -> dict:
     """Compute Lden per facade sector from directional sources.
 
@@ -569,7 +591,8 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
                 "road_name": road_name,
                 "aadt": int(aadt),
                 "hv_pct": round(hv_val),
-                "distance_m": round(dist_m, 0),
+                # Reported honestly; the dB above used the legacy distance.
+                "distance_m": round(_true_metres(lat, lng, src_lat, src_lng), 0),
                 "db": round(l_db_screened, 1),
                 "screening_db": round(screening, 1),
                 "src_lng": src_lng,
@@ -632,7 +655,8 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
                 "class": road_class,
                 "speed_kmh": speed_kmh,
                 "aadt_est": aadt_est,
-                "distance_m": round(dist_m, 0),
+                # Reported honestly; the dB above used the legacy distance.
+                "distance_m": round(_true_metres(lat, lng, src_lat, src_lng), 0),
                 "db": round(l_db, 1),
                 "src_lng": src_lng,
                 "src_lat": src_lat,

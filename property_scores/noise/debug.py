@@ -9,7 +9,7 @@ from property_scores.common.config import data_path
 from property_scores.common.overture import AU_RAIL_SHAPES_FILE, PTV_SHAPES_FILE
 from property_scores.noise.score import (
     noise_score, _crtn_noise, _rail_noise_freq, _rail_noise_fallback,
-    RAIL_EMISSION, CLASS_TO_AADT, DEFAULT_SPEED_KMH,
+    _true_metres, RAIL_EMISSION, CLASS_TO_AADT, DEFAULT_SPEED_KMH,
 )
 from property_scores.noise.buildings import buildings_in_radius, barrier_attenuation
 
@@ -119,7 +119,9 @@ def noise_debug(lat: float, lng: float, radius_m: int = 500,
             "road_name": road_name,
             "aadt": int(aadt),
             "hv_pct": round(hv_val),
-            "distance_m": round(dist_m),
+            # Reported honestly; the dB used the legacy distance (see
+            # score._true_metres). Keeps the map agreeing with the API.
+            "distance_m": round(_true_metres(lat, lng, src_lat, src_lng)),
             "db_raw": round(l_db, 1),
             "db": round(max(l_db - screening, 0), 1),
             "screening_db": round(screening, 1),
@@ -195,7 +197,9 @@ def noise_debug(lat: float, lng: float, radius_m: int = 500,
             if l_db < 35:
                 continue
             candidates.append((l_db, road_class, dist_m, src_lng, src_lat))
-        candidates.sort(key=lambda x: -x[0])
+        # Tie-break fully: this list is truncated to 30 below, so an unstable
+        # sort would change WHICH segments survive, not merely their order.
+        candidates.sort(key=lambda x: (-x[0], x[2], str(x[1]), x[3], x[4]))
 
     overture_sources = []
     for l_db, road_class, dist_m, src_lng, src_lat in candidates[:30]:
@@ -206,15 +210,37 @@ def noise_debug(lat: float, lng: float, radius_m: int = 500,
         overture_sources.append({
             "lat": src_lat, "lng": src_lng,
             "class": road_class,
-            "distance_m": round(dist_m),
+            # Reported honestly; the dB used the legacy distance.
+            "distance_m": round(_true_metres(lat, lng, src_lat, src_lng)),
             "db": round(l_db_screened, 1),
             "screening_db": round(screening, 1),
         })
+
+    # Deterministic order. The underlying SQL orders by distance but ties break
+    # on DuckDB's parallel scan order, so two identical requests could return the
+    # same rows in a different sequence -- measured: 13 of 69 rows reordered
+    # between two consecutive runs of unchanged code. A customer diffing a saved
+    # baseline (which is exactly what Foundit is doing) would see phantom churn.
+    # Sort on the full row identity so ties can only resolve one way.
+    def _stable(rows: list[dict]) -> list[dict]:
+        return sorted(rows, key=lambda s: (
+            s.get("distance_m") if s.get("distance_m") is not None else 1e9,
+            str(s.get("road_name") or s.get("route") or s.get("class") or ""),
+            str(s.get("type") or ""), str(s.get("source") or ""),
+            -(s.get("db") or 0.0),
+        ))
+
+    aadt_sources = _stable(aadt_sources)
+    nfdh_sources = _stable(nfdh_sources)
+    rail_sources = _stable(rail_sources)
+    overture_sources = _stable(overture_sources)
 
     # Identify dominant source for optional terrain profile (no API call here)
     terrain_source = None
     all_sources = aadt_sources + nfdh_sources + [s for s in rail_sources if "lat" in s]
     if all_sources:
+        # max() returns the FIRST maximum, so a db_raw tie previously resolved on
+        # scan order too. _stable above makes that deterministic.
         top = max(all_sources, key=lambda s: s.get("db_raw", 0))
         if top.get("distance_m", 0) >= 50:
             terrain_source = {

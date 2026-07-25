@@ -52,17 +52,29 @@ from property_scores.noise import score as ns
 # Trap 1: never let the shared 24 h sqlite cache answer for either copy.
 ns._cache_get = lambda *a, **k: None
 ns._cache_put = lambda *a, **k: None
+# Go through the SAME entry point the licensed feed uses. noise_score() alone
+# carries no per-source breakdown -- that comes from noise_debug via
+# _noise_for_batch(detail=True), which is what Foundit actually receives.
+from property_scores.api.main import _noise_for_batch
 out = []
 for lat, lng, label in json.load(open(pts_file)):
     try:
-        r = ns.noise_score(lat, lng)
+        r = _noise_for_batch(lat, lng, detail=True)
     except Exception:
         out.append({"label": label, "error": traceback.format_exc(limit=3)})
         continue
-    srcs = [
-        {k: s.get(k) for k in ("type", "name", "distance_m", "db", "class")}
-        for s in (r.get("sources") or [])
-    ]
+    srcs = []
+    for group, rows in sorted((r.get("sources") or {}).items()):
+        for s in (rows if isinstance(rows, list) else []):
+            # lat/lng MUST be included: they are what makes a row unique. Two
+            # different roads can share a name, class and rounded dB, and
+            # without coordinates they collapse to one identity and get paired
+            # arbitrarily between the two runs -- which shows up as a source
+            # whose distance appears to shrink.
+            srcs.append({"group": group,
+                         **{k: s.get(k) for k in
+                            ("source", "type", "route", "road_name", "class",
+                             "lat", "lng", "distance_m", "db", "screening_db")}})
     out.append({
         "label": label, "lat": lat, "lng": lng,
         "score": r.get("score"), "estimated_db": r.get("estimated_db"),
@@ -153,6 +165,19 @@ def main() -> int:
 
     prod = run_probe(wt, pts_file, f"production {a.ref_commit}")
     cur = run_probe(REPO, pts_file, "current branch")
+    cur2 = run_probe(REPO, pts_file, "current branch (repeat)")
+
+    # Determinism first: an unstable payload makes every other comparison
+    # meaningless, and production genuinely is unstable here (ties in the source
+    # sort break on DuckDB scan order).
+    unstable = [c["label"] for c, d in zip(cur, cur2) if c != d]
+    if unstable:
+        print(f"NOT DETERMINISTIC: {len(unstable)} of {len(cur)} points differ "
+              f"between two identical runs of the current code (e.g. "
+              f"{unstable[:3]}). Fix the ordering before trusting any diff.")
+        return 2
+    print(f"determinism: two identical runs of the current code agree on all "
+          f"{len(cur)} points")
 
     errs = [r for r in prod + cur if r.get("error")]
     if errs:
@@ -168,11 +193,23 @@ def main() -> int:
               f"result means the transfer model failed to load.")
         return 2
 
-    diffs = []
-    for p, c in zip(prod, cur):
-        if (p["score"], p["estimated_db"], p["category"], p["sources"]) != \
-           (c["score"], c["estimated_db"], c["category"], c["sources"]):
-            diffs.append((p, c))
+    def _modelled(r):
+        """Everything the model produces: scores, dB, and each source's identity
+        and level.
+
+        Excludes two things on purpose. `distance_m` is a measurement, not a
+        model input, and is deliberately corrected (see score._true_metres). And
+        ORDER is compared as a set, because production has no canonical order at
+        all -- ties break on DuckDB scan order, so a given production run is one
+        arbitrary sequence among many. Determinism is checked separately above;
+        here the question is only whether the same sources came back at the same
+        levels.
+        """
+        return (r["score"], r["estimated_db"], r["category"],
+                sorted(json.dumps({k: v for k, v in s.items() if k != "distance_m"},
+                                  sort_keys=True) for s in r["sources"]))
+
+    diffs = [(p, c) for p, c in zip(prod, cur) if _modelled(p) != _modelled(c)]
 
     print(f"checked {len(prod)} points, all on lden_source=transfer")
     if diffs:
@@ -185,8 +222,37 @@ def main() -> int:
                 print(f"     sources differ ({len(p['sources'])} -> {len(c['sources'])})")
         return 1
 
-    print("\nnoise is BIT-IDENTICAL to production on every point, including "
-          "every per-source distance and dB.")
+    print("\nnoise SCORE, dB and every source's level are BIT-IDENTICAL to "
+          "production on every point.")
+
+    # The reported distances SHOULD have moved, and only ever upward (the legacy
+    # formula could only understate). A run where nothing moved would mean the
+    # honest-distance fix silently did nothing.
+    # Pair sources by IDENTITY, not position -- the order deliberately changed,
+    # so zipping the two lists positionally would compare different roads. The
+    # non-distance fields are already proven an identical multiset above, so
+    # sorting both sides by that identity pairs them correctly.
+    def _by_identity(rows):
+        return sorted(rows, key=lambda s: json.dumps(
+            {k: v for k, v in s.items() if k != "distance_m"}, sort_keys=True))
+
+    deltas = [(c_s["distance_m"] - p_s["distance_m"], p, p_s)
+              for p, c in zip(prod, cur)
+              for p_s, c_s in zip(_by_identity(p["sources"]), _by_identity(c["sources"]))
+              if p_s["distance_m"] is not None and c_s["distance_m"] is not None]
+    moved = [d for d, _, _ in deltas if d != 0]
+    shrank = [(d, p, s) for d, p, s in deltas if d < -1]
+    if not deltas:
+        print("no per-source distances returned -- cannot check the reporting fix")
+        return 0
+    print(f"\nreported distances: {len(moved)} of {len(deltas)} corrected "
+          f"(max +{max([d for d, _, _ in deltas], default=0):.0f} m)")
+    if shrank:
+        d, p, s = shrank[0]
+        print(f"UNEXPECTED: {len(shrank)} distance(s) got SHORTER, e.g. "
+              f"{p['label']} {s.get('road_name') or s.get('class')} {d:.0f} m. "
+              f"The legacy formula understates, so a correction can only grow.")
+        return 1
     return 0
 
 

@@ -306,9 +306,58 @@ _cache: OrderedDict[tuple[float, float], tuple[dict, float]] = OrderedDict()
 _CACHE_MAX = 2000
 _CACHE_TTL = 3600
 
+
 def _cache_key(lat: float, lng: float) -> tuple[float, float]:
-    # MODIS is 1km resolution; round(2) gives ~1.1km grid
-    return (round(lat, 2), round(lng, 2))
+    """The ADDRESS, not its neighbourhood. round(5) is ~1 m.
+
+    This used to be round(2), a ~1.1 km grid, justified by "MODIS is 1km
+    resolution". That reasoning covered one input and was applied to the whole
+    result, so the two LOCAL terms travelled with it: whichever address in a
+    cell computed first that hour decided `building_density` and
+    `greenspace_factor` for every other address in the cell.
+
+    Measured in production 2026-07-25: open grass in Royal Park
+    (-37.7845, 144.9530) scored 60 with greenspace 0.78 and density 0.47, and
+    terrace housing 450 m away (-37.7805, 144.9545) was served that same row
+    with cached=True. Its own values, 130 m further east in the next cell, are
+    56 / 0.65 / 1.00. Dense housing was reported as parkland, and the two
+    fields describe a location the caller never asked about. It also churned
+    over time, since the answer depended on which neighbour arrived first.
+
+    The premise had also expired: `_modis_lst` reads a local VRT mosaic now
+    (`_modis_lst_remote` is explicitly off the hot path), so nothing here is
+    worth a kilometre of smearing. The one genuinely remote call keeps a grid
+    memo of its own below, at its own resolution.
+    """
+    return (round(lat, 5), round(lng, 5))
+
+
+# ERA5 is a ~25 km reanalysis, so one value per ~1.1 km cell is far inside its
+# own resolution and cannot smear anything the grid does not already average.
+# It is also the only network call left on this path (Open-Meteo, 15 s), which
+# is the entire reason a shared cache exists at all.
+_ERA5_GRID_DP = 2
+_era5_cache: OrderedDict[tuple[float, float], tuple[tuple, float]] = OrderedDict()
+
+
+def _summer_temp_grid(lat: float, lng: float) -> tuple[float | None, float | None]:
+    key = (round(lat, _ERA5_GRID_DP), round(lng, _ERA5_GRID_DP))
+    now = _time.time()
+    hit = _era5_cache.get(key)
+    if hit is not None:
+        value, ts = hit
+        if now - ts < _CACHE_TTL:
+            _era5_cache.move_to_end(key)
+            return value
+        del _era5_cache[key]
+    value = _fetch_summer_temp(lat, lng)
+    # A failed fetch returns (None, None); don't pin that for an hour, or one
+    # timeout costs every address in the cell its ERA5 fallback.
+    if value != (None, None):
+        _era5_cache[key] = (value, now)
+        if len(_era5_cache) > _CACHE_MAX:
+            _era5_cache.popitem(last=False)
+    return value
 
 
 def heat_island_score(lat: float, lng: float) -> dict:
@@ -330,7 +379,7 @@ def heat_island_score(lat: float, lng: float) -> dict:
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         f_modis = pool.submit(_modis_lst, lat, lng)
-        f_temp = pool.submit(_fetch_summer_temp, lat, lng)
+        f_temp = pool.submit(_summer_temp_grid, lat, lng)
         f_density = pool.submit(_building_density_proxy, lat, lng)
         f_green = pool.submit(_greenspace_proxy, lat, lng)
 

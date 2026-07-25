@@ -32,6 +32,46 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 OUT = "data/au_physics_cache.npz"
+OUT_FULL = "data/au_physics_cache_full.npz"
+
+
+def main_full():
+    """Same thing over the FULL 11,015 SoundPLAN facades, aligned to
+    data/au_full_feat_cache.npz. That is the set the shipped per-state
+    calibration is fitted on, so a candidate model has to be scored here, not
+    only on the 2,225-point A/B subsample."""
+    os.environ["NOISE_TRANSFER"] = "0"
+    from property_scores.noise import score as ns
+    ns._cache_get = lambda *a, **k: None
+    ns._cache_put = lambda *a, **k: None
+
+    full = np.load("data/au_full_feat_cache.npz", allow_pickle=True)
+    lat, lng = full["lat"], full["lng"]
+    n = len(lat)
+    rd_lden = np.zeros(n); road_db = np.zeros(n)
+    screening = np.zeros(n); n_roads = np.zeros(n); ok = np.zeros(n, bool)
+    t0 = time.time()
+    for i in range(n):
+        try:
+            r = ns.noise_score(float(lat[i]), float(lng[i]))
+        except Exception:
+            continue
+        rdb = r.get("road_db") or 0.0
+        road_db[i] = rdb
+        screening[i] = r.get("max_building_screening_db") or 0.0
+        n_roads[i] = r.get("road_count") or 0
+        if rdb > 0:
+            leq = rdb - ns.L10_TO_LEQ_DB
+            rd_lden[i] = ns._lden(leq + ns._DAY_ADJ, leq + ns._EVE_ADJ,
+                                  leq + ns._NIGHT_ADJ)
+        ok[i] = True
+        if (i + 1) % 1000 == 0:
+            el = time.time() - t0
+            print(f"  {i+1}/{n} ({el:.0f}s, eta {el/(i+1)*(n-i-1):.0f}s)", flush=True)
+    np.savez(OUT_FULL, rd_lden=rd_lden, road_db=road_db, screening=screening,
+             n_roads=n_roads, ok=ok, y=full["y"], city=full["city"],
+             lat=lat, lng=lng)
+    print(f"\nsaved {OUT_FULL}: {int(ok.sum())}/{n} ({time.time()-t0:.0f}s)")
 
 
 def main():
@@ -89,4 +129,4 @@ def main():
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main_full() if "--full" in sys.argv else main())

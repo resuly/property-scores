@@ -234,14 +234,25 @@ def transfer_feats(db, lat: float, lng: float) -> tuple[dict, bool]:
     return f, raster_ok
 
 
-def transfer_lden(db, lat: float, lng: float, state: str | None) -> tuple[float, float, bool]:
+def transfer_lden(db, lat: float, lng: float, state: str | None,
+                  *, physics_lden: float | None = None,
+                  road_count: int | None = None) -> tuple[float, float, bool]:
     """Predict calibrated Lden for a point via the EU transfer RF.
 
     Returns (lden, raw, raster_ok):
       raw  = RF prediction on the EU scale
-      lden = per-state (or global) affine recalibration, floored at MIN_LDEN
+      lden = per-state (or global) recalibration, floored at MIN_LDEN
       raster_ok = whether DEM/LC sampling was inside coverage
     Raises if the model is unavailable (caller falls back to physics).
+
+    Calibration schema 1 is a one-variable affine on the RF output. Schema 2
+    additionally consumes the PHYSICS road Lden and the road count, because
+    measured on the full 11,015 SoundPLAN facades the physics term carries
+    signal the RF structurally cannot see -- direction, line-of-sight screening,
+    measured AADT -- and folding it in moves the in-city CV from MAE 3.516 /
+    r 0.686 to 3.396 / 0.705, with the biggest gains exactly where the RF was
+    weakest (Sydney r 0.39 -> 0.46). `physics_lden` and `road_count` are ignored
+    under schema 1, so callers can always pass them.
     """
     if not _load():
         raise RuntimeError("transfer model unavailable")
@@ -249,7 +260,17 @@ def transfer_lden(db, lat: float, lng: float, state: str | None) -> tuple[float,
     X = [[f[k] for k in _FEATURE_KEYS]]
     raw = float(_RF.predict(X)[0])
     cal = (_CALIB["states"].get(state) if state else None) or _CALIB["global_affine"]
-    lden = cal["slope"] * raw + cal["intercept"]
+    if _CALIB.get("_schema", 1) >= 2:
+        if physics_lden is None or road_count is None:
+            # Refuse rather than substitute zeros: a silently degraded blend is
+            # worse than falling back to physics, which the caller handles.
+            raise ValueError(
+                "schema-2 calibration needs physics_lden and road_count")
+        coef = cal["coef"]
+        lden = (coef[0] * raw + coef[1] * float(physics_lden)
+                + coef[2] * float(road_count) + cal["intercept"])
+    else:
+        lden = cal["slope"] * raw + cal["intercept"]
     lden -= quiet_relief(raw, lden, f["lc_built_300"], f["poi_n100"],
                          f["bldg_n100"], state)
     return max(lden, MIN_LDEN), raw, raster_ok

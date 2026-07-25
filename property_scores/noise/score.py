@@ -837,16 +837,27 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     if _TRANSFER_ENABLED:
         try:
             from property_scores.noise.transfer import transfer_lden
-            # The RF predicts road-only Lden. Replace ONLY the road contribution and
-            # keep rail/tram + aircraft on their exact physics time-of-day mix, so a
-            # point near a railway/tram (or under a flight path) is not under-counted.
-            t_road_lden, t_raw, raster_ok = transfer_lden(db, lat, lng, state)
-            if not raster_ok:
-                raise ValueError("raster miss -> physics")
             # Road-only physics Lden (blend anchor + transfer delta basis).
+            # Computed BEFORE the transfer call because a schema-2 calibration
+            # takes it as an input: v2 promotes the physics road level from
+            # decoration into the blend. Under schema 1 it is unused there and
+            # the call is unchanged.
             rd_only_lden = _lden(
                 road_leq + _DAY_ADJ, road_leq + _EVE_ADJ, road_leq + _NIGHT_ADJ,
             ) if road_leq > 0 else 0.0
+            # The RF predicts road-only Lden. Replace ONLY the road contribution and
+            # keep rail/tram + aircraft on their exact physics time-of-day mix, so a
+            # point near a railway/tram (or under a flight path) is not under-counted.
+            # Same predicate as `motor_roads` further down, which is what
+            # result["road_count"] reports and therefore what the v2 calibration
+            # was FITTED on. Recomputed here only because motor_roads is built
+            # later in the function.
+            t_road_lden, t_raw, raster_ok = transfer_lden(
+                db, lat, lng, state,
+                physics_lden=rd_only_lden,
+                road_count=sum(1 for r in roads if r[0] not in _NON_MOTOR))
+            if not raster_ok:
+                raise ValueError("raster miss -> physics")
             # Quiet-end physics anchor (smooth, out-of-support correction). Weight
             # physics in by how far the RF's own raw sits into its quiet range
             # (_QUIET_RAW_FLOOR/RANGE) — a continuous geometry-averaged signal, so

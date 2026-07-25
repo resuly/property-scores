@@ -56,12 +56,27 @@ M_LAT = 111_320.0
 SCALE = float(os.environ.get("SCALE", "1.0"))
 CACHE = os.environ.get(
     "CACHE_OUT",
-    "data/eu/transfer6_geodist_cache.npz" if SCALE == 1.0
-    else f"data/eu/transfer6_geodist_s{SCALE:g}_cache.npz")
+    ("data/eu/transfer6_rings_" + os.environ["RINGS_M"].replace(",", "_") + "_cache.npz")
+    if os.environ.get("RINGS_M") else
+    ("data/eu/transfer6_geodist_cache.npz" if SCALE == 1.0
+     else f"data/eu/transfer6_geodist_s{SCALE:g}_cache.npz"))
 
 # Ring KEYS keep v5's names (the cache must stay column-compatible with
-# fkeys()); only the metre THRESHOLDS they stand for scale.
-RING_THRESH = {r: r * SCALE for r in RINGS}
+# fkeys()); only the metre THRESHOLDS they stand for change.
+#
+# RINGS_M overrides the thresholds outright (comma-separated, 5 values mapped
+# positionally onto the v5 ring names). The v5 set 50/100/200/400/800 was picked
+# once in the POC and never tuned, yet a crude uniform x1.3 moved the A/B gate as
+# much as the entire geodistance correction -- so it is worth searching. Anything
+# selected THIS way is chosen on the gate, i.e. gate-fitted, and must be
+# re-validated on held-out cities before it means anything.
+_rings_env = os.environ.get("RINGS_M")
+if _rings_env:
+    _vals = [float(x) for x in _rings_env.split(",")]
+    assert len(_vals) == len(RINGS), f"need {len(RINGS)} thresholds, got {len(_vals)}"
+    RING_THRESH = dict(zip(RINGS, _vals))
+else:
+    RING_THRESH = {r: r * SCALE for r in RINGS}
 ROAD_R = 1000.0 * SCALE   # metres, matches v5's `d < 1000` at SCALE=1
 BLDG_R = 200.0 * SCALE    # largest building ring
 POI_R = 500.0 * SCALE     # largest POI ring
@@ -75,15 +90,57 @@ def _window(lat: float, radius_m: float) -> tuple[float, float]:
     return radius_m / mpd, radius_m / M_LAT
 
 
+DIRECTIONAL = os.environ.get("DIRECTIONAL", "0") == "1"
+
+# Rotation-invariant directional keys. Raw per-compass-quadrant values would
+# force the tree to learn that "loud road to the north" and "loud road to the
+# south" are the same thing, which it cannot do from this much data. Sorting the
+# quadrants instead encodes the ASYMMETRY, which is the acoustically meaningful
+# part: one big road on a single side is a very different place from the same
+# road count spread evenly around you.
+DIR_KEYS = ([f"q_major_near_{i}" for i in range(4)]
+            + [f"q_major_n200_{i}" for i in range(4)]
+            + ["q_near_spread"])
+
+
+def fkeys_v2():
+    return sorted(fkeys() + DIR_KEYS) if DIRECTIONAL else fkeys()
+
+
+def _directional(rows_xy, lat, lng, mpd):
+    """Per-quadrant major-road geometry, sorted so it carries no compass bias."""
+    near = [1000.0] * 4
+    cnt = [0] * 4
+    for cls, d, cx, cy in rows_xy:
+        if cls not in ("motorway", "trunk", "primary", "secondary", "tertiary"):
+            continue
+        dx = (cx - lng) * mpd
+        dy = (cy - lat) * M_LAT
+        q = (0 if dx >= 0 and dy >= 0 else 1 if dx >= 0 else 2 if dy < 0 else 3)
+        if d < near[q]:
+            near[q] = d
+        if d <= 200 * SCALE:
+            cnt[q] += 1
+    near_s = sorted(near)                      # closest quadrant first
+    cnt_s = sorted(cnt, reverse=True)          # busiest quadrant first
+    f = {}
+    for i in range(4):
+        f[f"q_major_near_{i}"] = near_s[i]
+        f[f"q_major_n200_{i}"] = cnt_s[i]
+    # How lopsided the surroundings are: 0 = a road equally close on all sides.
+    f["q_near_spread"] = near_s[3] - near_s[0]
+    return f
+
+
 def feats(con, roads_t, bldg_t, poi_t, lat, lng):
-    """The 75 v5 features, computed on a true metric ruler."""
+    """The 75 v5 features, computed on a true metric ruler (+9 if DIRECTIONAL)."""
     mpd = M_LAT * math.cos(math.radians(lat))
 
     # --- Roads: per-axis distance to the closest point on the line ---
     dlng, dlat = _window(lat, ROAD_R)
-    rows = con.execute(f"""
-        SELECT class, d FROM (
-            SELECT class,
+    road_rows = con.execute(f"""
+        SELECT class, d, cx, cy FROM (
+            SELECT class, ST_X(cp) AS cx, ST_Y(cp) AS cy,
                    SQRT(POW((ST_X(cp)-({lng}))*{mpd},2)
                       + POW((ST_Y(cp)-({lat}))*{M_LAT},2)) AS d
             FROM (
@@ -94,6 +151,7 @@ def feats(con, roads_t, bldg_t, poi_t, lat, lng):
             )
         ) WHERE d < {ROAD_R}
     """).fetchall()
+    rows = [(c, d) for c, d, _, _ in road_rows]
 
     f = {}
     for c in CLASSES:
@@ -148,6 +206,9 @@ def feats(con, roads_t, bldg_t, poi_t, lat, lng):
     lc100 = rs.window_stats(LC, lat, lng, 100 * SCALE, categorical=True, classes=[50],
                             cos_correct=True)
     f["lc_built_100"] = lc100.get("frac_50", 0.0)
+
+    if DIRECTIONAL:
+        f.update(_directional(road_rows, lat, lng, mpd))
     return f
 
 
@@ -189,7 +250,7 @@ def main():
     con.execute("CREATE TABLE poi AS SELECT lng,lat FROM read_parquet('data/eu/poi.parquet') ORDER BY lng,lat")
     print(f"  POI loaded ({time.time()-t0:.0f}s)", flush=True)
 
-    KEYS = fkeys()
+    KEYS = fkeys_v2()
 
     def compute(label, country_pts, roads_sql, bldg_sql):
         con.execute("DROP TABLE IF EXISTS rr"); con.execute("DROP TABLE IF EXISTS bb_t")
@@ -236,7 +297,7 @@ def main():
     print(f"\nsaved {CACHE}  Xnl={Xnl.shape} Xau={Xau.shape} ({time.time()-t0:.0f}s)")
 
     old = np.load("data/eu/transfer5_cache.npz", allow_pickle=True)
-    assert old["Xnl"].shape == Xnl.shape and old["Xau"].shape == Xau.shape, "point sets diverged"
+    assert old["Xnl"].shape[0] == Xnl.shape[0] and old["Xau"].shape[0] == Xau.shape[0], "point sets diverged"
     assert np.allclose(old["ynl"], ynl) and np.allclose(old["yau"], yau), "targets diverged"
     print("point sets and targets identical to v5 -- only the features differ")
 

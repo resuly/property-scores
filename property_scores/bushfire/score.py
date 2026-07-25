@@ -7,7 +7,9 @@ Three complementary signals:
    only the NT has none). Keep this list in sync with OVERLAY_ENDPOINTS below;
    a stale 5-state version of this line caused wrong public copy 2026-07-03.
 2. ESA WorldCover 10m — land cover / vegetation fuel load (global COG)
-3. Copernicus DEM 30m — terrain slope for fire spread (global COG)
+3. Terrain slope for fire spread via common.terrain — national 5 m LiDAR
+   bare-earth VRT where covered (~245,000 km2), Copernicus DEM 30 m outside it
+   (LiDAR wired 2026-07-16; this line said "Copernicus DEM 30m" until 2026-07-26)
 
 Score 0-100 where 100 = lowest bushfire risk.
 """
@@ -477,7 +479,14 @@ def _vegetation_fuel_proxy(lat: float, lng: float) -> dict | None:
 
 
 def _terrain_slope(lat: float, lng: float) -> dict | None:
-    """Slope from the local Copernicus GLO-30 DEM (common.terrain / dem.vrt).
+    """Slope from the local terrain stack via common.terrain.elevation().
+
+    NOTE (2026-07-26): terrain.elevation() prefers the baked national 5 m LiDAR
+    bare-earth VRT (common.lidar_local, ~245,000 km2 populated footprint) and only
+    falls back to the 30 m Copernicus GLO-30 DEM outside it (wired 2026-07-16,
+    commit b0f6509). This docstring used to say "Copernicus GLO-30 DEM" and that
+    stale line caused a downstream asset-claim audit to almost mark the 5 m LiDAR
+    reuse claim as false. Read common/terrain.py, not this line, for the ruler.
 
     Replaces the per-state government contour REST endpoints, which were slow,
     intermittent, and by 2026-07 partly dead (QLD ContoursQLD returned

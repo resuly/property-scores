@@ -65,6 +65,11 @@ def _noise_for_batch(lat: float, lng: float, source: str | None = None,
     result = dict(debug.get("score") or {})
     if debug.get("sources"):
         result["sources"] = debug["sources"]
+        # The radius travels with the sources so a consumer can tell an empty
+        # group ("nothing within this radius") from missing coverage.
+        radius = (debug.get("query") or {}).get("radius_m")
+        if radius is not None:
+            result["sources_radius_m"] = radius
     if debug.get("terrain_source"):
         result["terrain_source"] = debug["terrain_source"]
     return result

@@ -18,10 +18,11 @@ Read the caveats before treating a number as the model's true error:
     which pushes bias DOWN. The over-reads below survive that pressure, so they
     are, if anything, understated.
   * LA10(18h) rows are converted to LAeq with a fixed -3 dB assumption, and
-    they are overwhelmingly Victorian, so metric and state are confounded. The
-    gate reports them separately for that reason. Within Victoria alone the two
-    metrics agree (LA10 +9.5, LAeq +8.8), which is why the Victorian over-read
-    is treated as real rather than an artefact of the conversion.
+    they are overwhelmingly Victorian, so metric and state were confounded.
+    That confound is now largely resolved: before the Victorian fix the two
+    metrics sat 5.9 dB apart (LA10 +8.6, LAeq +2.7) and afterwards 1.5 dB
+    (LA10 +3.5, LAeq +2.0). The gap was the Victorian residential over-read,
+    not the conversion.
   * South Australia has no rows at all: the model is unvalidated against
     instruments there, which is not the same as validated and accurate.
 """
@@ -33,11 +34,14 @@ CORPUS = ("noise-logger readings published in road-project environmental impact 
 # state -> (instrument_points, bias_db, mae_db). Bias is model minus measured
 # Lden, so positive means the model reads high. TAS, ACT and NT are pooled in
 # the gate because none has enough points alone.
+# Regenerated 2026-07-26 after the quiet-end relief was extended to VIC and WA
+# (transfer.QUIET_RECAL_STATES). VIC went +9.4 -> +3.8 and MAE 9.97 -> 6.68,
+# WA +6.6 -> +4.9 and 8.08 -> 7.46; NSW, QLD and TAS/ACT/NT are byte-identical.
 _GROUPS: dict[str, tuple[int, float, float]] = {
     "NSW": (55, -0.9, 5.58),
     "QLD": (12, 2.8, 4.30),
-    "VIC": (79, 9.4, 9.97),
-    "WA": (38, 6.6, 8.08),
+    "VIC": (79, 3.8, 6.68),
+    "WA": (38, 4.9, 7.46),
     "TAS": (15, 4.9, 5.63),
     "ACT": (15, 4.9, 5.63),
     "NT": (15, 4.9, 5.63),

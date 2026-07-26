@@ -213,9 +213,18 @@ def test_relief_flag_off_is_zero():
     assert transfer.quiet_relief(62.0, _affine_nsw(62.0), 0.3, 0, 20, "NSW") == 0.0
 
 
-def test_relief_other_states_zero(recal_on):
-    for st in ("VIC", "QLD", "SA", "WA", "TAS", "ACT", "NT", None):
-        assert transfer.quiet_relief(62.0, _affine_nsw(62.0), 0.3, 0, 20, st) == 0.0
+def test_relief_only_where_instruments_say_it_is_needed(recal_on):
+    """The relief is scoped by the measured gate, not applied everywhere.
+
+    Extended to VIC and WA on 2026-07-26 because the 199-point instrument
+    corpus showed the same set-back-dwelling over-read there (+9.4 and +6.6).
+    QLD, TAS, ACT and NT stay out: turning it on everywhere costs NSW, which is
+    the one state already unbiased against instruments.
+    """
+    for st in ("NSW", "VIC", "WA"):
+        assert transfer.quiet_relief(62.0, _affine_nsw(62.0), 0.3, 0, 20, st) > 0.0, st
+    for st in ("QLD", "SA", "TAS", "ACT", "NT", None):
+        assert transfer.quiet_relief(62.0, _affine_nsw(62.0), 0.3, 0, 20, st) == 0.0, st
 
 
 def test_relief_full_for_suburban_home(recal_on):

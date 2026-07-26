@@ -75,7 +75,36 @@ MIN_LDEN = 30.0
 #            This is a domain constraint, not a fitted constant.
 # Every gate is a smooth ramp so adjacent overlay cells cannot flip.
 QUIET_RECAL_ENABLED = os.environ.get("NOISE_QUIET_RECAL", "0") == "1"
-QUIET_RECAL_STATES = {"NSW"}
+# Extended to VIC and WA on 2026-07-26. Not a new correction: the same relief,
+# with the same NSW-validated constants, applied where the measured gate says
+# the same defect exists. VIC's 79 instrument points are dominated by North
+# East Link residential receivers set back from the corridor (Watsonia,
+# Greensborough; measured 53-62 dB day), which is the NorthConnex situation
+# that this function was written for, and the model read them +9.4 dB high.
+# The LA10 conversion is exonerated: within VIC, LA10 biases +9.5 and LAeq
+# +8.8, a 0.7 dB gap.
+#
+# scripts/eval_quiet_recal_states.py, on the measured gate:
+#
+#   config           NSW   QLD   TAS/ACT/NT   VIC    WA
+#   {NSW}           5.58  4.30      5.63     9.97   8.08
+#   +VIC            5.58  4.30      5.63     6.68   8.06
+#   +VIC+WA         5.58  4.30      5.63     6.68   7.46
+#   all states      5.72  3.82      4.89     6.68   7.44
+#
+# Stopping at VIC+WA because a state that does not need the relief must not get
+# worse: turning it on everywhere costs NSW 5.58 -> 5.72. TAS/ACT/NT and QLD
+# would improve, but not at the expense of the one state that is already
+# unbiased against instruments.
+#
+# Honest cost, checked per band rather than assumed. Against VIC's measured
+# levels the relief moves the 65-70 dB band from +0.34 to -3.27 (n=7) while
+# removing +13.24 from the under-60 band (n=41). The truly loud band improves
+# (+3.14 -> -0.93) because w_band already zeroes the relief at raw >= 70, so
+# the loud end is protected by construction rather than by tuning. The
+# constants were NOT retuned to protect the 65-70 band: choosing gate
+# parameters against this corpus would be fitting the gate to its own test.
+QUIET_RECAL_STATES = {"NSW", "VIC", "WA"}
 _RECAL_RAW_FULL = 66.0
 _RECAL_RAW_ZERO = 70.0
 _RECAL_BUILT_FULL = 0.70

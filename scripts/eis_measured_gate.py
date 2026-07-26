@@ -38,7 +38,30 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 CORPUS = "data/eis_noise/measured_corpus_v2.csv"
 CACHE = "data/eis_noise/_geocode_cache.json"
-L10_TO_LEQ = 3.0  # LA10 road traffic -> LAeq, the same offset the old script used
+# LA10(18h) -> LAeq. Was 3.0, inherited from the older script with no source.
+# Measured instead, by scripts/derive_la10_to_laeq.py, from the two Victorian
+# reports on disk that publish both quantities from the same logger at the same
+# site:
+#
+#   West Gate Tunnel, per site, freeway corridor   n=32   mean +0.84  sd 0.81
+#   Mordialloc Freeway, per logging day, suburban  n=114  mean -0.28  median -0.40
+#   pooled                                         n=146  mean -0.03  median 0.00
+#
+# The two corridors bracket zero and the pooled median is zero, so the offset is
+# set to zero: as these reports publish them, LA10(18h) and LAeq are the same
+# number within measurement noise. The 3 dB rule of thumb is for free-flowing
+# traffic; on steady high-volume corridors the level distribution compresses and
+# the gap closes.
+#
+# This mattered: 71 of the 79 Victorian rows are LA10, so subtracting 3 dB
+# pushed those measurements ~3 dB low and showed up as model over-read that was
+# not in the model. Victoria's apparent bias was inflated by roughly that much.
+#
+# Mordialloc's spread is wide (sd 2.73, range -9.4..+8.0) because the first and
+# last day of each logging run are partial; the median is unaffected and is what
+# this follows. The residual ~1-2 dB is real measurement scatter, now an
+# acknowledged uncertainty in the corpus rather than a hidden systematic.
+L10_TO_LEQ = 0.0
 MIN_COVERAGE = 0.90
 
 

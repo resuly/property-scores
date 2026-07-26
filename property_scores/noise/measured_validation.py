@@ -17,12 +17,15 @@ Read the caveats before treating a number as the model's true error:
     position. A logger on the road-facing wall reads LOUDER than the centroid,
     which pushes bias DOWN. The over-reads below survive that pressure, so they
     are, if anything, understated.
-  * LA10(18h) rows are converted to LAeq with a fixed -3 dB assumption, and
-    they are overwhelmingly Victorian, so metric and state were confounded.
-    That confound is now largely resolved: before the Victorian fix the two
-    metrics sat 5.9 dB apart (LA10 +8.6, LAeq +2.7) and afterwards 1.5 dB
-    (LA10 +3.5, LAeq +2.0). The gap was the Victorian residential over-read,
-    not the conversion.
+  * LA10(18h) rows were converted to LAeq by subtracting a flat 3 dB, inherited
+    with no source. Measured from two Victorian reports that publish both
+    quantities from the same logger, the offset is zero
+    (scripts/derive_la10_to_laeq.py). The metric gap closed as the two real
+    defects were removed: LA10 vs LAeq sat 5.9 dB apart at the start of
+    2026-07-26 (+8.6 vs +2.7), 1.5 after the Victorian model fix, and 0.4
+    (+2.4 vs +2.0) once the conversion was measured. Two independent causes,
+    one in the model and one in the corpus, both of which had loaded onto
+    Victoria because the LA10 rows are almost all Victorian.
   * South Australia has no rows at all: the model is unvalidated against
     instruments there, which is not the same as validated and accurate.
 """
@@ -34,17 +37,21 @@ CORPUS = ("noise-logger readings published in road-project environmental impact 
 # state -> (instrument_points, bias_db, mae_db). Bias is model minus measured
 # Lden, so positive means the model reads high. TAS, ACT and NT are pooled in
 # the gate because none has enough points alone.
-# Regenerated 2026-07-26 after the quiet-end relief was extended to VIC and WA
-# (transfer.QUIET_RECAL_STATES). VIC went +9.4 -> +3.8 and MAE 9.97 -> 6.68,
-# WA +6.6 -> +4.9 and 8.08 -> 7.46; NSW, QLD and TAS/ACT/NT are byte-identical.
+# Regenerated 2026-07-26 after two corrections landed the same day:
+#   1. the quiet-end relief was extended to VIC and WA
+#      (transfer.QUIET_RECAL_STATES): VIC +9.4 -> +3.8, WA +6.6 -> +4.9
+#   2. the LA10 -> LAeq offset was measured rather than assumed and went 3.0 ->
+#      0.0 (scripts/derive_la10_to_laeq.py): VIC +3.8 -> +2.8
+# NSW and QLD are byte-identical through both. The two are independent defects:
+# one in the model, one in how the corpus was built.
 _GROUPS: dict[str, tuple[int, float, float]] = {
     "NSW": (55, -0.9, 5.58),
     "QLD": (12, 2.8, 4.30),
-    "VIC": (79, 3.8, 6.68),
-    "WA": (38, 4.9, 7.46),
-    "TAS": (15, 4.9, 5.63),
-    "ACT": (15, 4.9, 5.63),
-    "NT": (15, 4.9, 5.63),
+    "VIC": (79, 2.8, 6.39),
+    "WA": (38, 4.7, 7.44),
+    "TAS": (15, 4.4, 5.28),
+    "ACT": (15, 4.4, 5.28),
+    "NT": (15, 4.4, 5.28),
 }
 
 # 3 dB doubles acoustic energy and is the point at which a systematic offset

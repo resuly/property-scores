@@ -344,19 +344,27 @@ def test_quiet_recal_version_suffix():
 
 def test_confidence_interval_covers_the_measured_error():
     """The interval used to be derived only from the SoundPLAN corpus, which is
-    itself a model, so it looked confident exactly where the model is worst:
+    itself a model, so it looked confident exactly where the model was worst:
     Victoria had the largest SoundPLAN sample and was never flagged, while
-    against real noise loggers it reads 9.4 dB high. A +-4 dB interval around a
-    9.4 dB error does not contain the answer."""
+    against real noise loggers it read 9.4 dB high and shipped +-4 dB.
+
+    Victoria is now +2.8 after two fixes on 2026-07-26 (the quiet-end relief,
+    and measuring the LA10 offset instead of assuming 3 dB), so it no longer
+    trips the material-bias flag. The invariant this guards is not a particular
+    state's number: it is that every state's interval reaches its own measured
+    error, whatever that error currently is."""
     from property_scores.noise import measured_validation as mv
+
+    for state in ("NSW", "QLD", "VIC", "WA", "TAS", "ACT", "NT"):
+        row = mv.for_state(state)
+        assert row is not None, state
+        assert row["mae_db"] >= abs(row["bias_db"]), (
+            f"{state}: MAE smaller than bias would be self-contradictory")
+        assert row["instrument_points"] > 0, state
+        assert row["note"], state
 
     vic = mv.for_state("VIC")
     assert vic["instrument_points"] == 79
-    assert vic["bias_db"] >= mv.MATERIAL_BIAS_DB
-    # Whatever the heuristics produce, the interval must reach the measured error.
-    assert vic["mae_db"] >= abs(vic["bias_db"]), (
-        "a state whose MAE is smaller than its bias would be self-contradictory")
-    assert "upper bound" in vic["note"]
 
 
 def test_a_state_reading_low_is_described_as_conservative_not_as_an_upper_bound():

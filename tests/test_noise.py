@@ -331,3 +331,44 @@ def test_quiet_recal_version_suffix():
     assert "-nswquiet" in out.stdout
     from property_scores.noise.score import NOISE_MODEL_VERSION
     assert "-nswquiet" not in NOISE_MODEL_VERSION  # default-off in this process
+
+
+def test_confidence_interval_covers_the_measured_error():
+    """The interval used to be derived only from the SoundPLAN corpus, which is
+    itself a model, so it looked confident exactly where the model is worst:
+    Victoria had the largest SoundPLAN sample and was never flagged, while
+    against real noise loggers it reads 9.4 dB high. A +-4 dB interval around a
+    9.4 dB error does not contain the answer."""
+    from property_scores.noise import measured_validation as mv
+
+    vic = mv.for_state("VIC")
+    assert vic["instrument_points"] == 79
+    assert vic["bias_db"] >= mv.MATERIAL_BIAS_DB
+    # Whatever the heuristics produce, the interval must reach the measured error.
+    assert vic["mae_db"] >= abs(vic["bias_db"]), (
+        "a state whose MAE is smaller than its bias would be self-contradictory")
+    assert "upper bound" in vic["note"]
+
+
+def test_a_state_reading_low_is_described_as_conservative_not_as_an_upper_bound():
+    from property_scores.noise import measured_validation as mv
+
+    row = dict(mv._GROUPS)
+    mv._GROUPS["ZZ"] = (20, -5.0, 6.0)
+    try:
+        out = mv.for_state("ZZ")
+        assert "conservative" in out["note"]
+        assert "upper bound" not in out["note"]
+    finally:
+        mv._GROUPS.clear()
+        mv._GROUPS.update(row)
+
+
+def test_an_unvalidated_state_says_so_rather_than_implying_it_passed():
+    """South Australia has no instrument rows at all. Silence there would read
+    as validated and fine."""
+    from property_scores.noise import measured_validation as mv
+
+    assert mv.for_state("SA") is None
+    note = mv.unvalidated_note("SA")
+    assert "not been checked against" in note

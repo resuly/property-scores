@@ -1105,6 +1105,25 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     if _QUIET_RECAL_ENABLED and state == "NSW" and lden_source == "transfer":
         ci_db = min(ci_db, 10.0)
 
+    # Everything above derives the interval from the SoundPLAN corpus, which is
+    # itself a model. That is how the interval came to look confident exactly
+    # where the model is worst: Victoria has the largest SoundPLAN sample so it
+    # was never flagged, while against real noise loggers it reads +9.4 dB. A
+    # ±4 dB interval around a 9.4 dB error does not contain the answer, and it
+    # shipped with low_confidence False. Floor the interval at the measured
+    # error for the state, and let a material measured bias set the flag.
+    from property_scores.noise import measured_validation as _mv
+    measured = _mv.for_state(state)
+    if measured:
+        if measured["mae_db"] > ci_db:
+            ci_db = measured["mae_db"]
+        if abs(measured["bias_db"]) >= _mv.MATERIAL_BIAS_DB:
+            low_confidence = True
+            confidence_note = measured["note"]
+    elif state:
+        measured = {"instrument_points": 0, "corpus": _mv.CORPUS,
+                    "as_at": _mv.AS_AT, "note": _mv.unvalidated_note(state)}
+
     motor_roads = [r for r in roads if r[0] not in ("footway", "path", "steps", "cycleway", "pedestrian", "track")]
 
     result = {
@@ -1120,6 +1139,11 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
         "lden_source": lden_source,
         "low_confidence": low_confidence,
         "confidence_note": confidence_note,
+        # What this model actually scored against instruments in this state.
+        # Published rather than kept internal: a reader who knows the direction
+        # of the error can act on it, and every other confidence signal here is
+        # derived from a modelled corpus. None where no state resolved.
+        "measured_validation": measured,
         "leq_day_db": round(leq_day_val, 1),
         "leq_night_db": round(leq_night_val, 1),
         "label": label,

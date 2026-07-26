@@ -282,6 +282,13 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
         dict with score (0-100), label, category_scores, poi_count.
     """
     db = get_db()
+    # Categories whose delivered name and coordinate may come from
+    # OpenStreetMap (ODbL-1.0) rather than the permissively licensed Overture
+    # places stream. Collected as the streams merge, so the attribution
+    # downstream follows the data instead of a hardcoded list. Initialised
+    # outside the branch: the `source` path never fills it, but the result
+    # block below reads it either way.
+    _osm_cats: set = set()
     if source:
         pois = pois_near(db, lat, lng, radius_m, source=source)
         detailed = False
@@ -294,7 +301,9 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
         pois_full = pois_full + transit_stops_near(db, lat, lng, radius_m)
         # OSM leisure polygons: council ovals are polygons, not commercial
         # POIs, so Overture misses most of them ("no sports ovals near us").
-        pois_full = pois_full + sports_fields_near(db, lat, lng, radius_m)
+        _sports_rows = sports_fields_near(db, lat, lng, radius_m)
+        pois_full = pois_full + _sports_rows
+        _osm_cats |= {row[0] for row in _sports_rows}
         # Beaches/lakes come from OSM natural=beach EXCLUSIVELY: Overture's
         # beach/lake places are spam pages pinned to arbitrary coordinates
         # ("Bondi Beach" in Carlton, "Whitehaven Beach" in Brisbane CBD), so
@@ -304,7 +313,19 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
         pois_full = [p for p in pois_full if p[0] not in _ghost_beach]
         # OSM public amenities (playground/dog park/public pool/beach):
         # commercial POI recall on public infrastructure is 26-44% holes.
-        pois_full = pois_full + osm_amenities_near(db, lat, lng, radius_m)
+        _osm_rows = osm_amenities_near(db, lat, lng, radius_m)
+        pois_full = pois_full + _osm_rows
+        # Which categories drew on OpenStreetMap. The delivered payload names
+        # and locates the nearest place in each category, and OSM is ODbL-1.0,
+        # so the consumer has to be able to credit it. Recording the categories
+        # here rather than hardcoding a list downstream keeps the credit tied to
+        # the data: change what the OSM streams cover and the attribution
+        # follows. Deliberately errs toward crediting -- for playground, dog
+        # park and pool the OSM rows are merged alongside Overture's, so the
+        # specific nearest may have come from either, and over-crediting is
+        # harmless where under-crediting is not. Beach is OSM-only by the drop
+        # above, sports by the merge below.
+        _osm_cats |= {row[0] for row in _osm_rows}
         # Train stations come from GTFS EXCLUSIVELY: Overture both misses
         # whole new lines (Perth Morley-Ellenbrook 2024) and keeps stations
         # closed in 2014 (Newcastle) as "open", so its rail categories are
@@ -485,6 +506,14 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
         "category_scores": category_scores,
         "poi_count": len(pois),
     }
+    # Categories whose delivered `nearest` name and coordinate may have come
+    # from OpenStreetMap. Only those actually present in this response, so a
+    # consumer can credit exactly what it received. See the merge points above
+    # for why this is collected rather than hardcoded.
+    _delivered_osm = sorted(c for c in _osm_cats
+                            if (category_scores.get(c) or {}).get("nearest"))
+    if _delivered_osm:
+        result["osm_amenity_categories"] = _delivered_osm
     if summary:
         result["summary"] = summary
     if barriers_crossed > 0:

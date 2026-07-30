@@ -25,6 +25,11 @@ Design notes:
 - Silent on non-fatal issues (bad token etc. print but exit 1; caller decides).
 - Message formatting: Telegram MarkdownV2 is picky; we use plain text + fence
   for the body, which is robust and readable on mobile.
+- Central footprint: every successful send appends one JSON line to
+  <repo>/logs/alerts_sent.jsonl (repo = the directory containing this script's
+  scripts/ dir; override with $ALERT_SENT_LOG). check_alerts.py section D
+  aggregates these across servers, so direct send_alert() callers that exit 0
+  still leave a queryable trace. Logging failures never affect the send result.
 """
 from __future__ import annotations
 
@@ -134,6 +139,44 @@ def _format_message(
     return "\n".join(parts)
 
 
+def _log_sent(project: str, level: str, title: str) -> None:
+    """成功推送后落一行中央足迹, check_alerts.py D 段跨机聚合它。
+
+    路径: $ALERT_SENT_LOG 优先, 否则 <repo>/logs/alerts_sent.jsonl
+    (repo = 本脚本所在 scripts/ 的上一级, 与 cwd 无关)。
+    同一 repo 的日志可能被不同用户写 (ubuntu/www-data/root), 所以用
+    os.open 带 mode 0o666 建文件并在新建后补 chmod (mode 会被 umask 掩掉)。
+    已知残余: 若文件被别的进程先以 0644 建好, 其他用户的 append 会静默失败,
+    接受 — 任何失败都吞掉, 足迹丢一行好过告警发不出。
+    """
+    try:
+        override = os.environ.get("ALERT_SENT_LOG", "").strip()
+        if override:
+            path = Path(override).expanduser()
+        else:
+            path = Path(__file__).resolve().parent.parent / "logs" / "alerts_sent.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        created = not path.exists()
+        if MEL_TZ is not None:
+            ts = datetime.now(MEL_TZ).isoformat(timespec="seconds")
+        else:
+            ts = datetime.now().astimezone().isoformat(timespec="seconds")
+        rec = {
+            "ts": ts,
+            "server": _server_display(),
+            "project": project,
+            "level": level,
+            "title": title,
+        }
+        fd = os.open(path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o666)
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        if created:
+            os.chmod(path, 0o666)
+    except Exception:
+        pass
+
+
 def send_alert(
     project: str,
     level: str,
@@ -144,10 +187,13 @@ def send_alert(
     chat_id: Optional[str] = None,
     parse_mode: Optional[str] = None,
     timeout: float = 10.0,
+    raw: bool = False,
 ) -> bool:
     """Send a single Telegram message. Returns True on success.
 
     Raises no exceptions for network failures — prints and returns False.
+    raw=True: 跳过 _format_message 的样板头 (服务器/项目/时间/详情分隔线),
+    message 原样发送 — 给日报 digest 这类自带排版的消息用。
     """
     _load_env_file()
     token = bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -159,7 +205,7 @@ def send_alert(
         )
         return False
 
-    text = _format_message(project, level, title, message, extra)
+    text = message.strip() if raw else _format_message(project, level, title, message, extra)
     # Telegram caps messages at 4096 chars; truncate conservatively.
     if len(text) > 4000:
         text = text[:3990] + "\n…[truncated]"
@@ -186,7 +232,7 @@ def send_alert(
             return send_alert(
                 project, level, title, message, extra,
                 bot_token=token, chat_id=chat,
-                parse_mode=None, timeout=timeout,
+                parse_mode=None, timeout=timeout, raw=raw,
             )
         print(f"[alert_telegram] HTTP {e.code}: {body}", file=sys.stderr)
         return False
@@ -202,6 +248,7 @@ def send_alert(
     if not data.get("ok"):
         print(f"[alert_telegram] API error: {body}", file=sys.stderr)
         return False
+    _log_sent(project, level, title)
     return True
 
 

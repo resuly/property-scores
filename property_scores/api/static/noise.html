@@ -542,7 +542,7 @@ function renderResult(data, lat, lng) {
   // ---- Facade pie ----
   if (t.facade && s.facade_sectors) drawFacadePie(s, lat, lng);
 
-  // ---- Terrain elevation profile (async — open-meteo API ~1-2s) ----
+  // ---- Terrain elevation profile (async — local Copernicus DEM) ----
   const terrainChart = document.getElementById('terrain-chart');
   if (t.terrain && data.terrain_source) {
     fetchAndDrawTerrain(data.terrain_source, lat, lng);

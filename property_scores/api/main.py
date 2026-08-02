@@ -384,7 +384,8 @@ def get_noise_terrain(
     lat: float = Query(...), lng: float = Query(...),
 ):
     """DEM elevation profile from a source to the receiver. Local Copernicus DEM
-    first, open-meteo only as out-of-coverage fallback; split out from
+    only (the Open-Meteo out-of-coverage fallback was removed 2026-08-02:
+    free tier is non-commercial ToS — see noise/terrain.py); split out from
     /noise/debug so the main response stays fast."""
     try:
         profile = elevation_profile(src_lat, src_lng, lat, lng)

@@ -5,11 +5,9 @@ that block sound. Uses the same Maekawa barrier formula as building screening.
 """
 
 import math
-import requests
 
 from property_scores.common import terrain as _local_dem
 
-OPEN_METEO_ELEV = "https://api.open-meteo.com/v1/elevation"
 SOURCE_HEIGHT = 0.5
 RECEIVER_HEIGHT = 1.5
 SOUND_WAVELENGTH = 0.34
@@ -20,37 +18,25 @@ MIN_BARRIER_HEIGHT_M = 3.0  # terrain must rise 3m+ above sight line to count
 
 
 def _sample_elevations(lats: list[float], lngs: list[float]) -> list[float] | None:
-    """Elevations for a path, local Copernicus DEM first, open-meteo as fallback.
+    """Elevations for a path from the local Copernicus DEM.
 
-    The local DEM (data/global/dem.vrt) covers populated AU in 1-degree tiles; any
-    point outside coverage drops the whole path to the remote API so the profile
-    stays internally consistent (open-meteo serves the same Copernicus DEM family).
-    2026-06-13: open-meteo free-tier rate limits made this endpoint fail outright
-    under real traffic, so remote is fallback, never primary.
+    The local DEM (data/global/dem.vrt) covers populated AU in 1-degree tiles.
+    2026-08-02: dropped the api.open-meteo.com fallback that used to cover
+    points outside that coverage — DA Leads is a paid commercial product and
+    Open-Meteo's free-tier elevation endpoint is non-commercial-use-only
+    (open-meteo.com/en/terms). Outside local DEM coverage this now returns
+    None, same as any other "not assessed" gap: terrain_attenuation degrades
+    to 0.0 dB and elevation_profile returns None (see property-scores-
+    openmeteo-noncommercial-tos followup for the sibling fixes in
+    walkability, view_quality and heat_island).
     """
     local = []
     for la, ln in zip(lats, lngs):
         v = _local_dem.elevation(la, ln)
         if v is None:
-            local = None
-            break
+            return None
         local.append(v)
-    if local is not None:
-        return local
-
-    try:
-        resp = requests.get(OPEN_METEO_ELEV, params={
-            "latitude": ",".join(f"{x:.6f}" for x in lats),
-            "longitude": ",".join(f"{x:.6f}" for x in lngs),
-        }, timeout=5)
-        if not resp.ok:
-            return None
-        elevations = resp.json().get("elevation", [])
-        if len(elevations) < len(lats):
-            return None
-        return elevations
-    except (requests.RequestException, ValueError, KeyError):
-        return None
+    return local
 
 
 def terrain_attenuation(source_lat: float, source_lng: float,

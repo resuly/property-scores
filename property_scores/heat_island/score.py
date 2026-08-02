@@ -1,12 +1,18 @@
 """
-Urban Heat Island score combining satellite + climate + land cover data.
+Urban Heat Island score combining satellite + land cover data.
 
-Three signal layers:
+Two signal layers:
 1. MODIS LST 1km — satellite surface temperature (daytime, 8-day composite)
-2. Open-Meteo ERA5 — 5-year summer air temperature (25km, fallback)
-3. Local factors — building density + greenspace from Overture
+2. Local factors — building density + greenspace from Overture
 
 Score 0-100 where 100 = coolest / lowest heat island effect.
+
+Used to carry a third layer, Open-Meteo ERA5 25km air temperature, as the
+fallback for points with no MODIS coverage. Removed 2026-08-02: DA Leads is
+a paid commercial product and that endpoint's free tier is non-commercial-
+use-only (open-meteo.com/en/terms) — see the note above
+`_building_density_proxy`. Points with no MODIS coverage now return "Data
+unavailable" instead of an ERA5-derived estimate.
 """
 
 import math
@@ -17,7 +23,6 @@ from functools import lru_cache
 
 import requests
 
-OPEN_METEO_HIST = "https://archive-api.open-meteo.com/v1/archive"
 PC_STAC = "https://planetarycomputer.microsoft.com/api/stac/v1"
 PC_SIGN = "https://planetarycomputer.microsoft.com/api/sas/v1/sign"
 
@@ -41,7 +46,7 @@ _signed_cache: dict[str, tuple[str, float]] = {}
 # path (2026-07-02: remote MODIS was 17.7s of a 19.7s cold call). The shared
 # raster sampler reprojects lat/lng into the MODIS sinusoidal CRS automatically,
 # so no warp is needed. Points outside tile coverage read back NODATA -> None
-# -> ERA5 fallback, exactly as a remote MODIS miss behaved.
+# -> "Data unavailable" in heat_island_score(), same as a remote MODIS miss.
 from property_scores.common.config import data_path as _data_path
 
 _DAY_VRT = str(_data_path("global/modis_lst_day.vrt"))
@@ -81,8 +86,7 @@ def _modis_lst(lat: float, lng: float) -> dict | None:
     Center pixel = point LST; the 24 surrounding 1km pixels (the 2km window with
     the centre pixel backed out) = area LST, matching the remote path's
     neighbourhood. Returns None outside tile coverage, on a NODATA/water pixel,
-    or on any sampler error, so the caller falls back to ERA5 as on a remote
-    MODIS miss.
+    or on any sampler error, so the caller reports "Data unavailable".
     """
     import os as _os
     if not _os.path.exists(_DAY_VRT):
@@ -109,7 +113,7 @@ def _modis_lst(lat: float, lng: float) -> dict | None:
         night = rs.sample(_NIGHT_VRT, lat, lng)
         night = float(night) if (night is not None and night == night) else None
     except Exception:
-        return None  # any sampler / IO / CRS error -> ERA5 fallback
+        return None  # any sampler / IO / CRS error -> "Data unavailable"
 
     result: dict = {
         "point_lst_c": round(day, 1),
@@ -206,35 +210,19 @@ def _modis_lst_remote(lat: float, lng: float) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# Open-Meteo ERA5 fallback
+# Open-Meteo ERA5 fallback — removed 2026-08-02. This used to fire on every
+# heat_island_score() call (submitted to the thread pool unconditionally
+# alongside MODIS, its result only discarded if MODIS succeeded), hitting
+# api.open-meteo.com/v1/archive on every scored address. DA Leads is a paid
+# commercial product and that endpoint's free tier is non-commercial-use-only
+# (open-meteo.com/en/terms). There is no local substitute wired up for this
+# yet, so heat_island_score() now falls straight through to the existing
+# "Data unavailable" branch when MODIS has no coverage for a point, instead
+# of estimating from ERA5 air temperature. See property-scores-openmeteo-
+# noncommercial-tos followup: option (2), a paid Open-Meteo Historical
+# Weather API plan, or option (3), a different climate source (SILO/BOM),
+# would restore coverage for the MODIS-miss case — that decision needs Bo.
 # ---------------------------------------------------------------------------
-
-def _fetch_summer_temp(lat: float, lng: float) -> tuple[float | None, float | None]:
-    try:
-        resp = requests.get(OPEN_METEO_HIST, params={
-            "latitude": lat,
-            "longitude": lng,
-            "start_date": "2019-12-01",
-            "end_date": "2024-02-29",
-            "daily": "temperature_2m_max",
-            "timezone": "auto",
-        }, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-        dates = data.get("daily", {}).get("time", [])
-        temps = data.get("daily", {}).get("temperature_2m_max", [])
-
-        summer_temps = [t for d, t in zip(dates, temps)
-                        if t is not None and int(d.split("-")[1]) in (12, 1, 2)]
-
-        if not summer_temps:
-            return None, None
-        mean_t = sum(summer_temps) / len(summer_temps)
-        sorted_t = sorted(summer_temps)
-        p90_t = sorted_t[min(int(len(sorted_t) * 0.9), len(sorted_t) - 1)]
-        return mean_t, p90_t
-    except (requests.RequestException, ValueError, KeyError):
-        return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -332,40 +320,13 @@ def _cache_key(lat: float, lng: float) -> tuple[float, float]:
     return (round(lat, 5), round(lng, 5))
 
 
-# ERA5 is a ~25 km reanalysis, so one value per ~1.1 km cell is far inside its
-# own resolution and cannot smear anything the grid does not already average.
-# It is also the only network call left on this path (Open-Meteo, 15 s), which
-# is the entire reason a shared cache exists at all.
-_ERA5_GRID_DP = 2
-_era5_cache: OrderedDict[tuple[float, float], tuple[tuple, float]] = OrderedDict()
-
-
-def _summer_temp_grid(lat: float, lng: float) -> tuple[float | None, float | None]:
-    key = (round(lat, _ERA5_GRID_DP), round(lng, _ERA5_GRID_DP))
-    now = _time.time()
-    hit = _era5_cache.get(key)
-    if hit is not None:
-        value, ts = hit
-        if now - ts < _CACHE_TTL:
-            _era5_cache.move_to_end(key)
-            return value
-        del _era5_cache[key]
-    value = _fetch_summer_temp(lat, lng)
-    # A failed fetch returns (None, None); don't pin that for an hour, or one
-    # timeout costs every address in the cell its ERA5 fallback.
-    if value != (None, None):
-        _era5_cache[key] = (value, now)
-        if len(_era5_cache) > _CACHE_MAX:
-            _era5_cache.popitem(last=False)
-    return value
-
-
 def heat_island_score(lat: float, lng: float) -> dict:
     """Compute urban heat island score for a coordinate.
 
-    Uses MODIS 1km surface temperature when available, falling back to
-    Open-Meteo ERA5 25km air temperature. Adjusted by building density
-    and greenspace factors.
+    Uses MODIS 1km surface temperature when available. Adjusted by building
+    density and greenspace factors. Points with no MODIS coverage return
+    "Data unavailable" (see the module-level note above `_building_density_proxy`
+    about the removed Open-Meteo ERA5 fallback).
     """
     key = _cache_key(lat, lng)
     now = _time.time()
@@ -377,14 +338,12 @@ def heat_island_score(lat: float, lng: float) -> dict:
         else:
             del _cache[key]
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with ThreadPoolExecutor(max_workers=3) as pool:
         f_modis = pool.submit(_modis_lst, lat, lng)
-        f_temp = pool.submit(_summer_temp_grid, lat, lng)
         f_density = pool.submit(_building_density_proxy, lat, lng)
         f_green = pool.submit(_greenspace_proxy, lat, lng)
 
     modis = f_modis.result()
-    mean_temp, p90_temp = f_temp.result()
     building_density = f_density.result()
     greenspace = f_green.result()
 
@@ -420,16 +379,11 @@ def heat_island_score(lat: float, lng: float) -> dict:
         if modis.get("night_lst_c") is not None and modis["night_lst_c"] > 18:
             night_penalty = min((modis["night_lst_c"] - 18) * 1.5, 10)
             uhi_penalty += night_penalty
-    elif mean_temp is not None:
-        # ERA5 fallback measures AIR temperature, 5-10C below summer surface
-        # LST; applying the LST scale to it silently collapsed everything to
-        # "Moderate Heat" (Penrith 2 -> 46 when MODIS dropped out). Apply a
-        # documented air->LST offset and mark the payload low-confidence.
-        source = "era5"
-        effective_temp = mean_temp * 0.4 + p90_temp * 0.6 + 6.0
-        temp_score = max(0.0, min(100.0, (TEMP_HOT - effective_temp) / (TEMP_HOT - TEMP_COOL) * 100))
-        uhi_penalty = 0
     else:
+        # No MODIS coverage for this point. Used to fall back to Open-Meteo
+        # ERA5 air temperature here (removed 2026-08-02, see the note above
+        # `_building_density_proxy` — that endpoint's free tier is
+        # non-commercial-use-only and DA Leads is a paid product).
         return {
             "score": None,
             "label": "Data unavailable",
@@ -470,14 +424,14 @@ def heat_island_score(lat: float, lng: float) -> dict:
     result: dict = {
         "score": score,
         "label": label,
-        "disclaimer": "Based on satellite surface temperature (1km resolution) and ERA5 climate data. Block-level variations may differ significantly.",
+        "disclaimer": "Based on satellite surface temperature (1km resolution). Block-level variations may differ significantly.",
     }
 
+    # `source` is always "modis" here: the only other branch (no MODIS
+    # coverage) returns early above. Kept as a field for API stability —
+    # it used to also read "era5" before that fallback was removed
+    # 2026-08-02 (see the note above `_building_density_proxy`).
     result["source"] = source
-    if source == "era5":
-        result["confidence_note"] = ("Satellite surface temperature was "
-                                     "unavailable; estimated from climate "
-                                     "reanalysis (lower confidence).")
     if modis and modis.get("night_lst_c") is not None:
         result["night_lst_c"] = modis["night_lst_c"]
     if modis:
@@ -488,9 +442,6 @@ def heat_island_score(lat: float, lng: float) -> dict:
         # comparison is meaningless.
         if uhi_context_ok:
             result["uhi_delta_c"] = modis["uhi_delta_c"]
-    if mean_temp is not None:
-        result["summer_mean_c"] = round(mean_temp, 1)
-        result["summer_p90_c"] = round(p90_temp, 1)
     if building_density is not None:
         result["building_density"] = round(building_density, 2)
     if greenspace is not None:
@@ -515,8 +466,6 @@ if __name__ == "__main__":
     print(f"Heat Island Score: {result['score']}/100 ({result['label']})")
     if result.get("modis_lst_c"):
         print(f"MODIS LST: {result['modis_lst_c']}°C (area avg: {result['modis_area_c']}°C, UHI: {result['uhi_delta_c']:+.1f}°C)")
-    if result.get("summer_mean_c"):
-        print(f"ERA5: mean {result['summer_mean_c']}°C, P90 {result['summer_p90_c']}°C")
     if result.get("building_density") is not None:
         print(f"Building density: {result['building_density']}")
     if result.get("greenspace_factor") is not None:

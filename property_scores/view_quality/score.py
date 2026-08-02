@@ -17,23 +17,24 @@ import time as _time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 
-import requests
-
 from property_scores.common.overture import (
     get_db, water_near, buildings_near, pois_near,
 )
 from property_scores.common import landcover as lc
 
-OPEN_METEO_ELEV = "https://api.open-meteo.com/v1/elevation"
-
 
 def _sample_elevations(lats: list, lngs: list) -> list | None:
-    """Batch elevations from the LOCAL dem.vrt; Open-Meteo only as fallback.
+    """Batch elevations from the LOCAL dem.vrt. The same GLO-30 DEM already
+    sits on disk for the noise model, so read it locally.
 
-    Open-Meteo's free tier 429s under our own load (four score modules share
-    the quota) and on 2026-06-11 BOTH DEM factors were silently dead in prod,
-    with scores renormalising as if terrain did not exist. The same GLO-30
-    DEM already sits on disk for the noise model, so read it locally.
+    2026-08-02: dropped the api.open-meteo.com fallback used when the local
+    file was missing or a point fell outside its populated-AU coverage —
+    DA Leads is a paid commercial product and Open-Meteo's free-tier
+    elevation endpoint is non-commercial-use-only (open-meteo.com/en/terms).
+    Returning None here just excludes `elevation_advantage` from the
+    weighted average (see module docstring: "Factors without data are
+    excluded ... rather than penalized"), the same honest-degradation
+    pattern the other four factors already use.
     """
     try:
         from property_scores.noise import raster_sample as rs
@@ -49,15 +50,7 @@ def _sample_elevations(lats: list, lngs: list) -> list | None:
                 return out
     except Exception:
         pass
-    try:
-        resp = requests.get(OPEN_METEO_ELEV, params={
-            "latitude": ",".join(f"{x:.6f}" for x in lats),
-            "longitude": ",".join(f"{x:.6f}" for x in lngs),
-        }, timeout=10)
-        resp.raise_for_status()
-        return resp.json().get("elevation", [])
-    except (requests.RequestException, ValueError, KeyError):
-        return None
+    return None
 
 OCEAN_CLASSES = {"ocean", "sea", "bay", "strait", "tidal_channel", "lagoon"}
 INLAND_WATER_CLASSES = {"lake", "river", "reservoir", "water", "stream"}

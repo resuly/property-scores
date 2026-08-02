@@ -207,9 +207,6 @@ def _match_category(poi_category: str | None, poi_name: str | None = None) -> st
     return scenario
 
 
-OPEN_METEO_ELEV = "https://api.open-meteo.com/v1/elevation"
-
-
 def _decay(distance_m: float) -> float:
     if distance_m >= MAX_WALK_DISTANCE_M:
         return 0.0
@@ -217,8 +214,16 @@ def _decay(distance_m: float) -> float:
 
 
 def _elevations(coords: list[tuple[float, float]]) -> list | None:
-    """Elevation at each (lat,lng). Local DEM first (fast/offline), else Open-Meteo."""
-    # 1) local Copernicus DEM (covers AU population areas)
+    """Elevation at each (lat,lng) from the local Copernicus DEM.
+
+    2026-08-02: dropped the api.open-meteo.com fallback that used to cover
+    points outside local DEM coverage (data/global/dem.vrt, populated AU) —
+    DA Leads is a paid commercial product and Open-Meteo's free-tier
+    elevation endpoint is non-commercial-use-only (open-meteo.com/en/terms).
+    Outside coverage this now returns None; `_slope_penalty` already treats
+    that as "no penalty" (1.0), the same honest-degradation pattern used
+    elsewhere in this module.
+    """
     try:
         from property_scores.common import terrain
         if terrain.available():
@@ -227,19 +232,7 @@ def _elevations(coords: list[tuple[float, float]]) -> list | None:
                 return local
     except Exception:
         pass
-    # 2) Open-Meteo fallback (outside DEM coverage)
-    import requests
-    try:
-        resp = requests.get(OPEN_METEO_ELEV, params={
-            "latitude": ",".join(f"{la:.6f}" for la, _ in coords),
-            "longitude": ",".join(f"{ln:.6f}" for _, ln in coords),
-        }, timeout=5)
-        if not resp.ok:
-            return None
-        elevs = resp.json().get("elevation", [])
-        return elevs if len(elevs) >= len(coords) else None
-    except Exception:
-        return None
+    return None
 
 
 def _slope_penalty(lat: float, lng: float) -> float:

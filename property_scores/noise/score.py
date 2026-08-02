@@ -532,6 +532,33 @@ _CACHE_DB = str(data_path("noise_result_cache.sqlite"))
 _RESULT_CACHE_TTL = 86400.0
 
 
+def _apply_measured_disclosure(state, measured, ci_db, low_confidence,
+                               confidence_note, state_note_from_transfer):
+    """把州级实测校验折进置信披露。抽成纯函数是为了可测(noise_score 全函数要地理数据)。
+
+    三条规则, 原样来自 2026-07 的收口 + 2026-08-02 的口径修:
+      ① interval 下限抬到该州实测 MAE(模拟语料自评的置信不许窄过真误差)
+      ② 实测 bias 达材料级 → 置信降级 + note 换实测表述
+      ③ bias 不到材料级但挂着 transfer 侧的悲观 note("limited local calibration
+         data") → note 换成两句都说的版本(校准样本小 + 实测反证), 否则与同一响应里
+         的 measured_validation 自相矛盾(NSW: 55 仪器点 bias -0.9)。low_confidence
+         与 ci_db 不动 —— 只治口径, 不改模型行为。
+    """
+    from property_scores.noise import measured_validation as _mv
+    if measured["mae_db"] > ci_db:
+        ci_db = measured["mae_db"]
+    if abs(measured["bias_db"]) >= _mv.MATERIAL_BIAS_DB:
+        low_confidence = True
+        confidence_note = measured["note"]
+    elif state_note_from_transfer:
+        confidence_note = (
+            f"Calibrated on a limited {state} sample; measured checks "
+            f"against {measured['instrument_points']} noise-logger readings "
+            f"show {measured['bias_db']:+.1f} dB average bias, within the "
+            "stated interval. Verify on site for critical decisions.")
+    return ci_db, low_confidence, confidence_note
+
+
 def noise_score(lat: float, lng: float, radius_m: int = 500,
                 *, source: str | None = None) -> dict:
     _ck = f"{round(lat, 5)}:{round(lng, 5)}:{radius_m}:{source or ''}"
@@ -1085,16 +1112,19 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
         from property_scores.noise.transfer import state_low_confidence as _slc
     except Exception:
         _slc = lambda s: False
+    state_note_from_transfer = False
     if lden_source == "transfer" and _slc(state):
         low_confidence = True
         confidence_note = (f"Lower model confidence in {state} (limited local "
                            "calibration data). Verify on site before relying on this estimate.")
         ci_db += 2.0
+        state_note_from_transfer = True
     if _quiet_w > 0:
         low_confidence = True
         confidence_note = ("Quiet, low-density area below the model's calibrated "
                            "range; this estimate is extrapolated. Verify on site.")
         ci_db += round(_quiet_w * 4.0, 1)
+        state_note_from_transfer = False
 
     # The stacked worst case (quiet + no count station + NSW) reached +-14 dB,
     # which a critic fairly read back as "a 28dB error range". The stack
@@ -1115,11 +1145,9 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     from property_scores.noise import measured_validation as _mv
     measured = _mv.for_state(state)
     if measured:
-        if measured["mae_db"] > ci_db:
-            ci_db = measured["mae_db"]
-        if abs(measured["bias_db"]) >= _mv.MATERIAL_BIAS_DB:
-            low_confidence = True
-            confidence_note = measured["note"]
+        ci_db, low_confidence, confidence_note = _apply_measured_disclosure(
+            state, measured, ci_db, low_confidence, confidence_note,
+            state_note_from_transfer)
     elif state:
         measured = {"instrument_points": 0, "corpus": _mv.CORPUS,
                     "as_at": _mv.AS_AT, "note": _mv.unvalidated_note(state)}

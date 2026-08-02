@@ -389,3 +389,41 @@ def test_an_unvalidated_state_says_so_rather_than_implying_it_passed():
     assert mv.for_state("SA") is None
     note = mv.unvalidated_note("SA")
     assert "not been checked against" in note
+
+
+def test_pessimistic_state_note_carries_measured_counterevidence():
+    """NSW used to ship 'Lower model confidence in NSW (limited local
+    calibration data)' while measured_validation right next to it said 55
+    instrument points, bias -0.9 — both true, but self-contradictory to a
+    customer. When measured bias is below the material threshold, the
+    transfer-side pessimism must carry the measured counter-evidence.
+    low_confidence and ci_db stay untouched (copy fix, not a model change)."""
+    from property_scores.noise import measured_validation as mv
+    from property_scores.noise.score import _apply_measured_disclosure
+
+    nsw = mv.for_state("NSW")
+    assert abs(nsw["bias_db"]) < mv.MATERIAL_BIAS_DB, \
+        "premise: NSW bias is sub-material; if this moved, revisit the note logic"
+
+    pessimistic = ("Lower model confidence in NSW (limited local "
+                   "calibration data). Verify on site before relying on this estimate.")
+    ci, low, note = _apply_measured_disclosure(
+        "NSW", nsw, ci_db=8.0, low_confidence=True,
+        confidence_note=pessimistic, state_note_from_transfer=True)
+    assert "noise-logger readings" in note and "-0.9" in note, note
+    assert "limited NSW sample" in note  # 校准样本小这半句也要在
+    assert low is True and ci >= 8.0     # 姿态与 interval 不动
+
+    # 反向不变量: note 不是 transfer 侧的(比如 quiet 外推 note)时不许被顶掉
+    quiet_note = "Quiet, low-density area ... extrapolated. Verify on site."
+    _, _, note2 = _apply_measured_disclosure(
+        "NSW", nsw, ci_db=8.0, low_confidence=True,
+        confidence_note=quiet_note, state_note_from_transfer=False)
+    assert note2 == quiet_note
+
+    # 材料级 bias 仍走实测降级路径(规则②未被规则③影响)
+    material = dict(nsw, bias_db=9.4, note="reads +9.4 dB on average ...")
+    _, low3, note3 = _apply_measured_disclosure(
+        "VIC", material, ci_db=4.0, low_confidence=False,
+        confidence_note=None, state_note_from_transfer=False)
+    assert low3 is True and note3 == material["note"]

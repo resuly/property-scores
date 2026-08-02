@@ -427,3 +427,69 @@ def test_pessimistic_state_note_carries_measured_counterevidence():
         "VIC", material, ci_db=4.0, low_confidence=False,
         confidence_note=None, state_note_from_transfer=False)
     assert low3 is True and note3 == material["note"]
+
+
+def test_rail_screening_factor_ramps_from_zero_to_cap():
+    """0 at 0m, linear (dist/500) up to the 0.6 cap, which distance/500
+    reaches at 300m -- so it's flat 0.6 from 300m onward, not 500m."""
+    from property_scores.noise.score import _rail_screening_factor
+
+    assert _rail_screening_factor(0) == 0.0
+    assert round(_rail_screening_factor(250), 4) == 0.5
+    assert _rail_screening_factor(300) == 0.6
+    assert _rail_screening_factor(500) == 0.6
+    assert _rail_screening_factor(1000) == 0.6  # capped, not 2.0
+
+
+def test_debug_reuses_scores_rail_screening_factor():
+    """debug.py (the /map + Inspector sources feed) must share score.py's
+    rail screening ramp, not redefine it. Until 2026-08 debug.py hardcoded a
+    flat 0.6 factor while score.py ramped 0 at 0m -> 0.6 at 500m, so a rail
+    source 70-100m away with tall building screening between it and the
+    receiver showed up to ~7dB quieter on the map than in the actual score
+    (measured against Glenferrie/Richmond/Malvern/Hawthorn test points,
+    2026-08 followup daleads-noise-map-vs-api-screening-mismatch). Asserting
+    identity (not just equal output for one input) means a future
+    reimplementation that merely matches today's numbers won't silently
+    re-diverge tomorrow."""
+    import property_scores.noise.debug as debug_mod
+    import property_scores.noise.score as score_mod
+
+    assert debug_mod._rail_screening_factor is score_mod._rail_screening_factor
+
+
+def test_debug_rail_source_screening_matches_score_formula(monkeypatch):
+    """Behavioural check on top of the identity check above: drive
+    noise_debug's rail loop with synthetic inputs (no DB/network) and confirm
+    the screening_db it reports for a rail source is raw_screening * the
+    ramped factor -- the exact bug shape would have reported
+    raw_screening * 0.6 regardless of distance."""
+    import property_scores.noise.debug as debug_mod
+
+    dist_m = 100.0  # ramp factor here is 0.2, nowhere near the old flat 0.6
+    raw_screening_db = 15.0
+    peak_svc, offpeak_svc = 6.0, 3.0
+
+    monkeypatch.setattr(debug_mod, "get_db", lambda: object())
+    monkeypatch.setattr(debug_mod, "noise_score", lambda *a, **k: {})
+    monkeypatch.setattr(debug_mod, "aadt_near", lambda *a, **k: [])
+    monkeypatch.setattr(debug_mod, "nfdh_near", lambda *a, **k: [])
+    monkeypatch.setattr(debug_mod, "rail_near", lambda *a, **k: [])
+    monkeypatch.setattr(debug_mod, "roads_near", lambda *a, **k: [])
+    monkeypatch.setattr(debug_mod, "buildings_in_radius", lambda *a, **k: [])
+    monkeypatch.setattr(debug_mod, "barrier_attenuation", lambda *a, **k: raw_screening_db)
+    monkeypatch.setattr(debug_mod, "_nearest_stop_name", lambda *a, **k: "")
+    monkeypatch.setattr(debug_mod, "_rail_shapes_near", lambda *a, **k: [])
+    monkeypatch.setattr(
+        debug_mod, "gtfs_rail_near",
+        lambda *a, **k: [(1, "Test Line", dist_m, peak_svc, offpeak_svc, 145.0, -37.8)],
+    )
+
+    result = debug_mod.noise_debug(-37.8, 145.0, radius_m=500, include_overture_roads=False)
+    rail_sources = result["sources"]["rail"]
+    assert len(rail_sources) == 1
+    got_screening = rail_sources[0]["screening_db"]
+    expected_factor = dist_m / 500  # 0.2, well under the 0.6 cap
+    assert round(got_screening, 2) == round(raw_screening_db * expected_factor, 2)
+    assert got_screening != round(raw_screening_db * 0.6, 2), \
+        "this is exactly the old bug: flat 0.6 regardless of distance"

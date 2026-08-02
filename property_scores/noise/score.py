@@ -264,6 +264,28 @@ def _adaptive_select(levels: list[tuple[float, dict]],
 
 RAIL_EXCESS_ATTEN_DB_PER_M = 0.04  # ground/atmospheric beyond 50m
 
+_RAIL_SCREEN_RAMP_M = 500.0
+_RAIL_SCREEN_MAX_FACTOR = 0.6
+
+
+def _rail_screening_factor(distance_m: float) -> float:
+    """How much of the raw building-screening estimate to credit a rail
+    source with: 0 at 0m, ramping linearly as distance_m / _RAIL_SCREEN_RAMP_M
+    until it hits the _RAIL_SCREEN_MAX_FACTOR cap (at 300m, i.e.
+    0.6 * _RAIL_SCREEN_RAMP_M -- not at _RAIL_SCREEN_RAMP_M itself), then flat.
+    Close to the tracks the barrier estimate is unreliable (rail corridors
+    are often cuttings/embankments the building layer doesn't model), so we
+    discount it near the source and trust it more with distance.
+
+    debug.py (the /map + Inspector sources feed) must call this too --
+    until 2026-08 it hardcoded a flat 0.6 instead, which disagreed with
+    this ramp by up to ~7dB for rail sources 70-100m away with tall
+    building screening between them and the receiver (measured against
+    Glenferrie/Richmond/Malvern/Hawthorn test points). Keeping one
+    function is the fix: don't let the two paths re-diverge.
+    """
+    return min(distance_m / _RAIL_SCREEN_RAMP_M, _RAIL_SCREEN_MAX_FACTOR)
+
 
 def _rail_noise_freq(rail_type: str, distance_m: float,
                      services_per_hour: float) -> float:
@@ -740,8 +762,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
         l_db = _rail_noise_freq(rail_type, dist_m, svc_per_hr)
         if l_db > 0:
             raw_screening = barrier_attenuation(nearby_buildings, src_lng, src_lat, lng, lat, dist_m, _arrays=_bldg_arrays)
-            rail_scr_factor = min(dist_m / 500, 0.6)  # 0 at 0m → 0.6 at 500m
-            screening = raw_screening * rail_scr_factor
+            screening = raw_screening * _rail_screening_factor(dist_m)
             l_db_screened = max(l_db - screening, 0.0)
             # NSW heavy-rail recalibration (opt-in): subtract the bounded
             # cutting/barrier pull-down at the SOURCE level so everything

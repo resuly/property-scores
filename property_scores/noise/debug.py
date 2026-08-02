@@ -9,7 +9,8 @@ from property_scores.common.config import data_path
 from property_scores.common.overture import AU_RAIL_SHAPES_FILE, PTV_SHAPES_FILE
 from property_scores.noise.score import (
     noise_score, _crtn_noise, _rail_noise_freq, _rail_noise_fallback,
-    _true_metres, RAIL_EMISSION, CLASS_TO_AADT, DEFAULT_SPEED_KMH,
+    _true_metres, _rail_screening_factor, RAIL_EMISSION, CLASS_TO_AADT,
+    DEFAULT_SPEED_KMH,
 )
 from property_scores.noise.buildings import buildings_in_radius, barrier_attenuation
 
@@ -150,7 +151,10 @@ def noise_debug(lat: float, lng: float, radius_m: int = 500,
         rail_type = "tram" if route_type == 0 else ("vline" if peak_svc < 4 else "train")
         svc_per_hr = peak_svc * 0.4 + offpeak_svc * 0.6
         l_db = _rail_noise_freq(rail_type, dist_m, svc_per_hr)
-        screening = _screening(src_lng, src_lat, dist_m) * 0.6
+        # Must match score.py's rail_levels loop exactly, or the map/Inspector
+        # sources disagree with the score that drove them (2026-08 fix; was a
+        # hardcoded flat 0.6 here vs the ramp in score.py, up to ~7dB apart).
+        screening = _screening(src_lng, src_lat, dist_m) * _rail_screening_factor(dist_m)
         stop_name = _nearest_stop_name(db, src_lat, src_lng)
         rail_sources.append({
             "lat": src_lat, "lng": src_lng,

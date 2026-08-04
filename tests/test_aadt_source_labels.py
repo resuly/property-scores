@@ -18,6 +18,8 @@ Two defects found 2026-08-05 while working a customer's defect list:
 These are pure-function tests: the mapping and the geographic lookup are the
 parts that were wrong, and neither needs the 4 GB of parquets to exercise.
 """
+from pathlib import Path
+
 import pytest
 
 from property_scores.common import overture
@@ -59,7 +61,6 @@ def test_unregistered_state_is_marked_not_guessed():
 def _load_export_module():
     """Import the export script by path (scripts/ is not a package)."""
     import importlib.util
-    from pathlib import Path
 
     path = (Path(__file__).resolve().parent.parent
             / "scripts" / "export_noise_grid_csv.py")
@@ -99,40 +100,74 @@ def test_export_does_not_treat_overture_as_a_traffic_publisher():
     assert "overture" not in export._AADT_LICENSOR
 
 
-def test_export_collection_step_filters_overture_out():
-    """The regression was in the COLLECTION step, not the licensor table.
+def test_export_credits_publishers_that_were_not_the_loudest():
+    """Credit follows USE, not just the dominant source.
 
-    A static membership check on _MEASURED_AADT_SOURCES passes even when the
-    collector adds dominant_road.source unconditionally, which is exactly how
-    the blocking bug survived the first round of tests. Drive the helper the
-    collector actually calls.
+    dominant_road is only the loudest source. A measured counter can feed the
+    exported level without being loudest: on a Brisbane CBD sample 8 of 9 points
+    had a measured counter contributing while 7 of those had
+    dominant_road.source == "overture". Crediting from dominant_road alone
+    published "no measured traffic-counter dataset covered this extract" over
+    grids that were in fact using CC-BY counter data (review, 2026-08-05).
     """
     export = _load_export_module()
-    assert export._measured_publishers({"source": "overture"}) == set()
-    assert export._measured_publishers({"source": "tfnsw"}) == {"tfnsw"}
-    assert export._measured_publishers({"source": "nfdh"}) == {"nfdh"}
-    assert export._measured_publishers({}) == set()
-    assert export._measured_publishers(None) == set()
-    # A grid whose every row is an Overture road must still ship.
+    row = {"dominant_road": {"source": "overture"},
+           "measured_traffic_sources": ["vicroads", "nfdh"]}
+    assert export._measured_publishers(row) == {"vicroads", "nfdh"}, (
+        "publishers that fed the level must be credited even when Overture was loudest")
+
+
+def test_export_collection_step_ignores_overture_as_a_publisher():
+    """Overture is a modelled network, credited under ODbL, not a traffic publisher."""
+    export = _load_export_module()
+    # Overture never appears in measured_traffic_sources, and a grid made only of
+    # Overture rows must still ship.
     facts = {"volume_sources": set(), "name_sources": set()}
     for _ in range(5):
-        facts["volume_sources"] |= export._measured_publishers({"source": "overture"})
+        facts["volume_sources"] |= export._measured_publishers(
+            {"dominant_road": {"source": "overture"}, "measured_traffic_sources": []})
     used, credit = export._aadt_attribution(facts)
     assert used == set() and "Overture" in credit
+    # And if it did leak in, it is dropped rather than treated as unregistered.
+    used2, _ = export._aadt_attribution(
+        {"volume_sources": {"overture"}, "name_sources": set()})
+    assert used2 == set()
 
 
-def test_export_allows_a_grid_with_no_measured_counters():
-    """A grid away from every counter is legitimate, not an error."""
+def test_export_refuses_an_unregistered_publisher_reaching_it_from_the_collector():
+    """The guard must be reachable from the real collection path.
+
+    An earlier version filtered to known publishers inside _measured_publishers,
+    so an unregistered one was silently dropped and the RuntimeError below could
+    never fire (review, 2026-08-05).
+    """
     export = _load_export_module()
-    used, credit = export._aadt_attribution({"volume_sources": set(), "name_sources": set()})
-    assert used == set()
-    assert credit and "Overture" in credit
-
-
-def test_export_refuses_an_unregistered_publisher():
-    export = _load_export_module()
+    facts = {"volume_sources": set(), "name_sources": set()}
+    facts["volume_sources"] |= export._measured_publishers(
+        {"dominant_road": {"source": "aadt_nt", "road_name": "Stuart Highway"},
+         "measured_traffic_sources": ["aadt_nt"]})
+    assert facts["volume_sources"] == {"aadt_nt"}, "collector must pass it through"
     with pytest.raises(RuntimeError, match="attribution block"):
-        export._aadt_attribution({"volume_sources": {"aadt_nt"}, "name_sources": set()})
+        export._aadt_attribution(facts)
+
+
+def test_export_has_exactly_one_licensor_table():
+    """A duplicate copy inside write_docs would drift from the one that gates."""
+    export = _load_export_module()
+    src = (Path(__file__).resolve().parent.parent
+           / "scripts" / "export_noise_grid_csv.py").read_text(encoding="utf-8")
+    assert src.count("_AADT_LICENSOR = {") == 1, (
+        "more than one licensor table: the copy that is not used by "
+        "_aadt_attribution can silently go stale")
+    assert set(export._MEASURED_AADT_SOURCES) == set(export._AADT_LICENSOR)
+
+
+def test_vintage_gate_is_a_named_function_used_before_writing():
+    """It used to raise inside write_docs, after the CSV was already on disk."""
+    export = _load_export_module()
+    with pytest.raises(RuntimeError, match="no input vintage recorded"):
+        export._require_vintage("NSW")
+    assert export._require_vintage("VIC")
 
 
 def test_export_credits_every_publisher_that_drove_a_row():

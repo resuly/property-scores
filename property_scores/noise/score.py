@@ -1272,6 +1272,13 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
         "nfdh_stations": len(nfdh_stations),
         "roads_with_speed_limit": roads_with_speed,
         "road_db": round(road_db, 1),
+        # EVERY measured-traffic publisher that fed this point's level, not just
+        # whichever happened to be loudest. `dominant_road` is only the top
+        # source, so crediting from it under-credits: on a Brisbane CBD sample,
+        # 8 of 9 points had a measured counter contributing while 7 of those had
+        # dominant_road.source == "overture". Attribution has to follow use.
+        "measured_traffic_sources": sorted(
+            {d["source"] for _, d in aadt_levels if d.get("source")}),
     }
 
     if transfer_raw is not None:

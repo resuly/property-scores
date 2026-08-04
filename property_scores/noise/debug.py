@@ -10,7 +10,7 @@ from property_scores.common.overture import AU_RAIL_SHAPES_FILE, PTV_SHAPES_FILE
 from property_scores.noise.score import (
     noise_score, _crtn_noise, _rail_noise_freq, _rail_noise_fallback,
     _true_metres, _rail_screening_factor, RAIL_EMISSION, CLASS_TO_AADT,
-    DEFAULT_SPEED_KMH,
+    DEFAULT_SPEED_KMH, _source_state,
 )
 from property_scores.noise.buildings import buildings_in_radius, barrier_attenuation
 
@@ -109,14 +109,16 @@ def noise_debug(lat: float, lng: float, radius_m: int = 500,
         return barrier_attenuation(nearby_buildings, src_lng, src_lat, lng, lat, dist_m)
 
     aadt_sources = []
-    for aadt, hv_pct, road_name, dist_m, src_lng, src_lat in aadt_near(
+    for aadt, hv_pct, road_name, dist_m, src_lng, src_lat, src_name in aadt_near(
             db, lat, lng, radius_m, legacy_distance=True):
         hv_val = (hv_pct * 100) if hv_pct else 0.0
         l_db = _crtn_noise(int(aadt), dist_m, hv_pct=hv_val, speed_kmh=DEFAULT_SPEED_KMH)
         screening = _screening(src_lng, src_lat, dist_m)
         aadt_sources.append({
             "lat": src_lat, "lng": src_lng,
-            "source": "vicroads",
+            # Real publisher of the parquet this row came from, as in score.py.
+            "source": src_name,
+            "source_state": _source_state(src_lat, src_lng),
             "road_name": road_name,
             "aadt": int(aadt),
             "hv_pct": round(hv_val),
@@ -136,6 +138,7 @@ def noise_debug(lat: float, lng: float, radius_m: int = 500,
         nfdh_sources.append({
             "lat": src_lat, "lng": src_lng,
             "source": "nfdh",
+            "source_state": _source_state(src_lat, src_lng),
             "road_name": road_name,
             "aadt": int(aadt),
             "hv_pct": round(hv_val),

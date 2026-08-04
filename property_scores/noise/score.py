@@ -110,8 +110,16 @@ _TRANSFER_ENABLED = os.environ.get("NOISE_TRANSFER", "0") == "1"
 # gates precomputed grids, where a suffix change forces a full re-bake).
 # NOISE_MODEL_ID covers the env override only — a registry `activate` with no
 # env change is invisible here and rides out inside the 24h result TTL.
+#
+# The trailing payload-shape tag is not a tunable: it is bumped whenever the
+# cached dict's SHAPE or LABELS change without its numbers changing, which the
+# rest of this signature cannot see. "src2" = road sources carry the real
+# publisher and a geographic source_state (2026-08-05); under "src1" every
+# measured AADT row was stamped "vicroads". Without the bump, ~8k already-cached
+# entries would keep serving the wrong label for up to 24h after deploy.
 _CONFIG_SIG = ":".join((
     NOISE_MODEL_VERSION,
+    "src2",
     "t1" if _TRANSFER_ENABLED else "t0",
     "m1" if _ML_CORRECTION_ENABLED else "m0",
     f"r{_RAIL_RECAL_DB:g}" if _RAIL_RECAL_ENABLED else "r-",
@@ -573,6 +581,24 @@ _CACHE_DB = str(data_path("noise_result_cache.sqlite"))
 _RESULT_CACHE_TTL = 86400.0
 
 
+def _source_state(src_lat, src_lng):
+    """Which state a traffic counter/segment physically sits in.
+
+    Deliberately computed from the source's own coordinates, never read from an
+    upstream `state` column. The NFDH national file labels a counter with the
+    JURISDICTION OF THE REPORTING AGENCY, not its location: all 15 NFDH rows
+    inside the ACT (Majura Parkway, Federal Hwy — clientid `nswwim`/`nswrms`)
+    carry state='NSW', and 22 more rows straddle the NSW/QLD and NSW/VIC
+    borders the same way. Publishing that column would tell a Canberra customer
+    their nearest counter is in New South Wales.
+
+    Returns None outside Australia rather than guessing.
+    """
+    if src_lat is None or src_lng is None:
+        return None
+    return detect_state(src_lat, src_lng)
+
+
 def _apply_measured_disclosure(state, measured, ci_db, low_confidence,
                                confidence_note, state_note_from_transfer):
     """把州级实测校验折进置信披露。抽成纯函数是为了可测(noise_score 全函数要地理数据)。
@@ -634,7 +660,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     # 10-20 dB. Roads without a name fall back to a coarse location bucket.
     _seen: dict[tuple, tuple] = {}
     for row in aadt_segments_raw:
-        aadt_val, _, road_name, dist_m, near_lng, near_lat = row
+        aadt_val, _, road_name, dist_m, near_lng, near_lat, _src = row
         if road_name:
             key = ("name", road_name)
         else:
@@ -646,7 +672,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
 
     aadt_levels: list[tuple[float, dict]] = []
     building_screening_total = 0.0
-    for aadt, hv_pct, road_name, dist_m, src_lng, src_lat in aadt_segments:
+    for aadt, hv_pct, road_name, dist_m, src_lng, src_lat, src_name in aadt_segments:
         hv_val = (hv_pct * 100) if hv_pct else 0.0
         l_db = _crtn_noise(int(aadt), dist_m, hv_pct=hv_val, speed_kmh=DEFAULT_SPEED_KMH)
         if l_db > 0:
@@ -655,7 +681,9 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
             if screening > building_screening_total:
                 building_screening_total = screening
             aadt_levels.append((l_db_screened, {
-                "source": "vicroads",
+                # Whichever state parquet this row came from — never assumed.
+                "source": src_name,
+                "source_state": _source_state(src_lat, src_lng),
                 "road_name": road_name,
                 "aadt": int(aadt),
                 "hv_pct": round(hv_val),
@@ -668,10 +696,11 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
             }))
             _all_directional_sources.append((l_db_screened, _bearing(lat, lng, src_lat, src_lng), False))
 
-    # NFDH national traffic counts (complements VicRoads outside VIC)
+    # NFDH national traffic counts (complements the state AADT files, which do
+    # not cover every state — ACT and NT have no aadt_*.parquet at all).
     nfdh_stations = nfdh_near(db, lat, lng, radius_m)
     for aadt, hv_pct, road_name, dist_m, src_lng, src_lat in nfdh_stations:
-        if any(abs(dist_m - d) < 80 for _, _, _, d, _, _ in aadt_segments):
+        if any(abs(dist_m - d) < 80 for _, _, _, d, _, _, _ in aadt_segments):
             continue
         hv_val = max(hv_pct or 0, 0)
         l_db = _crtn_noise(int(aadt), dist_m, hv_pct=hv_val, speed_kmh=DEFAULT_SPEED_KMH)
@@ -682,6 +711,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
                 building_screening_total = screening
             aadt_levels.append((l_db_screened, {
                 "source": "nfdh",
+                "source_state": _source_state(src_lat, src_lng),
                 "road_name": road_name,
                 "aadt": int(aadt),
                 "hv_pct": round(hv_val),

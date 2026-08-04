@@ -326,6 +326,9 @@ def export(lat: float, lng: float, radius_m: float, spacing_m: float,
         "aircraft_points": 0,
         "terrain_points": 0,
         "name_sources": set(),
+        # Every measured-AADT publisher that drove a row, whether or not its
+        # street name was published. Credit follows use, not just naming.
+        "volume_sources": set(),
         "names": set(),
         "lden_sources": collections.Counter(),
         "named_rows": 0,
@@ -358,6 +361,8 @@ def export(lat: float, lng: float, radius_m: float, spacing_m: float,
             facts["terrain_points"] += 1
         facts["lden_sources"][r.get("lden_source")] += 1
         dom_road = r.get("dominant_road") or {}
+        if dom_road.get("source"):
+            facts["volume_sources"].add(dom_road["source"])
         if dom_road.get("road_name") and row["dominant_source"] == dom_road.get("road_name"):
             facts["named_rows"] += 1
             facts["names"].add(dom_road["road_name"])
@@ -641,10 +646,23 @@ bo@daleads.com.au.
     # Each AADT dataset has its own licensor. Crediting the wrong one was a
     # defect found in review, so the credit block is selected by what was
     # actually used, and an unrecognised source refuses rather than guesses.
+    # Until 2026-08-05 score.py stamped "vicroads" on every measured-AADT row
+    # regardless of which state's parquet it came from, so this block credited
+    # Victoria for TfNSW, QLD TMR, SA DIT and Main Roads WA data. The labels are
+    # real now (overture.AADT_SOURCE_BY_STATE), so every publisher needs an
+    # entry here or the export refuses to ship.
     _AADT_LICENSOR = {
         "vicroads": ("VicRoads traffic volume data, Department of Transport and\n"
                      "      Planning Victoria. Licensed under Creative Commons\n"
                      "      Attribution (CC BY 4.0)."),
+        "tfnsw": ("Roads traffic volume counts, Transport for NSW.\n"
+                  "      Licensed under Creative Commons Attribution (CC BY 4.0)."),
+        "qld_tmr": ("Road location and traffic data, Queensland Department of\n"
+                    "      Transport and Main Roads. Licensed under Creative Commons\n"
+                    "      Attribution (CC BY 4.0)."),
+        "sa_dit": ("Traffic volume estimates, South Australian Department for\n"
+                   "      Infrastructure and Transport. Licensed under Creative\n"
+                   "      Commons Attribution (CC BY 4.0)."),
         "mrwa": ("Traffic volume data, Main Roads Western Australia.\n"
                  "      Licensed under Creative Commons Attribution (CC BY 4.0)."),
         "nfdh": ("Harmonised traffic counts, National Freight Data Hub,\n"
@@ -654,12 +672,21 @@ bo@daleads.com.au.
     _AADT_CREDIT = set(_AADT_LICENSOR)
 
     name_src = {s for s in facts["name_sources"] if s}
-    used_src = name_src or {"vicroads"}
+    # Credit every publisher whose volumes drove a row, not only the ones whose
+    # street names got printed. Until 2026-08-05 this fell back to a hardcoded
+    # {"vicroads"} whenever no name was published, which is how an all-NSW grid
+    # could ship crediting Victoria.
+    used_src = {s for s in facts["volume_sources"] if s} | name_src
     unknown = used_src - set(_AADT_LICENSOR)
     if unknown:
         raise RuntimeError(
-            f"street names came from {sorted(unknown)}, which has no attribution block. "
-            "Add its licensor to _AADT_LICENSOR before shipping this file.")
+            f"traffic volumes/street names came from {sorted(unknown)}, which has no "
+            "attribution block. Add its licensor to _AADT_LICENSOR before shipping "
+            "this file.")
+    if not used_src:
+        raise RuntimeError(
+            "no measured-AADT publisher was recorded for any row, so the credit "
+            "block would ship empty. Refusing rather than guessing a licensor.")
     aadt_credit = "\n  ".join(_AADT_LICENSOR[s] for s in sorted(used_src))
     if not facts["named_rows"]:
         name_credit = "the traffic volumes behind the modelled levels"

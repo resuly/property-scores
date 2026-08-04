@@ -87,3 +87,45 @@
 - 全量回归：`162 passed`。
 - ⚠️ 未验证：生产机上的真实并发表现（本机是单 worker）；生产部署后需实跑一次
   sandbox 地址确认 `model_path_as_configured: true`。
+
+## ★ 独立 review 后的修改（第二轮）
+
+review 在本 repo 侧抓出 **1 个 blocker**，已修：
+
+**模型路径保证没闭合。** 原来的 `_EXPECTED_PATH = "transfer" if _TRANSFER_ENABLED
+else "physics"` 是**用本进程自己的配置去判断本进程的配置对不对**，只防得住
+"配置了但静默失败"，防不住"压根没配"。reviewer 实测：`NOISE_TRANSFER` 未设时，
+physics 网格带着 `model_path_as_configured=True` + `model_path_uniform=True` 全绿出货，
+**所有诚实字段互相印证，且全部是错的**。
+
+修法是让期望**从进程外部来**，两条腿：
+
+1. **`require_path` 由调用方给。** 商业 API pin `"transfer"`（那是生产在跑的），
+   评分服务不再自证。`model_path_expected_source` 报期望到底来自 caller 还是 process_env，
+   且 **不认识的 require_path 会退回 env 并如实标 `process_env`**（原实现会一边退回
+   一边仍标 `caller`，正好谎报这个字段存在的意义）。
+2. **`transfer_inputs_ok()` 读文件不读环境变量**：`transfer._load()` + 真的去看
+   `overture_roads.parquet` 存不存在、非不非空。这样"开关没开"和"开了但读不到数据"
+   能分开——2026-08-05 那次事故恰恰是 env 全对而数据路径断了，任何查 env 的探针都会报全绿。
+
+**实机验证**（同一份代码，起两个服务）：
+- `NOISE_TRANSFER=1`：`model_path {'transfer': 25}`、`expected transfer`、
+  `source caller`、`as_configured True`
+- **未设 env**：不带 `require_path` 时自证版给 `expected physics` / `as_configured **True**`（全绿，错的）；
+  带 `require_path=transfer` 时 `as_configured **False**`（抓到），
+  且 `transfer_inputs_ok True` 指明是"没开"而不是"读不到数据"
+- 端到端：da_leads 侧收到 mismatch 后**整层不发**，`meta.surfaces.unavailable.noise.reason
+  = model_path_mismatch`
+
+顺带（H5 的上游一半）：`/scores/noise/surface` 的限流桶改成
+**按调用方**（`X-Surface-Caller` 头，缺省退回 x-real-ip / client host），
+桶名加 `surface:` 前缀与点端点隔离。否则 da_leads 所有客户共用 127.0.0.1 一个桶，
+一个客户打满会让另一个客户**静默丢掉整个噪声层**。
+
+**测试**：16 → **19 条**。第二轮变异注入 10 个 bug，1 个存活后补了断言：
+`transfer_inputs_ok` 的探针测试原本两个断言都指向同一个不存在的目录，
+路径检查先失败把模型加载检查完全遮住（删掉 `_load` 检查照样全绿）；
+改成用 `tmp_path` 造真目录逐个隔离三种失败模式，再补一条"全都在 → True"
+防止探针恒 False 也算通过。
+
+**回归**：`165 passed`。

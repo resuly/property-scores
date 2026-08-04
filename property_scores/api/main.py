@@ -383,24 +383,33 @@ def get_noise_surface(
     request: Request,
     lat: float = Query(...), lng: float = Query(...),
     radius: int = Query(1500), cells: int = Query(7),
+    require_path: str | None = Query(
+        None, description="Model path this deployment is supposed to run "
+                          "('transfer' in production). The response reports "
+                          "whether the grid actually used it."),
 ):
     """Modelled Lden on a grid around a point, for the licensed property API's
     per-property noise surface.
 
     Built in-process rather than by the caller fanning out over /scores/noise:
-    one grid is up to 81 model runs, which trips this endpoint's per-IP rate
+    one grid is up to 81 model runs, which trips that endpoint's per-IP rate
     limit, and keeping it here means a node cannot be computed under a model
     configuration production does not use (see noise/surface.py).
 
-    Rate limited well below the point endpoint because one call is a grid,
-    not a point.
+    Rate limited well below the point endpoint because one call is a grid, not
+    a point. The bucket is keyed per caller where the caller identifies itself,
+    so one API customer's grids cannot exhaust another's: this service listens
+    on loopback only, and the header is set by our own web process.
     """
     from property_scores.noise.surface import noise_surface
-    ip = request.headers.get("x-real-ip") or request.client.host
-    if not _check_rate(ip, limit=20):
+    bucket = (request.headers.get("x-surface-caller")
+              or request.headers.get("x-real-ip")
+              or request.client.host)
+    if not _check_rate(f"surface:{bucket}", limit=20):
         return JSONResponse({"error": "Rate limit exceeded."}, status_code=429)
     try:
-        grid = noise_surface(lat, lng, radius_m=radius, cells=cells)
+        grid = noise_surface(lat, lng, radius_m=radius, cells=cells,
+                             require_path=require_path)
         if not grid:
             return JSONResponse({"error": "no noise coverage"}, status_code=404)
         return grid

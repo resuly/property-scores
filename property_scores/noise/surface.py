@@ -7,12 +7,17 @@ wrong shape twice over: 49 requests trip the per-IP rate limit on
 /scores/noise, and every hop out of this process is a chance for the caller to
 end up on a different model path than production.
 
-Building the grid HERE fixes both. It runs inside the service that already
-holds NOISE_TRANSFER / NOISE_QUIET_RECAL / NOISE_RAIL_RECAL and the rasters the
-transfer model needs, so a grid node cannot be computed under a configuration
-production does not use. The one thing a caller could still get wrong is
-reading the result as uniform when it is not, so `model_path` counts the nodes
-by `lden_source` and the caller is told when more than one path contributed.
+Building the grid HERE fixes both. It runs inside the service that holds
+NOISE_TRANSFER / NOISE_QUIET_RECAL / NOISE_RAIL_RECAL and the rasters the
+transfer model needs, so a node cannot be computed somewhere those are absent.
+
+That is necessary and not sufficient, which the first version of this module
+got wrong: running in the right process does not prove the process is
+configured, and a deployment that never set NOISE_TRANSFER produces a grid that
+is complete, uniform and quietly on the wrong model. So the caller states which
+path production runs (`require_path`) and the response reports whether the
+nodes actually used it (`model_path_as_configured`), alongside a probe of the
+model's real inputs (`transfer_inputs_ok`). See the note above _ENV_PATH.
 
 Nodes go through `noise_score` (the live point model), NOT through
 `noise.cache.lookup`. That is deliberate and not an optimisation missed:
@@ -37,21 +42,56 @@ from property_scores.noise.score import noise_score, _TRANSFER_ENABLED
 
 logger = logging.getLogger(__name__)
 
-# What lden_source the environment says every node SHOULD carry. Reported
-# alongside what the nodes actually carried, because "all 49 nodes agree" is
-# not the same as "all 49 nodes ran the configured model" and the failure looks
-# identical from outside: transfer_lden falls back to physics on any exception,
-# so a grid computed with the transfer model unavailable comes back uniform,
-# complete, and plausible.
+# Which lden_source the nodes should carry, and how confident we are allowed to
+# be about that.
 #
-# This is not hypothetical. property_scores/noise/transfer.py resolves its
-# parquet inputs from `Path(__file__).parent.parent.parent / "data"` and
-# ignores DATA_DIR, so ANY checkout that is not the deployed one (a git
-# worktree, for example) fails to read overture_roads.parquet and silently
-# serves physics. Caught exactly that way on 2026-08-05 while building this
-# module: local 65.5 physics against production 65.3 transfer for the same
-# coordinate, with nothing in the local response saying so.
-_EXPECTED_PATH = "transfer" if _TRANSFER_ENABLED else "physics"
+# The failure this guards is not "the grid disagrees with itself". It is a grid
+# that agrees with itself perfectly and is wrong: transfer_lden falls back to
+# physics on ANY exception, so a process that cannot reach the transfer model's
+# inputs returns a grid that is complete, uniform and plausible. That happened
+# on 2026-08-05 while this module was being written --
+# property_scores/noise/transfer.py resolves its parquet inputs from
+# `Path(__file__).parent.parent.parent / "data"` and ignores DATA_DIR, so any
+# checkout that is not the deployed one (a git worktree, say) reads no roads and
+# silently serves physics. Local 65.5 physics against production 65.3 transfer
+# for the same coordinate, with nothing in the response saying so.
+#
+# ★ The first version of this guard derived its expectation from
+# `_TRANSFER_ENABLED`, i.e. from THIS process's own environment, and so could
+# only ever catch "configured but broken". With NOISE_TRANSFER simply unset it
+# expected physics, got physics, and reported a fully green grid -- every
+# honesty field corroborating every other honesty field, all of them wrong. A
+# check that reads its own configuration to decide whether its configuration is
+# right is not a check.
+#
+# So expectation now comes from OUTSIDE the process, in two ways:
+#   * `require_path`, passed by the caller. The commercial API pins "transfer"
+#     because that is what production runs; it is not asking this process's
+#     opinion.
+#   * `transfer_inputs_ok()`, which probes the actual files rather than the
+#     env, so "not configured" and "configured but unreadable" are separable.
+_ENV_PATH = "transfer" if _TRANSFER_ENABLED else "physics"
+ALLOWED_PATHS = ("transfer", "physics")
+
+
+def transfer_inputs_ok() -> bool:
+    """Can this process actually run the transfer model right now?
+
+    Reads the files, does not read the environment. `_load()` covers the RF and
+    the calibration; the road parquet is checked separately because that is the
+    one `transfer.py` resolves relative to its own location, which is exactly
+    the path that breaks in a non-deployed checkout while everything else looks
+    healthy.
+    """
+    try:
+        from property_scores.noise import transfer
+        if not transfer._load():
+            return False
+        roads = transfer._DATA_DIR / "overture_roads.parquet"
+        return roads.exists() and roads.stat().st_size > 0
+    except Exception:
+        logger.warning("transfer input preflight failed", exc_info=True)
+        return False
 
 # Odd, so the subject sits ON a node instead of between four of them.
 CELLS_DEFAULT = 7
@@ -89,16 +129,30 @@ def _node(lat: float, lng: float) -> dict | None:
 
 def noise_surface(lat: float, lng: float, radius_m: int = RADIUS_DEFAULT_M,
                   cells: int = CELLS_DEFAULT,
-                  deadline_s: float = DEADLINE_S) -> dict | None:
+                  deadline_s: float = DEADLINE_S,
+                  require_path: str | None = None) -> dict | None:
     """Grid of modelled Lden around a point.
 
     Row 0 is the northern edge and column 0 the western edge (row-major, the
     same orientation as the land-cover grid the map already consumes, so one
     loop paints both). The subject is the centre node.
+
+    `require_path` is the caller's statement of which model path this
+    deployment is supposed to run ("transfer" in production). It is the only
+    expectation this function will not second-guess; without it the function
+    falls back to its own environment, which cannot detect a deployment that
+    was never configured in the first place.
     """
     if cells not in CELLS_ALLOWED:
         cells = CELLS_DEFAULT
     radius_m = int(max(RADIUS_MIN_M, min(radius_m, RADIUS_MAX_M)))
+    # An unrecognised require_path is ignored rather than trusted, and the
+    # source label follows what was actually USED. Labelling it "caller" while
+    # quietly falling back would misreport exactly the thing this field exists
+    # to make auditable.
+    honoured = require_path in ALLOWED_PATHS
+    expected = require_path if honoured else _ENV_PATH
+    inputs_ok = transfer_inputs_ok()
 
     dlat_per_m, dlng_per_m = _deg_per_m(lat)
     half = (cells - 1) // 2
@@ -164,17 +218,28 @@ def noise_surface(lat: float, lng: float, radius_m: int = RADIUS_DEFAULT_M,
         "elapsed_ms": int((time.monotonic() - started) * 1000),
         "model_path": paths,
         "model_path_uniform": len(paths) <= 1,
-        "model_path_expected": _EXPECTED_PATH,
-        # False means the run did NOT use the model this deployment is
-        # configured for. Some nodes legitimately fall back (no DEM or land
-        # cover coverage), so this is a flag on the grid, not a refusal; the
-        # counts in model_path say how much of it fell back.
-        "model_path_as_configured": paths.get(_EXPECTED_PATH, 0) == filled,
+        # Where the expectation came from, so a reader can tell an assertion
+        # against the deployment's stated model from one the process made up
+        # about itself.
+        "model_path_expected": expected,
+        "model_path_expected_source": "caller" if honoured else "process_env",
+        # Probes the files, not the environment: True with an expectation of
+        # physics means the transfer model IS available and simply switched
+        # off, which is a configuration mistake in production, not a data gap.
+        "transfer_inputs_ok": inputs_ok,
+        # False means the run did NOT use the model it was supposed to. Some
+        # nodes legitimately fall back (no DEM or land-cover coverage), so this
+        # is a flag on the grid rather than a refusal; model_path counts how
+        # much of it fell back.
+        "model_path_as_configured": paths.get(expected, 0) == filled,
     }
     if not out["model_path_as_configured"]:
         logger.error(
-            "noise surface at %s,%s expected lden_source=%s but got %s "
-            "(check the transfer model's data inputs are readable from THIS "
-            "checkout: transfer.py resolves them relative to its own file, "
-            "not DATA_DIR)", lat, lng, _EXPECTED_PATH, paths)
+            "noise surface at %s,%s expected lden_source=%s (from %s) but got "
+            "%s; transfer inputs readable=%s. If the inputs are readable and "
+            "the nodes are still physics, NOISE_TRANSFER is not set on this "
+            "process. If they are NOT readable, this checkout cannot see "
+            "overture_roads.parquet -- transfer.py resolves it relative to its "
+            "own file, not DATA_DIR.",
+            lat, lng, expected, out["model_path_expected_source"], paths, inputs_ok)
     return out

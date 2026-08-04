@@ -6,6 +6,7 @@ a run on the wrong model path is visible instead of merely uniform.
 """
 
 import math
+import pathlib
 
 import pytest
 
@@ -139,27 +140,97 @@ def test_no_nodes_at_all_returns_none(monkeypatch):
     assert ns.noise_surface(-37.8, 144.96) is None
 
 
-def test_model_path_as_configured_true_when_every_node_ran_the_configured_model(monkeypatch):
+def test_caller_supplied_path_is_the_expectation(monkeypatch):
     _stub(monkeypatch, path="transfer")
-    monkeypatch.setattr(ns, "_EXPECTED_PATH", "transfer")
-    out = ns.noise_surface(-37.8, 144.96, cells=5)
+    monkeypatch.setattr(ns, "transfer_inputs_ok", lambda: True)
+    out = ns.noise_surface(-37.8, 144.96, cells=5, require_path="transfer")
     assert out["model_path"] == {"transfer": 25}
-    assert out["model_path_uniform"] is True
+    assert out["model_path_expected"] == "transfer"
+    assert out["model_path_expected_source"] == "caller"
     assert out["model_path_as_configured"] is True
 
 
-def test_a_uniformly_wrong_model_path_is_still_caught(monkeypatch):
-    """The failure this field exists for. transfer_lden falls back to physics
-    on ANY exception, so a checkout that cannot read the transfer model's
-    parquet inputs returns a grid that is complete, uniform and plausible --
-    and wrong. Uniformity is not the test; agreement with the configured
-    model is."""
+def test_unconfigured_deployment_is_caught_because_the_caller_pins_the_path(monkeypatch):
+    """★ The hole in the first version of this guard.
+
+    It derived its expectation from this process's own NOISE_TRANSFER, so with
+    the variable simply unset it expected physics, got physics, and returned a
+    fully green grid: model_path_uniform true, model_path_as_configured true,
+    every honesty field corroborating every other one and all of them wrong. A
+    check that reads its own configuration to decide whether its configuration
+    is right is not a check. The expectation has to come from outside.
+    """
     _stub(monkeypatch, path="physics")
-    monkeypatch.setattr(ns, "_EXPECTED_PATH", "transfer")
+    monkeypatch.setattr(ns, "_ENV_PATH", "physics")     # NOISE_TRANSFER unset
+    monkeypatch.setattr(ns, "transfer_inputs_ok", lambda: True)
+
+    # Self-certifying: agrees with itself, and is wrong.
+    loose = ns.noise_surface(-37.8, 144.96, cells=5)
+    assert loose["model_path_uniform"] is True
+    assert loose["model_path_as_configured"] is True
+
+    # The caller states what production runs, and the same grid fails.
+    pinned = ns.noise_surface(-37.8, 144.96, cells=5, require_path="transfer")
+    assert pinned["model_path_uniform"] is True          # still looks clean
+    assert pinned["model_path_as_configured"] is False   # and is caught
+    assert pinned["model_path_expected_source"] == "caller"
+    # transfer_inputs_ok separates "switched off" from "cannot read its data".
+    assert pinned["transfer_inputs_ok"] is True
+
+
+def test_expected_path_derivation_without_a_caller(monkeypatch):
+    """Covers the fallback itself. Every other test pins require_path, which is
+    precisely how the derivation escaped scrutiny the first time round."""
+    monkeypatch.setattr(ns, "_ENV_PATH", "transfer")
+    _stub(monkeypatch, path="physics")
+    monkeypatch.setattr(ns, "transfer_inputs_ok", lambda: False)
     out = ns.noise_surface(-37.8, 144.96, cells=5)
-    assert out["model_path_uniform"] is True         # looks clean
-    assert out["model_path_as_configured"] is False  # and is reported as wrong
     assert out["model_path_expected"] == "transfer"
+    assert out["model_path_expected_source"] == "process_env"
+    assert out["model_path_as_configured"] is False
+    assert out["transfer_inputs_ok"] is False
+
+
+def test_unknown_require_path_falls_back_rather_than_trusting_it(monkeypatch):
+    monkeypatch.setattr(ns, "_ENV_PATH", "transfer")
+    _stub(monkeypatch, path="transfer")
+    monkeypatch.setattr(ns, "transfer_inputs_ok", lambda: True)
+    out = ns.noise_surface(-37.8, 144.96, cells=5, require_path="wishful")
+    assert out["model_path_expected"] == "transfer"
+    assert out["model_path_expected_source"] == "process_env"
+
+
+def test_transfer_inputs_probe_reads_files_not_the_environment(monkeypatch, tmp_path):
+    """The 2026-08-05 failure was a readable env and an unreadable data dir, so
+    a probe that consults NOISE_TRANSFER would have reported all clear."""
+    from property_scores.noise import transfer
+
+    # A data dir that DOES hold a road parquet, so each assertion below isolates
+    # one failure mode. Pointing both cases at a missing directory (the first
+    # version) made the model-load check untestable: the path check failed
+    # first and the test passed with that check deleted.
+    good = tmp_path / "data"
+    good.mkdir()
+    (good / "overture_roads.parquet").write_bytes(b"not empty")
+
+    # Model loads, data dir unreachable -> the 2026-08-05 failure exactly.
+    monkeypatch.setattr(transfer, "_load", lambda: True)
+    monkeypatch.setattr(transfer, "_DATA_DIR", pathlib.Path("/nonexistent/data"))
+    assert ns.transfer_inputs_ok() is False
+
+    # Data dir fine, model will not load.
+    monkeypatch.setattr(transfer, "_DATA_DIR", good)
+    monkeypatch.setattr(transfer, "_load", lambda: False)
+    assert ns.transfer_inputs_ok() is False
+
+    # An empty parquet is not a usable input either.
+    (good / "overture_roads.parquet").write_bytes(b"")
+    monkeypatch.setattr(transfer, "_load", lambda: True)
+    assert ns.transfer_inputs_ok() is False
+
+    # Everything present -> True, so the probe is not just always False.
+    (good / "overture_roads.parquet").write_bytes(b"not empty")
+    assert ns.transfer_inputs_ok() is True
 
 
 def test_partial_fallback_is_reported_without_condemning_the_grid(monkeypatch):
@@ -171,8 +242,8 @@ def test_partial_fallback_is_reported_without_condemning_the_grid(monkeypatch):
         return {"lden_db": 60.0, "score": 50, "lden_source": next(seq)}
 
     monkeypatch.setattr(ns, "noise_score", fake)
-    monkeypatch.setattr(ns, "_EXPECTED_PATH", "transfer")
-    out = ns.noise_surface(-37.8, 144.96, cells=5)
+    monkeypatch.setattr(ns, "transfer_inputs_ok", lambda: True)
+    out = ns.noise_surface(-37.8, 144.96, cells=5, require_path="transfer")
     assert out["model_path"] == {"transfer": 20, "physics": 5}
     assert out["model_path_uniform"] is False
     assert out["model_path_as_configured"] is False

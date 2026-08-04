@@ -120,6 +120,23 @@ property-scores 又犯了一次，而且这次**带进了一个 commit message �
   的导出目前一律出不去 —— 新加的四个州许可条目**在维州以外还无法端到端跑通**。
   要放开得先跟各发布方核实调查年份（不该我拍脑袋填）。已写进 `_require_vintage` docstring。
 
+## ⚠️ 还误删过两个与本分支无关的文件（已还原）
+
+`property_scores/noise/surface.py` 和 `tests/test_noise_surface.py`（258 行）
+**曾被本分支删掉**，master 上一直有。是上面那个「注入验证还原」翻车的第三种变体：
+备份用的 `cp -r` 静默失败没建出目标目录，还原步骤照跑 `rm -rf property_scores scripts tests`
+却什么都没拷回来，我用 `git checkout .` 抢救 —— 但那之前的某次 `git add -A` 已经把删除
+暂存了，于是它们「被还原成了删除状态」。
+
+**测试套件对此毫无反应**（文件没了，自然没有失败），是靠**跟 master 逐文件比 diff**
+才发现的。已从 master 原样还原，`git diff master..defect-fixes --diff-filter=D` 现在是 0。
+
+> 教训不是「小心用 git checkout」，是：**还原不要靠删除**；
+> **在宣称改动集是我想改的那些之前，先跟基线分支 diff 一遍文件清单**。
+> 这条同样适用于 Bo 合并前的核对 —— `--diff-filter=D` 花一秒钟，能挡住这类事故。
+>
+> da_leads 那边同样查过：**零误删**，改动清单就是预期的 7 个文件。
+
 ## 改了哪些文件
 
 `git diff master..defect-fixes --stat`（master 自本分支切出后**没有**推进，
@@ -184,7 +201,9 @@ property-scores 又犯了一次，而且这次**带进了一个 commit message �
 - 单测 23 条全过；并**逐条注入 6 种缺陷验证会红**（两个 blocker + 原始 vicroads 硬编码 +
   删整个 VicRoads 许可块 + 删 Overture 的 source_state + 空发布方集合改回报错），
   还原后全绿。
-- 全量测试：`pytest tests/ --ignore=tests/test_noise.py` → **113 passed, 7 skipped**。
+- 全量测试：`pytest tests/ --ignore=tests/test_noise.py` → **131 passed / 1 failed / 7 skipped**。
+  唯一失败是 `test_noise_surface.py::test_transfer_inputs_probe_reads_files_not_the_environment`
+  （本机缺 `rasterio`），**已确认 master 上逐字相同**，与本分支无关。
   `tests/test_noise.py` 在本机无法收集（缺 `rasterio`），**已确认 master 上同样如此，
   是既有环境问题不是本分支引入**；服务器上没装 pytest，故该文件本轮未能跑。
 

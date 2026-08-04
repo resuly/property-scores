@@ -111,12 +111,16 @@ _TRANSFER_ENABLED = os.environ.get("NOISE_TRANSFER", "0") == "1"
 # NOISE_MODEL_ID covers the env override only — a registry `activate` with no
 # env change is invisible here and rides out inside the 24h result TTL.
 #
-# The trailing payload-shape tag is not a tunable: it is bumped whenever the
-# cached dict's SHAPE or LABELS change without its numbers changing, which the
-# rest of this signature cannot see. "src2" = road sources carry the real
-# publisher and a geographic source_state (2026-08-05); under "src1" every
-# measured AADT row was stamped "vicroads". Without the bump, ~8k already-cached
-# entries would keep serving the wrong label for up to 24h after deploy.
+# The payload-shape tag is not a tunable: it is bumped whenever the cached
+# dict's SHAPE or LABELS change without its numbers changing, which the rest of
+# this signature cannot see. "src2" = road sources carry the real publisher and
+# a geographic source_state (2026-08-05). There was no "src1" token in the
+# signature before this — the tag is new, and the numbering starts at 2 only so
+# that pre-tag entries (which had every measured AADT row stamped "vicroads")
+# cannot collide with it. Measured on the production cache the day of the
+# change: 16,628 rows, of which 15,712 were still inside the 24h TTL and 8,037
+# carried a "vicroads" label. Without the bump every one of those would have
+# kept serving its old label until it aged out.
 _CONFIG_SIG = ":".join((
     NOISE_MODEL_VERSION,
     "src2",
@@ -586,11 +590,16 @@ def _source_state(src_lat, src_lng):
 
     Deliberately computed from the source's own coordinates, never read from an
     upstream `state` column. The NFDH national file labels a counter with the
-    JURISDICTION OF THE REPORTING AGENCY, not its location: all 15 NFDH rows
-    inside the ACT (Majura Parkway, Federal Hwy — clientid `nswwim`/`nswrms`)
-    carry state='NSW', and 22 more rows straddle the NSW/QLD and NSW/VIC
-    borders the same way. Publishing that column would tell a Canberra customer
-    their nearest counter is in New South Wales.
+    JURISDICTION OF THE REPORTING AGENCY, not its location. Measured over all
+    8,142 NFDH rows on 2026-08-05, 37 disagree with their own geometry:
+
+        NSW->ACT 15   (Majura Pkwy / Federal Hwy; clientid nswwim 13, nswrms 2)
+        NSW->QLD  8   NSW->VIC 6   VIC->NSW 4   QLD->NSW 2   VIC->SA 2
+
+    The 15 ACT rows are the unambiguous ones — Canberra is tens of km from the
+    border, so publishing that column would tell a Canberra customer their
+    nearest counter is in New South Wales. The other 22 sit on border lines
+    where the disagreement is as likely to be our own boundary precision.
 
     Returns None outside Australia rather than guessing.
     """

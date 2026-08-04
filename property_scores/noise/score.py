@@ -100,6 +100,25 @@ _ML_CORRECTION_ENABLED = os.environ.get("NOISE_ML_CORRECTION", "0") == "1"
 # to physics on any failure or when DEM/landcover coverage is missing.
 _TRANSFER_ENABLED = os.environ.get("NOISE_TRANSFER", "0") == "1"
 
+# Everything that changes noise numbers without changing code, baked into the
+# result-cache key so a call under one configuration can never serve a later
+# call under another. 2026-08-03: one env-less CLI probe on the server wrote a
+# physics row into the shared cache; a transfer-configured export then read it
+# back and shipped it, and the probe itself made the export "verify" clean.
+# NOISE_MODEL_VERSION already carries the aadt/quiet/rail flags; the rest are
+# the flags and tunables the version string deliberately does not carry (it
+# gates precomputed grids, where a suffix change forces a full re-bake).
+# NOISE_MODEL_ID covers the env override only — a registry `activate` with no
+# env change is invisible here and rides out inside the 24h result TTL.
+_CONFIG_SIG = ":".join((
+    NOISE_MODEL_VERSION,
+    "t1" if _TRANSFER_ENABLED else "t0",
+    "m1" if _ML_CORRECTION_ENABLED else "m0",
+    f"r{_RAIL_RECAL_DB:g}" if _RAIL_RECAL_ENABLED else "r-",
+    f"k{_AADT_ADJUST_K:g}" if _AADT_ADJUST_ENABLED else "k-",
+    os.environ.get("NOISE_MODEL_ID", ""),
+))
+
 # Quiet-end physics anchor: the per-state affine is fit on urban facade samples
 # (~46-78 dB Lden) and extrapolates badly below that support, lifting genuinely
 # quiet low-traffic areas by ~10 dB. Where the motor-road network is sparse AND
@@ -583,7 +602,7 @@ def _apply_measured_disclosure(state, measured, ci_db, low_confidence,
 
 def noise_score(lat: float, lng: float, radius_m: int = 500,
                 *, source: str | None = None) -> dict:
-    _ck = f"{round(lat, 5)}:{round(lng, 5)}:{radius_m}:{source or ''}"
+    _ck = f"{round(lat, 5)}:{round(lng, 5)}:{radius_m}:{source or ''}:{_CONFIG_SIG}"
     _hit = _cache_get(_CACHE_DB, _ck, _RESULT_CACHE_TTL)
     if _hit is not None:
         return {**_hit, "cached": True}
@@ -956,6 +975,15 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
                     rail_night_leq,
                     aircraft_leq), AMBIENT_DB)
                 lden = _lden(leq_day_t, leq_eve_t, leq_night_t)
+                # Return the same chain lden was built from. These _t values
+                # used to be folded into lden and discarded while the response
+                # carried the physics-chain leq_*_db beside a transfer lden_db,
+                # so the shipped columns could not reconstruct the Lden next to
+                # them (62% of a 317-point export off by >3 dB, 2026-08-03).
+                leq_day_val, leq_eve_val, leq_night_val = (
+                    leq_day_t, leq_eve_t, leq_night_t)
+                leq_24h = max(
+                    _energy_sum(road_leq_t, rail_leq, aircraft_leq), AMBIENT_DB)
             else:
                 # No road contribution: rail + aircraft (+ ambient) only; the RF's
                 # road prediction is moot, so keep the physics rail/aircraft mix.

@@ -493,3 +493,42 @@ def test_debug_rail_source_screening_matches_score_formula(monkeypatch):
     assert round(got_screening, 2) == round(raw_screening_db * expected_factor, 2)
     assert got_screening != round(raw_screening_db * 0.6, 2), \
         "this is exactly the old bug: flat 0.6 regardless of distance"
+
+
+def test_result_cache_key_carries_model_config():
+    """Cache guard for the 2026-08-03 incident: an env-less CLI probe wrote a
+    physics row into the shared result cache and a NOISE_TRANSFER=1 export read
+    it back. The key must differ across every env that changes noise numbers
+    but is deliberately kept out of NOISE_MODEL_VERSION (which gates the
+    precomputed grids, where a suffix change forces a full re-bake)."""
+    import os
+    import subprocess
+    import sys as _sys
+
+    def sig(env_pairs):
+        sets = "".join(f"os.environ['{k}']='{v}'; " for k, v in env_pairs)
+        code = ("import os; " + sets +
+                "from property_scores.noise.score import _CONFIG_SIG; "
+                "print(_CONFIG_SIG)")
+        # A runner with NOISE_* already exported would make base == variant for
+        # the inherited flag; strip them so the child sees only env_pairs.
+        clean = {k: v for k, v in os.environ.items()
+                 if not k.startswith("NOISE_")}
+        out = subprocess.run([_sys.executable, "-c", code], capture_output=True,
+                             text=True, timeout=120, env=clean)
+        assert out.returncode == 0, out.stderr
+        return out.stdout.strip()
+
+    base = sig([])
+    for pairs in ([("NOISE_TRANSFER", "1")],
+                  [("NOISE_ML_CORRECTION", "1")],
+                  [("NOISE_RAIL_RECAL", "1")],
+                  [("NOISE_RAIL_RECAL", "1"), ("NOISE_RAIL_RECAL_DB", "5.0")],
+                  [("NOISE_MODEL_ID", "some-other-model")]):
+        assert sig(pairs) != base, pairs
+    # and the sig actually reaches the key
+    import inspect
+    from property_scores.noise import score as _s
+    src = inspect.getsource(_s.noise_score)
+    assert "_CONFIG_SIG" in src.split("_cache_get")[0], \
+        "config signature must be part of _ck before the cache lookup"

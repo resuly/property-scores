@@ -378,6 +378,37 @@ def get_contamination(lat: float = Query(...), lng: float = Query(...)):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.get("/scores/noise/surface")
+def get_noise_surface(
+    request: Request,
+    lat: float = Query(...), lng: float = Query(...),
+    radius: int = Query(1500), cells: int = Query(7),
+):
+    """Modelled Lden on a grid around a point, for the licensed property API's
+    per-property noise surface.
+
+    Built in-process rather than by the caller fanning out over /scores/noise:
+    one grid is up to 81 model runs, which trips this endpoint's per-IP rate
+    limit, and keeping it here means a node cannot be computed under a model
+    configuration production does not use (see noise/surface.py).
+
+    Rate limited well below the point endpoint because one call is a grid,
+    not a point.
+    """
+    from property_scores.noise.surface import noise_surface
+    ip = request.headers.get("x-real-ip") or request.client.host
+    if not _check_rate(ip, limit=20):
+        return JSONResponse({"error": "Rate limit exceeded."}, status_code=429)
+    try:
+        grid = noise_surface(lat, lng, radius_m=radius, cells=cells)
+        if not grid:
+            return JSONResponse({"error": "no noise coverage"}, status_code=404)
+        return grid
+    except Exception as e:
+        logger.exception("noise surface failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.get("/scores/noise/terrain")
 def get_noise_terrain(
     src_lat: float = Query(...), src_lng: float = Query(...),

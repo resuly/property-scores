@@ -122,18 +122,23 @@ property-scores 又犯了一次，而且这次**带进了一个 commit message �
 
 ## ⚠️ 还误删过两个与本分支无关的文件（已还原）
 
-`property_scores/noise/surface.py` 和 `tests/test_noise_surface.py`（258 行）
-**曾被本分支删掉**，master 上一直有。是上面那个「注入验证还原」翻车的第三种变体：
+三样东西**曾被本分支删掉**，master 上一直有：
+`property_scores/noise/surface.py`、`tests/test_noise_surface.py`（258 行），
+以及 `property_scores/api/main.py` 里**整个 `/scores/noise/surface` 线上端点**（40 行）
+—— 模块、路由、测试**成套消失**，所以一条测试都不会红。是上面那个「注入验证还原」翻车的第三种变体：
 备份用的 `cp -r` 静默失败没建出目标目录，还原步骤照跑 `rm -rf property_scores scripts tests`
 却什么都没拷回来，我用 `git checkout .` 抢救 —— 但那之前的某次 `git add -A` 已经把删除
 暂存了，于是它们「被还原成了删除状态」。
 
-**测试套件对此毫无反应**（文件没了，自然没有失败），是靠**跟 master 逐文件比 diff**
-才发现的。已从 master 原样还原，`git diff master..defect-fixes --diff-filter=D` 现在是 0。
+**测试套件对此毫无反应**（成套没了，自然没有失败）。发现过程本身也是个教训：
+先用 `--diff-filter=D` 只查到那两个文件，**端点那 40 行没查出来**（文件还在，只是内容被删），
+是把 `--stat` 整张扫一遍才看见的。三样都已从 master 原样还原。
 
 > 教训不是「小心用 git checkout」，是：**还原不要靠删除**；
-> **在宣称改动集是我想改的那些之前，先跟基线分支 diff 一遍文件清单**。
-> 这条同样适用于 Bo 合并前的核对 —— `--diff-filter=D` 花一秒钟，能挡住这类事故。
+> **在宣称改动集是我想改的那些之前，跟基线分支把整张 `--stat` 和所有被删掉的行扫一遍**
+> —— 只查「被删的文件」不够，被掏空的文件查不出来。
+> 收尾时我把 `git diff master..defect-fixes` 里**每一条 `-` 行**都过了一遍，
+> 现在全部是有意为之。Bo 合并前也建议扫一眼这张表。
 >
 > da_leads 那边同样查过：**零误删**，改动清单就是预期的 7 个文件。
 
@@ -143,16 +148,16 @@ property-scores 又犯了一次，而且这次**带进了一个 commit message �
 仍在 `275cf4da`，所以这个基线是准的）：
 
 ```
-(现跑 `git diff master..defect-fixes --stat` 为准;截至收尾:)
+ CHANGES.md                            | 318 ++++++++++++++++++++-------------
  property_scores/api/static/noise.html |   2 +-
- property_scores/common/overture.py    |  88 ++++++++---
+ property_scores/common/overture.py    |  88 +++++++---
  property_scores/noise/debug.py        |   9 +-
- property_scores/noise/score.py        |  66 +++++++-
+ property_scores/noise/score.py        |  63 ++++++-
  scripts/eis_aadt_diagnose.py          |   2 +-
  scripts/experiment_retrain_noise.py   |   4 +-
- scripts/export_noise_grid_csv.py      | 130 ++++++++++-----
- tests/test_aadt_source_labels.py      | 340 +++++++++++++++++++++++++++++++++
- 9 files changed
+ scripts/export_noise_grid_csv.py      | 152 ++++++++++++----
+ tests/test_aadt_source_labels.py      | 321 ++++++++++++++++++++++++++++++++++
+ 9 files changed, 774 insertions(+), 185 deletions(-)
 ```
 
 合并风险：低。master 未推进，无重叠改动。

@@ -725,7 +725,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
 
     # --- Overture roads (fill gaps: residential streets not in measured AADT) ---
     # Dedup: skip Overture major roads within 80m of any measured AADT source
-    measured_distances = ([d for _, _, _, d, _, _ in aadt_segments]
+    measured_distances = ([d for _, _, _, d, _, _, _ in aadt_segments]
                          + [d for _, _, _, d, _, _ in nfdh_stations])
     roads = roads_near(db, lat, lng, radius_m, source=source, legacy_distance=True)
     overture_levels: list[tuple[float, dict]] = []
@@ -750,6 +750,9 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
                 continue
             overture_levels.append((l_db, {
                 "source": "overture",
+                # Present on every road source, so a consumer never has to guess
+                # whether a missing key means "unknown" or "not that kind of row".
+                "source_state": _source_state(src_lat, src_lng),
                 "class": road_class,
                 "speed_kmh": speed_kmh,
                 "aadt_est": aadt_est,
@@ -1355,7 +1358,7 @@ if __name__ == "__main__":
         print(f" | Rail: {result['rail_db']} dB", end="")
     if result.get("aircraft_db"):
         print(f" | Aircraft: {result['aircraft_db']} dB", end="")
-    print(f"\nAADT: {result['aadt_segments']} VicRoads + {result['nfdh_stations']} NFDH | Overture roads: {result['road_count']}")
+    print(f"\nAADT: {result['aadt_segments']} state road authority + {result['nfdh_stations']} NFDH | Overture roads: {result['road_count']}")
     if result.get("dominant_road"):
         d = result["dominant_road"]
         src = d.get("road_name", d.get("class", "?"))

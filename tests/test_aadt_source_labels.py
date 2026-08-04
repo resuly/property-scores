@@ -56,18 +56,93 @@ def test_unregistered_state_is_marked_not_guessed():
     assert label not in overture.AADT_SOURCE_BY_STATE.values()
 
 
-def test_registered_labels_all_have_a_licensor_block():
-    """Every publisher we can emit must be creditable, or exports break at ship time."""
+def _load_export_module():
+    """Import the export script by path (scripts/ is not a package)."""
     import importlib.util
     from pathlib import Path
 
-    src = (Path(__file__).resolve().parent.parent
-           / "scripts" / "export_noise_grid_csv.py").read_text(encoding="utf-8")
-    for label in list(overture.AADT_SOURCE_BY_STATE.values()) + ["nfdh"]:
-        assert f'"{label}"' in src, (
-            f"{label!r} can be emitted as a source but has no attribution block "
-            "in export_noise_grid_csv.py's _AADT_LICENSOR")
-    assert importlib.util.find_spec is not None  # keep import meaningful
+    path = (Path(__file__).resolve().parent.parent
+            / "scripts" / "export_noise_grid_csv.py")
+    spec = importlib.util.spec_from_file_location("_export_noise_grid_csv", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_registered_labels_all_have_a_licensor_block():
+    """Every publisher we can emit must be creditable, or exports break at ship time.
+
+    Compares the actual dicts. The earlier version substring-matched the script's
+    SOURCE TEXT for '"vicroads"', which a 2026-08-05 review defeated by deleting
+    the whole VicRoads licensor entry: the string still occurred in two comments,
+    so the test stayed green while any VIC grid would have crashed at ship time.
+    """
+    export = _load_export_module()
+    emittable = set(overture.AADT_SOURCE_BY_STATE.values()) | {"nfdh"}
+    missing = emittable - set(export._AADT_LICENSOR)
+    assert not missing, (
+        f"{sorted(missing)} can be emitted as a source but have no attribution "
+        "block in export_noise_grid_csv.py's _AADT_LICENSOR")
+    # And the set the export trusts must be exactly the set it can credit.
+    assert set(export._MEASURED_AADT_SOURCES) == set(export._AADT_LICENSOR)
+
+
+def test_export_does_not_treat_overture_as_a_traffic_publisher():
+    """dominant_road.source is 'overture' whenever no counter is in range.
+
+    Feeding that into the credit block made every counter-free grid refuse to
+    ship (2026-08-05 review, blocking). Overture is credited under its own ODbL
+    block, so it must not be in the measured-AADT publisher set.
+    """
+    export = _load_export_module()
+    assert "overture" not in export._MEASURED_AADT_SOURCES
+    assert "overture" not in export._AADT_LICENSOR
+
+
+def test_export_collection_step_filters_overture_out():
+    """The regression was in the COLLECTION step, not the licensor table.
+
+    A static membership check on _MEASURED_AADT_SOURCES passes even when the
+    collector adds dominant_road.source unconditionally, which is exactly how
+    the blocking bug survived the first round of tests. Drive the helper the
+    collector actually calls.
+    """
+    export = _load_export_module()
+    assert export._measured_publishers({"source": "overture"}) == set()
+    assert export._measured_publishers({"source": "tfnsw"}) == {"tfnsw"}
+    assert export._measured_publishers({"source": "nfdh"}) == {"nfdh"}
+    assert export._measured_publishers({}) == set()
+    assert export._measured_publishers(None) == set()
+    # A grid whose every row is an Overture road must still ship.
+    facts = {"volume_sources": set(), "name_sources": set()}
+    for _ in range(5):
+        facts["volume_sources"] |= export._measured_publishers({"source": "overture"})
+    used, credit = export._aadt_attribution(facts)
+    assert used == set() and "Overture" in credit
+
+
+def test_export_allows_a_grid_with_no_measured_counters():
+    """A grid away from every counter is legitimate, not an error."""
+    export = _load_export_module()
+    used, credit = export._aadt_attribution({"volume_sources": set(), "name_sources": set()})
+    assert used == set()
+    assert credit and "Overture" in credit
+
+
+def test_export_refuses_an_unregistered_publisher():
+    export = _load_export_module()
+    with pytest.raises(RuntimeError, match="attribution block"):
+        export._aadt_attribution({"volume_sources": {"aadt_nt"}, "name_sources": set()})
+
+
+def test_export_credits_every_publisher_that_drove_a_row():
+    export = _load_export_module()
+    used, credit = export._aadt_attribution(
+        {"volume_sources": {"tfnsw", "vicroads"}, "name_sources": {"mrwa"}})
+    assert used == {"tfnsw", "vicroads", "mrwa"}
+    assert "Transport for NSW" in credit
+    assert "Main Roads Western Australia" in credit
+    assert "VicRoads" in credit
 
 
 # --- 2. source_state comes from geometry, never an upstream column -----------
@@ -104,3 +179,108 @@ def test_source_state_ignores_any_upstream_state_column():
     params = list(inspect.signature(ns._source_state).parameters)
     assert params == ["src_lat", "src_lng"], (
         f"_source_state must derive state from geometry alone, got params {params}")
+
+
+# --- 3. integration: the label must survive the real scoring path ------------
+#
+# The two blocking defects of 2026-08-05 (a 6-tuple unpack left in score.py, and
+# a hardcoded "vicroads" that the pure-function tests above cannot see) both got
+# through a green suite. These tests drive the real code with a stub DB, so a
+# tuple-shape change or a re-hardcoded label fails here without needing the 4 GB
+# of production parquets.
+
+class _StubDB:
+    """Minimal stand-in for the DuckDB handle noise_score threads through."""
+
+
+# Shape of aircraft_noise_penalty() with no ANEF zone at the point.
+_NO_AIRCRAFT = {"penalty_db": 0.0, "zone_code": None, "anef_min": None,
+                "anef_max": None, "impact": None, "airport_type": None, "lga": None}
+
+
+def _stub_aadt_rows():
+    # (aadt, hv_pct, road_name, dist_m, near_lng, near_lat, source)
+    return [
+        (41461, 0.05, "Pacific Highway", 158.0, 151.151077, -33.75317, "tfnsw"),
+        (12000, 0.04, "Bank Street", 240.0, 151.09034, -33.81764, "tfnsw"),
+    ]
+
+
+def test_score_publishes_the_source_from_the_row_not_a_constant(monkeypatch):
+    """Re-hardcoding "vicroads" in score.py must fail a test."""
+    rows = _stub_aadt_rows()
+    monkeypatch.setattr(ns, "aadt_near", lambda *a, **k: rows)
+    monkeypatch.setattr(ns, "nfdh_near", lambda *a, **k: [])
+    monkeypatch.setattr(ns, "roads_near", lambda *a, **k: [])
+    monkeypatch.setattr(ns, "rail_near", lambda *a, **k: [])
+    monkeypatch.setattr(ns, "gtfs_rail_near", lambda *a, **k: [])
+    monkeypatch.setattr(ns, "get_db", lambda *a, **k: _StubDB())
+    monkeypatch.setattr(ns, "buildings_in_radius", lambda *a, **k: [])
+    monkeypatch.setattr(ns, "buildings_to_arrays", lambda *a, **k: None)
+    monkeypatch.setattr(ns, "barrier_attenuation", lambda *a, **k: 0.0)
+    monkeypatch.setattr(ns, "aircraft_noise_penalty", lambda *a, **k: _NO_AIRCRAFT)
+    monkeypatch.setattr(ns, "terrain_attenuation", lambda *a, **k: 0.0)
+    monkeypatch.setattr(ns, "_cache_get", lambda *a, **k: None)
+    monkeypatch.setattr(ns, "_cache_put", lambda *a, **k: None)
+
+    result = ns.noise_score(-33.75457, 151.15077, 500)
+
+    dom = result.get("dominant_road") or {}
+    assert dom.get("source") == "tfnsw", (
+        "the published source must come from the row, not a constant; "
+        f"got {dom.get('source')!r}")
+    assert dom.get("source_state") == "NSW"
+
+
+def test_score_survives_the_full_aadt_tuple(monkeypatch):
+    """Guards the 6-vs-7 tuple unpack that crashed every measured point.
+
+    score.py destructures aadt_near rows in three separate places. Two were
+    updated when the tuple grew and one (measured_distances) was not, so every
+    location with a counter raised ValueError while the suite stayed green.
+    """
+    rows = _stub_aadt_rows()
+    monkeypatch.setattr(ns, "aadt_near", lambda *a, **k: rows)
+    monkeypatch.setattr(ns, "nfdh_near", lambda *a, **k: [])
+    # A real Overture road, so the measured_distances dedup path actually runs.
+    monkeypatch.setattr(ns, "roads_near",
+                        lambda *a, **k: [("primary", 160.0, 60, 151.1511, -33.7532)])
+    monkeypatch.setattr(ns, "rail_near", lambda *a, **k: [])
+    monkeypatch.setattr(ns, "gtfs_rail_near", lambda *a, **k: [])
+    monkeypatch.setattr(ns, "get_db", lambda *a, **k: _StubDB())
+    monkeypatch.setattr(ns, "buildings_in_radius", lambda *a, **k: [])
+    monkeypatch.setattr(ns, "buildings_to_arrays", lambda *a, **k: None)
+    monkeypatch.setattr(ns, "barrier_attenuation", lambda *a, **k: 0.0)
+    monkeypatch.setattr(ns, "aircraft_noise_penalty", lambda *a, **k: _NO_AIRCRAFT)
+    monkeypatch.setattr(ns, "terrain_attenuation", lambda *a, **k: 0.0)
+    monkeypatch.setattr(ns, "_cache_get", lambda *a, **k: None)
+    monkeypatch.setattr(ns, "_cache_put", lambda *a, **k: None)
+
+    result = ns.noise_score(-33.75457, 151.15077, 500)
+
+    assert result.get("score") is not None
+    assert result["aadt_segments"] == 2
+
+
+def test_every_road_source_carries_source_state(monkeypatch):
+    """source_state must be on Overture rows too, not only measured ones."""
+    monkeypatch.setattr(ns, "aadt_near", lambda *a, **k: [])
+    monkeypatch.setattr(ns, "nfdh_near", lambda *a, **k: [])
+    monkeypatch.setattr(ns, "roads_near",
+                        lambda *a, **k: [("primary", 60.0, 60, 144.9950, -37.8180)])
+    monkeypatch.setattr(ns, "rail_near", lambda *a, **k: [])
+    monkeypatch.setattr(ns, "gtfs_rail_near", lambda *a, **k: [])
+    monkeypatch.setattr(ns, "get_db", lambda *a, **k: _StubDB())
+    monkeypatch.setattr(ns, "buildings_in_radius", lambda *a, **k: [])
+    monkeypatch.setattr(ns, "buildings_to_arrays", lambda *a, **k: None)
+    monkeypatch.setattr(ns, "barrier_attenuation", lambda *a, **k: 0.0)
+    monkeypatch.setattr(ns, "aircraft_noise_penalty", lambda *a, **k: _NO_AIRCRAFT)
+    monkeypatch.setattr(ns, "terrain_attenuation", lambda *a, **k: 0.0)
+    monkeypatch.setattr(ns, "_cache_get", lambda *a, **k: None)
+    monkeypatch.setattr(ns, "_cache_put", lambda *a, **k: None)
+
+    result = ns.noise_score(-37.8180, 144.9950, 500)
+    dom = result.get("dominant_road") or {}
+    assert dom.get("source") == "overture"
+    assert "source_state" in dom, "source_state must be present on every road source"
+    assert dom["source_state"] == "VIC"

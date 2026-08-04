@@ -14,9 +14,10 @@ POIS_FILE = "overture_pois.parquet"
 WATER_FILE = "overture_water.parquet"
 # Measured per-segment AADT ground truth, one parquet per state
 # (aadt_vic.parquet, aadt_nsw.parquet, ...). Each file shares the schema
-# aadt_near() expects (aadt, hv_pct, road_name, geometry, xmin, ymin) so they
-# can be read together with a single glob. Drop a new state's parquet in and it
-# is picked up automatically — no code change needed.
+# aadt_near() reads: (aadt, hv_pct, road_name, geometry, xmin, ymin). That is the
+# on-disk COLUMN layout, not aadt_near()'s return tuple — the return also carries
+# the resolved publisher, see below. Drop a new state's parquet in and it is
+# picked up automatically, but register its licensor too (AADT_SOURCE_BY_STATE).
 AADT_GLOB = "aadt_*.parquet"
 NFDH_FILE = "nfdh_aadt_national.parquet"
 

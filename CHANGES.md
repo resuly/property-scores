@@ -86,21 +86,56 @@ property-scores 又犯了一次，而且这次**带进了一个 commit message �
 六种注入（两个 blocker + 原始硬编码 + 删许可块 + 删 source_state + 空集合改回报错）
 逐条验证会红，还原后全绿。
 
+## 第二轮 review：我的修复本身又被抓出两个 blocking
+
+按「修 review 意见 ≠ 修完了」的规矩，对**上面那轮修复本身**又派了一次独立 review。
+**又抓出两个 blocking** —— 都是我修第一轮 blocker 时新引入的。
+
+**B3｜我把「崩溃」换成了「假话」。** 署名集合是从 `dominant_road.source` 收的，
+但 `dominant_road` 只是**最响的那个源**。实测计数器可以参与算出这一格的分贝值却不是最响的，
+于是**它就没人署名了**。生产实测（Brisbane CBD 3×3）：
+**9 个点全部有 `qld_tmr`/`nfdh` 计数器参与，而 9 个点的 `dominant_road.source` 全是
+`overture`** —— 也就是说导出文件会在一份**建立在 CC BY 计数器数据之上**的网格上，
+白纸黑字写「本次导出没有实测计数器数据覆盖」。**少署名正是这整块代码存在的唯一目的。**
+（修 blocker 2 之前是直接报错，虽然烦人但从没发出过假声明；我把它改成了会发假声明。）
+
+修法：`noise_score()` 新增 `measured_traffic_sources` —— **所有**参与该点计算的实测发布方
+（取自 `aadt_levels`，结构上就不含 Overture）。导出按它署名，不再看谁最响。
+
+**B4｜那个「遇到未登记发布方就拒绝出文件」的护栏根本不会触发。**
+因为 `_measured_publishers()` 已经先把集合过滤成「已登记的」了，`unknown` 恒为空 ——
+护栏是装饰品，而且和我自己写在 `overture.py` 里的 docstring 直接矛盾。
+唯一覆盖它的测试是直接塞 `facts` 进去的，**绕开了收集那一步**（正是隔壁那条测试专门
+警告过的形状）。修法：`_measured_publishers` 不再过滤，只按名字剔掉 `overture`
+（它在 ODbL 那块单独署名）；测试改成**从收集器驱动**。
+
+### 同轮一并修的
+
+- `write_docs` 里还留着一份**重复的 `_AADT_LICENSOR`**（18 行）：文本已是死代码，
+  但它的 keys 还在被用 —— 两份可以静默漂移。已删，并加测试钉死「全文件只能有一份」。
+- **vintage 闸门仍在 CSV 落盘之后才报错**，拒绝路径会留下没有 README 的孤儿 CSV。
+  已抽成 `_require_vintage()` 并挪到其他 ship-blocking 校验旁边。
+  生产实测：QLD 导出**报错且一个文件都没写**。
+- 记录了一个**本轮不修但要知道**的事实：`_VINTAGE` **只有 VIC**，所以 NSW/QLD/SA/WA
+  的导出目前一律出不去 —— 新加的四个州许可条目**在维州以外还无法端到端跑通**。
+  要放开得先跟各发布方核实调查年份（不该我拍脑袋填）。已写进 `_require_vintage` docstring。
+
 ## 改了哪些文件
 
 `git diff master..defect-fixes --stat`（master 自本分支切出后**没有**推进，
 仍在 `275cf4da`，所以这个基线是准的）：
 
 ```
+(现跑 `git diff master..defect-fixes --stat` 为准;截至收尾:)
  property_scores/api/static/noise.html |   2 +-
  property_scores/common/overture.py    |  88 ++++++++---
  property_scores/noise/debug.py        |   9 +-
- property_scores/noise/score.py        |  56 ++++++-
+ property_scores/noise/score.py        |  66 +++++++-
  scripts/eis_aadt_diagnose.py          |   2 +-
  scripts/experiment_retrain_noise.py   |   4 +-
- scripts/export_noise_grid_csv.py      | 108 +++++++++++--
- tests/test_aadt_source_labels.py      | 286 ++++++++++++++++++++++++++++++++++
- 9 files changed, 612 insertions(+), 45 deletions(-)
+ scripts/export_noise_grid_csv.py      | 130 ++++++++++-----
+ tests/test_aadt_source_labels.py      | 340 +++++++++++++++++++++++++++++++++
+ 9 files changed
 ```
 
 合并风险：低。master 未推进，无重叠改动。
@@ -146,10 +181,10 @@ property-scores 又犯了一次，而且这次**带进了一个 commit message �
   - 墨尔本 CBD（0 个计数器，就是原本会报错的情形）→ 正常出 3 个文件，署名块写
     「本次导出没有实测计数器数据覆盖，车流量由 Overture 道路等级建模」
   - Fitzroy（43 条实测）→ 正常出文件，署名 VicRoads（该点在维州，正确）
-- 单测 21 条全过；并**逐条注入 6 种缺陷验证会红**（两个 blocker + 原始 vicroads 硬编码 +
+- 单测 23 条全过；并**逐条注入 6 种缺陷验证会红**（两个 blocker + 原始 vicroads 硬编码 +
   删整个 VicRoads 许可块 + 删 Overture 的 source_state + 空发布方集合改回报错），
   还原后全绿。
-- 全量测试：`pytest tests/ --ignore=tests/test_noise.py` → **111 passed, 7 skipped**。
+- 全量测试：`pytest tests/ --ignore=tests/test_noise.py` → **113 passed, 7 skipped**。
   `tests/test_noise.py` 在本机无法收集（缺 `rasterio`），**已确认 master 上同样如此，
   是既有环境问题不是本分支引入**；服务器上没装 pytest，故该文件本轮未能跑。
 

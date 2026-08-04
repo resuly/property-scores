@@ -39,6 +39,53 @@ NFDH 全国文件的 `state` 列记的是**上报机构的辖区**，不是计�
 `detect_state()` 算，永不读上游 state 列。所有道路源（州 AADT / NFDH / Overture）
 都带上 `source_state`。
 
+## ⚠️ 独立 review 抓出两个 blocking 缺陷（已修，务必看这段）
+
+第一轮提交完之后派了独立 review，**抓出两个会直接搞坏生产的缺陷**，两个都是我自己的
+测试完全看不见的。**如果只看第一轮的 commit，这个分支是不能合的。**
+
+| # | 缺陷 | 后果 |
+|---|------|------|
+| 1 | `score.py:728` 的 `measured_distances` 仍按 6 元组解包 | **凡是附近有实测计数器的点，`noise_score()` 直接 ValueError** —— 正好是本分支的主题场景。生产实测：Richmond(32条)/Pacific Hwy/Brisbane/Adelaide/Perth 全崩，只有零计数器的点能活 |
+| 2 | 导出脚本把 `dominant_road.source` 无条件当发布方 | 但附近没计数器时该字段是 `"overture"`，不在许可表里 → **每一份没有计数器的网格导出都会报错拒绝出文件**。旧代码只是「碰巧安全」（Overture 行没有 road_name） |
+
+**缺陷 1 的成因值得单独记**：这个修复我**第一轮就写对了**，然后自己把它删了 ——
+做缺陷注入验证时用 `git checkout <file>` 还原注入的改动，把**旁边那个还没 commit 的
+真修复一起还原掉了**。同一个错误我在 da_leads 那边犯过并且已经写进日志，结果在
+property-scores 又犯了一次，而且这次**带进了一个 commit message 里声称修好了它的 commit**
+（`6af87ff` 三条声明里有两条是假的：Overture 的 source_state、CLI 文案，也是这么没的）。
+
+教训已固化：**注入验证前先 commit**；`git checkout` 不是「撤销我刚才那条 sed」的工具。
+
+### 连带修的（同为 review 发现）
+
+- `scripts/experiment_retrain_noise.py:49,60` 也是 6 元组解包，第一轮漏了。
+- 导出脚本的许可校验原本跑在 `write_docs` 里、**在 README.md 已经落盘之后**，
+  拒绝路径会留下一份没有署名的半成品。已挪到 `export()` 的其他 ship-blocking 校验旁边。
+- 「没有任何实测发布方」现在**不再报错**：那是合法情况（市中心 500m 网格可能一个计数器
+  都没有），此时署名块如实写「本次导出没有实测计数器数据覆盖，车流量由 Overture
+  道路等级建模」，而不是拒绝出文件（会挡住真实业务）也不是瞎署给 VicRoads。
+- 两处数字被 review 证伪，已按实测改正：缓存「~8k」实为 **16,628 行 / 15,712 条在 24h
+  TTL 内 / 其中 8,037 条带 vicroads 标签**；「另有 22 行在 NSW/QLD 和 NSW/VIC 边界」实为
+  那 22 行里只有 20 行在这两组边界上（另 2 行是 VIC/SA）。还删掉了「曾经有个 src1」这个
+  我编出来的说法 —— 签名里从来没有过这个 token。
+
+### 测试也按 review 重写了
+
+原来那套**纯函数测试对这两个 blocker 完全免疫**，更糟的是：把最初那个
+`"source": "vicroads"` 硬编码原样改回去，**整套测试照样全绿** —— 也就是说它根本没在
+守本分支要修的东西。现在补了：
+
+- **集成层测试**：用 stub DB 驱动真正的 `noise_score()`，元组形状变了、标签被写死、
+  Overture 行少了 `source_state`，都会红。
+- **collection 层测试**：`_measured_publishers()` 直接被测，而不是只静态检查许可表 ——
+  blocker 2 恰恰发生在收集那一步，静态检查看不见。
+- 许可表测试**不再做源码字符串匹配**：review 把整个 VicRoads 许可块删掉，旧测试
+  照样绿（因为 `"vicroads"` 这个字符串在同文件的注释里还出现两次）。现在比对字典本身。
+
+六种注入（两个 blocker + 原始硬编码 + 删许可块 + 删 source_state + 空集合改回报错）
+逐条验证会红，还原后全绿。
+
 ## 改了哪些文件
 
 `git diff master..defect-fixes --stat`（master 自本分支切出后**没有**推进，
@@ -46,12 +93,14 @@ NFDH 全国文件的 `state` 列记的是**上报机构的辖区**，不是计�
 
 ```
  property_scores/api/static/noise.html |   2 +-
- property_scores/common/overture.py    |  81 ++++++++++++++++++++------
- property_scores/noise/debug.py        |   9 ++-
- property_scores/noise/score.py        |  40 +++++++++++--
- scripts/export_noise_grid_csv.py      |  33 ++++++++++-
- tests/test_aadt_source_labels.py      | 106 ++++++++++++++++++++++++++++++++++
- 6 files changed, 240 insertions(+), 31 deletions(-)
+ property_scores/common/overture.py    |  88 ++++++++---
+ property_scores/noise/debug.py        |   9 +-
+ property_scores/noise/score.py        |  56 ++++++-
+ scripts/eis_aadt_diagnose.py          |   2 +-
+ scripts/experiment_retrain_noise.py   |   4 +-
+ scripts/export_noise_grid_csv.py      | 108 +++++++++++--
+ tests/test_aadt_source_labels.py      | 286 ++++++++++++++++++++++++++++++++++
+ 9 files changed, 612 insertions(+), 45 deletions(-)
 ```
 
 合并风险：低。master 未推进，无重叠改动。
@@ -89,10 +138,18 @@ NFDH 全国文件的 `state` 列记的是**上报机构的辖区**，不是计�
 - **发现并修掉一个单测抓不到的连带 bug**：`score.py` 里 `measured_distances`
   仍按 6 元组解包，凡是有实测 AADT 覆盖的点全部报错。是「跑真东西」才暴露的，
   不是单测发现的。
-- 单测 `tests/test_aadt_source_labels.py` 13 条全过；并**逐条注入缺陷验证会红**：
-  ① nsw 改回 vicroads ② `_source_state` 改成信上游 state 列
-  ③ 删掉 tfnsw 的署名块 ④ ACT 强制返回 NSW —— 各自打红对应用例，还原后全绿。
-- 全量测试：`pytest tests/ --ignore=tests/test_noise.py` → 103 passed, 7 skipped。
+- **修完 blocker 后的生产实测**（隔离环境 `/tmp/ps-v2`，`DATA_DIR` 指向只含 parquet 软链、
+  **不含共享缓存**的私有目录，所以没往生产缓存写一个字节 —— review 特别提醒过这一点）：
+  9 个点（含 VIC Richmond 32 条实测、NSW/QLD/SA/WA/ACT/TAS/NT）**全部正常出分**，
+  标签逐州正确，`source_state` 每个 dominant_road 都有。
+- **导出脚本两种情形都真跑了**：
+  - 墨尔本 CBD（0 个计数器，就是原本会报错的情形）→ 正常出 3 个文件，署名块写
+    「本次导出没有实测计数器数据覆盖，车流量由 Overture 道路等级建模」
+  - Fitzroy（43 条实测）→ 正常出文件，署名 VicRoads（该点在维州，正确）
+- 单测 21 条全过；并**逐条注入 6 种缺陷验证会红**（两个 blocker + 原始 vicroads 硬编码 +
+  删整个 VicRoads 许可块 + 删 Overture 的 source_state + 空发布方集合改回报错），
+  还原后全绿。
+- 全量测试：`pytest tests/ --ignore=tests/test_noise.py` → **111 passed, 7 skipped**。
   `tests/test_noise.py` 在本机无法收集（缺 `rasterio`），**已确认 master 上同样如此，
   是既有环境问题不是本分支引入**；服务器上没装 pytest，故该文件本轮未能跑。
 

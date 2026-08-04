@@ -62,7 +62,7 @@ def main():
         # nearest ACTUAL aadt record within 300m
         an = aadt_near(db, lat, lng, radius_m=300)
         if an:
-            # an row: (aadt, hv_pct, road_name, dist_m, near_lng, near_lat)
+            # an row: (aadt, hv_pct, road_name, dist_m, near_lng, near_lat, source)
             aadt, _hv, _name, adist = an[0][0], an[0][1], an[0][2], an[0][3]
             # take the highest-aadt within 150m as the likely dominant source
             near150 = [x for x in an if x[3] <= 150]

@@ -181,6 +181,104 @@ _VINTAGE = {
 
 
 
+# Each measured-AADT dataset has its own licensor. Crediting the wrong one was a
+# defect found in review, so the credit block is selected by what was actually
+# used and an unrecognised publisher refuses rather than guesses.
+#
+# Until 2026-08-05 score.py stamped "vicroads" on every measured-AADT row
+# regardless of which state's parquet it came from, so this block credited
+# Victoria for TfNSW, QLD TMR, SA DIT and Main Roads WA data. The labels are real
+# now (overture.AADT_SOURCE_BY_STATE), so every publisher needs an entry here.
+_AADT_LICENSOR = {
+    "vicroads": ("VicRoads traffic volume data, Department of Transport and\n"
+                 "      Planning Victoria. Licensed under Creative Commons\n"
+                 "      Attribution (CC BY 4.0)."),
+    "tfnsw": ("Roads traffic volume counts, Transport for NSW.\n"
+              "      Licensed under Creative Commons Attribution (CC BY 4.0)."),
+    "qld_tmr": ("Road location and traffic data, Queensland Department of\n"
+                "      Transport and Main Roads. Licensed under Creative Commons\n"
+                "      Attribution (CC BY 4.0)."),
+    "sa_dit": ("Traffic volume estimates, South Australian Department for\n"
+               "      Infrastructure and Transport. Licensed under Creative\n"
+               "      Commons Attribution (CC BY 4.0)."),
+    "mrwa": ("Traffic volume data, Main Roads Western Australia.\n"
+             "      Licensed under Creative Commons Attribution (CC BY 4.0)."),
+    "nfdh": ("Harmonised traffic counts, National Freight Data Hub,\n"
+             "      Australian Government. Licensed under Creative Commons\n"
+             "      Attribution (CC BY 4.0)."),
+}
+
+# The labels that mean "a real traffic counter published by a road authority".
+# Deliberately NOT every value of dominant_road.source: that field is "overture"
+# whenever no counter is in range, and Overture is credited under its own ODbL
+# block. Mixing the two made every counter-free grid refuse to ship.
+_MEASURED_AADT_SOURCES = frozenset(_AADT_LICENSOR)
+
+
+def _measured_publishers(row_result: dict) -> set:
+    """Every measured-traffic publisher that fed this row's level.
+
+    Reads `measured_traffic_sources`, which the scorer builds from ALL measured
+    sources, not from `dominant_road`. Two defects came from getting this wrong:
+
+      * crediting `dominant_road.source` unconditionally credited "overture",
+        which is not a traffic publisher, and made counter-free grids refuse;
+      * crediting only `dominant_road` under-credited, because the dominant
+        source is merely the loudest one. A counter can contribute to the
+        exported level without being loudest, and then goes uncredited.
+
+    Deliberately NOT filtered to _MEASURED_AADT_SOURCES here: an unregistered
+    publisher must reach _aadt_attribution() so it can refuse, rather than being
+    silently dropped on the way.
+    """
+    return {s for s in (row_result or {}).get("measured_traffic_sources") or [] if s}
+
+
+def _require_vintage(state) -> str:
+    """The recorded input vintage for a state, or refuse.
+
+    ⚠️ _VINTAGE currently records VIC only, so an export for any other state
+    refuses here. That is the intended behaviour (nobody should cite survey
+    years we have not verified with the publisher) but it does mean the
+    per-state licensor entries below cannot be exercised end to end outside
+    Victoria until the other states' vintages are confirmed and added.
+    """
+    if state not in _VINTAGE:
+        raise RuntimeError(
+            f"no input vintage recorded for {state}. Verify the upstream survey years "
+            "with the publisher and add them to _VINTAGE before shipping a file that "
+            "someone may cite.")
+    return _VINTAGE[state]
+
+
+def _aadt_attribution(facts: dict) -> tuple[set, str]:
+    """(publishers actually used, their credit text). Raises rather than guess.
+
+    An empty result is legitimate, not an error: a grid can sit entirely away
+    from measured counters, in which case the levels rest on Overture road
+    classes and there is no AADT licensor to name. Refusing that case would
+    block real exports (a 500 m CBD grid can contain zero counters); inventing
+    one is the defect this whole block exists to prevent.
+    """
+    used = ({s for s in facts["volume_sources"] if s}
+            | {s for s in facts["name_sources"] if s})
+    # Overture is a modelled road network, not a traffic publisher, and is
+    # credited under its own ODbL block below. It is the one non-publisher we
+    # expect to see, so it is dropped rather than treated as unregistered.
+    used -= {"overture"}
+    unknown = used - _MEASURED_AADT_SOURCES
+    if unknown:
+        raise RuntimeError(
+            f"traffic volumes/street names came from {sorted(unknown)}, which has no "
+            "attribution block. Add its licensor to _AADT_LICENSOR before shipping "
+            "this file.")
+    if not used:
+        return used, ("No measured traffic-counter dataset covered this extract;\n"
+                      "      volumes are modelled from Overture road classes, credited\n"
+                      "      below.")
+    return used, "\n  ".join(_AADT_LICENSOR[s] for s in sorted(used))
+
+
 def _assert_uniform_model_path(lden_sources) -> None:
     """Every row must come from the same model path, and it must be the live one.
 
@@ -326,6 +424,9 @@ def export(lat: float, lng: float, radius_m: float, spacing_m: float,
         "aircraft_points": 0,
         "terrain_points": 0,
         "name_sources": set(),
+        # Every measured-AADT publisher that drove a row, whether or not its
+        # street name was published. Credit follows use, not just naming.
+        "volume_sources": set(),
         "names": set(),
         "lden_sources": collections.Counter(),
         "named_rows": 0,
@@ -358,10 +459,15 @@ def export(lat: float, lng: float, radius_m: float, spacing_m: float,
             facts["terrain_points"] += 1
         facts["lden_sources"][r.get("lden_source")] += 1
         dom_road = r.get("dominant_road") or {}
+        facts["volume_sources"] |= _measured_publishers(r)
         if dom_road.get("road_name") and row["dominant_source"] == dom_road.get("road_name"):
             facts["named_rows"] += 1
             facts["names"].add(dom_road["road_name"])
-            facts["name_sources"].add(dom_road.get("source"))
+            # The published NAME comes from the dominant road specifically, so
+            # its credit follows that row's own source. Unfiltered on purpose,
+            # same reason as above.
+            if dom_road.get("source"):
+                facts["name_sources"].add(dom_road["source"])
         rows.append(row)
         if n % 25 == 0 or n == total:
             rate = n / max(time.time() - started, 1e-6)
@@ -372,6 +478,12 @@ def export(lat: float, lng: float, radius_m: float, spacing_m: float,
     _require_single_state(states)
     _assert_uniform_model_path(facts["lden_sources"])
     _assert_periods_reconcile(rows)
+    # Attribution and input vintage are ship-blocking checks, so they belong
+    # here with the others. Both used to run inside write_docs, AFTER the CSV
+    # (and for attribution, README.md) was already on disk, leaving a partial
+    # unattributed deliverable behind on every refusal path.
+    _aadt_attribution(facts)
+    _require_vintage(next(iter(states)) if len(states) == 1 else None)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     with csv_path.open("w", newline="", encoding="utf-8") as fh:
@@ -436,12 +548,7 @@ def write_docs(out_dir: Path, lat: float, lng: float, radius_m: float,
     else:
         contrib_note = (f"Aircraft noise contributes at {n_air} of the {len(rows)} points.")
 
-    if state not in _VINTAGE:
-        raise RuntimeError(
-            f"no input vintage recorded for {state}. Verify the upstream survey years "
-            "with the publisher and add them to _VINTAGE before shipping a file that "
-            "someone may cite.")
-    vintage_note = _VINTAGE[state]
+    vintage_note = _require_vintage(state)
 
     if m and m.get("instrument_points"):
         direction = "higher" if m["bias_db"] > 0 else "lower"
@@ -635,35 +742,18 @@ bo@daleads.com.au.
 """
     (out_dir / "README.md").write_text(readme, encoding="utf-8")
 
-    # Which dataset the published street names came from is measured, not
-    # assumed: crediting the wrong licensor was one of the defects found in
-    # review, and the honest answer differs by area.
-    # Each AADT dataset has its own licensor. Crediting the wrong one was a
-    # defect found in review, so the credit block is selected by what was
-    # actually used, and an unrecognised source refuses rather than guesses.
-    _AADT_LICENSOR = {
-        "vicroads": ("VicRoads traffic volume data, Department of Transport and\n"
-                     "      Planning Victoria. Licensed under Creative Commons\n"
-                     "      Attribution (CC BY 4.0)."),
-        "mrwa": ("Traffic volume data, Main Roads Western Australia.\n"
-                 "      Licensed under Creative Commons Attribution (CC BY 4.0)."),
-        "nfdh": ("Harmonised traffic counts, National Freight Data Hub,\n"
-                 "      Australian Government. Licensed under Creative Commons\n"
-                 "      Attribution (CC BY 4.0)."),
-    }
     _AADT_CREDIT = set(_AADT_LICENSOR)
 
+    # Credit every publisher whose volumes drove a row, not only the ones whose
+    # street names got printed. Until 2026-08-05 this fell back to a hardcoded
+    # {"vicroads"} whenever no name was published, which is how an all-NSW grid
+    # could ship crediting Victoria. Already validated in export(); recomputed
+    # here so the text and the gate cannot drift apart.
     name_src = {s for s in facts["name_sources"] if s}
-    used_src = name_src or {"vicroads"}
-    unknown = used_src - set(_AADT_LICENSOR)
-    if unknown:
-        raise RuntimeError(
-            f"street names came from {sorted(unknown)}, which has no attribution block. "
-            "Add its licensor to _AADT_LICENSOR before shipping this file.")
-    aadt_credit = "\n  ".join(_AADT_LICENSOR[s] for s in sorted(used_src))
+    used_src, aadt_credit = _aadt_attribution(facts)
     if not facts["named_rows"]:
         name_credit = "the traffic volumes behind the modelled levels"
-    elif name_src <= _AADT_CREDIT:
+    elif name_src and name_src <= _AADT_CREDIT:
         n_names = len(facts["names"])
         name_credit = (f"all {n_names} street name{'s' if n_names != 1 else ''} appearing in "
                        f"dominant_source ({facts['named_rows']} rows)")

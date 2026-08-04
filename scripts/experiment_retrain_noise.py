@@ -46,7 +46,7 @@ def measured_aadt_features(db, lat, lng, radius_m=500):
     rows = aadt_near(db, lat, lng, radius_m)
     seen = {}
     for r in rows:
-        aadt_val, hv_pct, road_name, dist_m, near_lng, near_lat = r
+        aadt_val, hv_pct, road_name, dist_m, near_lng, near_lat, _src = r
         key = ("name", road_name) if road_name else ("loc", round(near_lng, 3), round(near_lat, 3))
         cur = seen.get(key)
         if cur is None or dist_m < cur[3]:
@@ -57,7 +57,7 @@ def measured_aadt_features(db, lat, lng, radius_m=500):
                 "meas_road_energy_db": 0.0, "meas_road_db_max": 0.0}
     bldgs = buildings_in_radius(db, lat, lng, radius_m)
     energies = []
-    for aadt_val, hv_pct, road_name, dist_m, near_lng, near_lat in segs:
+    for aadt_val, hv_pct, road_name, dist_m, near_lng, near_lat, _src in segs:
         hv = (hv_pct * 100) if hv_pct else 0.0
         l = _crtn_noise(int(aadt_val), dist_m, hv_pct=hv, speed_kmh=DEFAULT_SPEED_KMH)
         if l <= 0:

@@ -393,7 +393,7 @@ function renderResult(data, lat, lng) {
     <div class="text-xs">
       ${stat('Road (L10)', s.road_db + ' dB', `${s.road_count || 0} segs`)}
       ${stat('Rail', (s.rail_db || 0) + ' dB', s.nearest_tram_m != null ? `tram ${s.nearest_tram_m}m` : (s.nearest_train_m != null ? `train ${s.nearest_train_m}m` : ''))}
-      ${stat('AADT counts', `${s.aadt_segments || 0} VicRoads · ${s.nfdh_stations || 0} NFDH`)}
+      ${stat('AADT counts', `${s.aadt_segments || 0} state road authority · ${s.nfdh_stations || 0} NFDH`)}
       ${s.max_building_screening_db ? stat('Building screening', `-${s.max_building_screening_db} dB`) : ''}
     </div>
 

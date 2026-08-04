@@ -1,6 +1,7 @@
 """Overture Maps data loading helpers via DuckDB."""
 
 import glob
+import os
 
 import duckdb
 
@@ -13,11 +14,44 @@ POIS_FILE = "overture_pois.parquet"
 WATER_FILE = "overture_water.parquet"
 # Measured per-segment AADT ground truth, one parquet per state
 # (aadt_vic.parquet, aadt_nsw.parquet, ...). Each file shares the schema
-# aadt_near() expects (aadt, hv_pct, road_name, geometry, xmin, ymin) so they
-# can be read together with a single glob. Drop a new state's parquet in and it
-# is picked up automatically — no code change needed.
+# aadt_near() reads: (aadt, hv_pct, road_name, geometry, xmin, ymin). That is the
+# on-disk COLUMN layout, not aadt_near()'s return tuple — the return also carries
+# the resolved publisher, see below. Drop a new state's parquet in and it is
+# picked up automatically, but register its licensor too (AADT_SOURCE_BY_STATE).
 AADT_GLOB = "aadt_*.parquet"
 NFDH_FILE = "nfdh_aadt_national.parquet"
+
+# Which authority actually publishes each state's measured-AADT file. The label
+# has to travel with the row: aadt_near() reads every aadt_*.parquet together,
+# so nothing downstream can infer the publisher from the call site.
+#
+# Defect found 2026-08-05: noise/score.py stamped "vicroads" on every row the
+# glob returned, so a Transport for NSW counter on the Pacific Highway was
+# published as VicRoads data. That is not only a wrong label — it selects the
+# wrong licensor in scripts/export_noise_grid_csv.py's attribution block, i.e.
+# we were crediting Victoria for four other states' CC-BY data.
+AADT_SOURCE_BY_STATE = {
+    "vic": "vicroads",   # DataVic / Dept of Transport and Planning, Traffic Volume
+    "nsw": "tfnsw",      # Transport for NSW, Roads Traffic Volume Counts
+    "qld": "qld_tmr",    # QLD Dept of Transport and Main Roads, road location & traffic
+    "sa": "sa_dit",      # SA Dept for Infrastructure and Transport, Traffic Volumes
+    "wa": "mrwa",        # Main Roads WA, Traffic Digest
+}
+
+
+def aadt_source_for_file(path) -> str:
+    """Map a data/aadt_<state>.parquet path to its publishing authority's slug.
+
+    An unregistered state yields "aadt_<state>" rather than a guess. That label
+    is deliberately not in export_noise_grid_csv.py's _AADT_LICENSOR, so adding
+    a state's parquet without registering its licensor makes the attribution
+    block refuse to ship instead of silently crediting somebody else.
+    """
+    stem = os.path.basename(str(path))
+    if stem.startswith("aadt_") and stem.endswith(".parquet"):
+        state = stem[len("aadt_"):-len(".parquet")].lower()
+        return AADT_SOURCE_BY_STATE.get(state, f"aadt_{state}")
+    return f"aadt_{stem}"
 PTV_SHAPES_FILE = "ptv_rail_shapes.parquet"
 PTV_FREQ_FILE = "ptv_rail_frequency.parquet"
 AU_RAIL_SHAPES_FILE = "au_rail_shapes.parquet"
@@ -225,7 +259,12 @@ def aadt_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
     f"""Find measured AADT segments within radius, across all state parquets.
 
     Reads every data/aadt_*.parquet (one per state) together. Returns
-    (aadt, hv_pct, road_name, dist_m, nearest_lng, nearest_lat).
+    (aadt, hv_pct, road_name, dist_m, nearest_lng, nearest_lat, source).
+
+    `source` is the publishing authority's slug for the file the row came from
+    (see AADT_SOURCE_BY_STATE). It is read from DuckDB's `filename` column
+    rather than assumed, because the glob mixes every state into one result set
+    and the caller has no other way to tell a VicRoads segment from a TfNSW one.
 
     {_LEGACY_DISTANCE_DOC}
     """
@@ -233,7 +272,7 @@ def aadt_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
     if not files:
         return []
     file_list = "[" + ", ".join(f"'{f}'" for f in files) + "]"
-    table = f"read_parquet({file_list}, union_by_name=true)"
+    table = f"read_parquet({file_list}, union_by_name=true, filename=true)"
     delta = radius_m / 111_000 * 1.5
     import math
     m_per_deg = 111_320 * math.cos(math.radians(lat))
@@ -246,29 +285,34 @@ def aadt_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
             SELECT aadt, hv_pct, road_name,
                    {_legacy_dist_sql(lng, lat, m_per_deg)} AS dist_m,
                    ST_X({_closest_point_sql('geometry', lng, lat)}) AS near_lng,
-                   ST_Y({_closest_point_sql('geometry', lng, lat)}) AS near_lat
+                   ST_Y({_closest_point_sql('geometry', lng, lat)}) AS near_lat,
+                   filename AS src_file
             FROM {table}
             WHERE {where}
             ORDER BY dist_m
         """
-        return db.sql(sql).fetchall()
-    sql = f"""
-        SELECT aadt, hv_pct, road_name, dist_m,
-               ST_X(cp) AS near_lng, ST_Y(cp) AS near_lat
-        FROM (
-            SELECT aadt, hv_pct, road_name, cp,
-                   {_metres_from_closest_point(lng, lat, m_per_deg)} AS dist_m
+        rows = db.sql(sql).fetchall()
+    else:
+        sql = f"""
+            SELECT aadt, hv_pct, road_name, dist_m,
+                   ST_X(cp) AS near_lng, ST_Y(cp) AS near_lat, src_file
             FROM (
-                SELECT aadt, hv_pct, road_name,
-                       {_closest_point_sql('geometry', lng, lat)} AS cp
-                FROM {table}
-                WHERE {where}
+                SELECT aadt, hv_pct, road_name, cp, src_file,
+                       {_metres_from_closest_point(lng, lat, m_per_deg)} AS dist_m
+                FROM (
+                    SELECT aadt, hv_pct, road_name, filename AS src_file,
+                           {_closest_point_sql('geometry', lng, lat)} AS cp
+                    FROM {table}
+                    WHERE {where}
+                )
             )
-        )
-        WHERE dist_m < {radius_m}
-        ORDER BY dist_m
-    """
-    return db.sql(sql).fetchall()
+            WHERE dist_m < {radius_m}
+            ORDER BY dist_m
+        """
+        rows = db.sql(sql).fetchall()
+    # Resolve the file path to its publisher once per row, so callers get a
+    # label they can hand straight to an attribution block.
+    return [r[:6] + (aadt_source_for_file(r[6]),) for r in rows]
 
 
 def nfdh_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,

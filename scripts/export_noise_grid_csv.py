@@ -701,11 +701,13 @@ Upstream data sources used to produce this extract
       These feed the modelled levels and the generic road class labels in
       dominant_source. They are not the source of the street names.
   Terrain
-      Elevation from the Copernicus DEM (GLO-30), produced using Copernicus WorldDEM-30
-      (c) DLR e.V. 2010-2014 and (c) Airbus Defence and Space GmbH 2014-2018
-      provided under COPERNICUS by the European Union and ESA, and from
+      Elevation primarily from the Geoscience Australia DEM-H bare-earth
+      elevation model, (c) Commonwealth of Australia (Geoscience Australia),
+      licensed under Creative Commons Attribution 4.0 (CC BY 4.0), and from
       LiDAR-derived national elevation models published by Geoscience Australia
-      (CC BY 4.0) inside their coverage.
+      (CC BY 4.0) inside their coverage. (The terrain stack also holds
+      Copernicus GLO-30 tiles for non-Australian training regions; no
+      Australian address in this export samples them.)
 
 If you publish work using this file, reproduce this attribution list alongside
 the DA Leads credit line.

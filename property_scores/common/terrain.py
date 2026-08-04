@@ -26,8 +26,11 @@ from property_scores.common.landcover import sampler as _sampler
 
 DEM_VRT = str(data_path("global/dem.vrt"))
 _DEM_DIR = str(data_path("global/dem"))
+_DEMH_DIR = str(data_path("global/dem_h"))
 # Copernicus tile name, SW corner: ..._10_S38_00_E145_00_DEM.tif
 _TILE_RE = _re.compile(r"_10_([NS])(\d+)_00_([EW])(\d+)_00_")
+# GA DEM-H tile name, SW corner: DEMH_S38_E145.tif (southern hemisphere only)
+_DEMH_TILE_RE = _re.compile(r"DEMH_S(\d+)_E(\d+)")
 _covered_cells = None
 
 
@@ -36,20 +39,32 @@ def available() -> bool:
 
 
 def _coverage():
-    """Set of (floor_lat, floor_lng) 1-degree cells that have a real DEM tile."""
+    """Set of (floor_lat, floor_lng) 1-degree cells that have a real DEM tile.
+
+    Scans BOTH tile directories. dem.vrt has pointed at dem_h/ for the AU
+    tiles since 2026-07-15; until 2026-08-04 this only scanned dem/, which
+    stayed correct purely because the retired Copernicus originals were left
+    on disk — deleting them would have silently shrunk coverage to 25 cells.
+    """
     global _covered_cells
     if _covered_cells is None:
         cells = set()
-        try:
-            for fn in _os.listdir(_DEM_DIR):
-                m = _TILE_RE.search(fn)
-                if not m:
-                    continue
-                ns, la, ew, ln = m.groups()
-                cells.add((int(la) * (1 if ns == "N" else -1),
-                           int(ln) * (1 if ew == "E" else -1)))
-        except Exception:
-            pass
+        for d, rx, signs in ((_DEM_DIR, _TILE_RE, None),
+                             (_DEMH_DIR, _DEMH_TILE_RE, (-1, 1))):
+            try:
+                for fn in _os.listdir(d):
+                    m = rx.search(fn)
+                    if not m:
+                        continue
+                    if signs is None:
+                        ns, la, ew, ln = m.groups()
+                        cells.add((int(la) * (1 if ns == "N" else -1),
+                                   int(ln) * (1 if ew == "E" else -1)))
+                    else:
+                        cells.add((signs[0] * int(m.group(1)),
+                                   signs[1] * int(m.group(2))))
+            except Exception:
+                pass
         _covered_cells = cells
     return _covered_cells
 

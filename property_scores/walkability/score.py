@@ -214,7 +214,9 @@ def _decay(distance_m: float) -> float:
 
 
 def _elevations(coords: list[tuple[float, float]]) -> list | None:
-    """Elevation at each (lat,lng) from the local Copernicus DEM.
+    """Elevation at each (lat,lng) from the local 30 m DEM (GA DEM-H bare-earth
+    for all AU tiles since 2026-07-15; the leftover Copernicus tiles are EU/US
+    training-region cells no AU address samples).
 
     2026-08-02: dropped the api.open-meteo.com fallback that used to cover
     points outside local DEM coverage (data/global/dem.vrt, populated AU) —

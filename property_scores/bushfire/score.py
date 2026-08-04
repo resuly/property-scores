@@ -8,8 +8,10 @@ Three complementary signals:
    a stale 5-state version of this line caused wrong public copy 2026-07-03.
 2. ESA WorldCover 10m — land cover / vegetation fuel load (global COG)
 3. Terrain slope for fire spread via common.terrain — national 5 m LiDAR
-   bare-earth VRT where covered (~245,000 km2), Copernicus DEM 30 m outside it
-   (LiDAR wired 2026-07-16; this line said "Copernicus DEM 30m" until 2026-07-26)
+   bare-earth VRT where covered (~245,000 km2), 30 m DEM outside it: dem.vrt is
+   GA DEM-H bare-earth for all 196 AU tiles since 2026-07-15 (the 25 Copernicus
+   tiles left in it are EU/US training-region cells, never sampled for AU
+   addresses). This line said "Copernicus DEM 30m" until 2026-08-04.
 
 Score 0-100 where 100 = lowest bushfire risk.
 """
@@ -483,10 +485,12 @@ def _terrain_slope(lat: float, lng: float) -> dict | None:
 
     NOTE (2026-07-26): terrain.elevation() prefers the baked national 5 m LiDAR
     bare-earth VRT (common.lidar_local, ~245,000 km2 populated footprint) and only
-    falls back to the 30 m Copernicus GLO-30 DEM outside it (wired 2026-07-16,
-    commit b0f6509). This docstring used to say "Copernicus GLO-30 DEM" and that
-    stale line caused a downstream asset-claim audit to almost mark the 5 m LiDAR
-    reuse claim as false. Read common/terrain.py, not this line, for the ruler.
+    falls back to the 30 m dem.vrt outside it (wired 2026-07-16, commit
+    b0f6509); that VRT has been GA DEM-H bare-earth for every AU tile since
+    2026-07-15 (its leftover Copernicus tiles are EU/US training-region cells).
+    A stale "Copernicus" label here almost failed one asset-claim audit and DID
+    mislead a second (2026-08-04). Read common/terrain.py, not this line, for
+    the ruler.
 
     Replaces the per-state government contour REST endpoints, which were slow,
     intermittent, and by 2026-07 partly dead (QLD ContoursQLD returned

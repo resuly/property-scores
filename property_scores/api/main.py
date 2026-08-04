@@ -383,8 +383,8 @@ def get_noise_terrain(
     src_lat: float = Query(...), src_lng: float = Query(...),
     lat: float = Query(...), lng: float = Query(...),
 ):
-    """DEM elevation profile from a source to the receiver. Local Copernicus DEM
-    only (the Open-Meteo out-of-coverage fallback was removed 2026-08-02:
+    """DEM elevation profile from a source to the receiver. Local 30 m DEM only
+    (GA DEM-H for AU tiles; the Open-Meteo out-of-coverage fallback was removed 2026-08-02:
     free tier is non-commercial ToS — see noise/terrain.py); split out from
     /noise/debug so the main response stays fast."""
     try:

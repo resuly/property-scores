@@ -18,9 +18,12 @@ MIN_BARRIER_HEIGHT_M = 3.0  # terrain must rise 3m+ above sight line to count
 
 
 def _sample_elevations(lats: list[float], lngs: list[float]) -> list[float] | None:
-    """Elevations for a path from the local Copernicus DEM.
+    """Elevations for a path from the local 30 m DEM.
 
-    The local DEM (data/global/dem.vrt) covers populated AU in 1-degree tiles.
+    The local DEM (data/global/dem.vrt) covers populated AU in 1-degree tiles —
+    GA DEM-H bare-earth for ALL 196 AU tiles since 2026-07-15. The 25 remaining
+    Copernicus tiles are retained EU/US training-region cells; no AU address
+    ever samples Copernicus.
     2026-08-02: dropped the api.open-meteo.com fallback that used to cover
     points outside that coverage — DA Leads is a paid commercial product and
     Open-Meteo's free-tier elevation endpoint is non-commercial-use-only

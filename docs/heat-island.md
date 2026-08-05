@@ -71,7 +71,16 @@ Labels: `>=85` Very Cool · `>=60` Cool · `>=40` Moderate Heat · `>=20` Hot ·
 ## Output Fields
 
 - `score` (0-100, 100 = coolest), `label`, `source` (`modis` | `era5`)
-- `modis_lst_c`, `modis_area_c`, `uhi_delta_c` (omitted where surround is sea/forest), `night_lst_c`
+- `modis_lst_c`, `night_lst_c`
+- `uhi_delta_c` — omitted where the surround is sea/forest, and on the
+  borrowed-pixel path below
+- `modis_area_c` — still emitted on the sea/forest path, omitted on the
+  borrowed-pixel path (DA Leads' map computes its own delta from
+  `modis_lst_c - modis_area_c`, so leaving it there would render the very
+  comparison that path says it cannot make)
+- `lst_source` — `pixel` (the address's own 1 km pixel) or `nearest_land_pixel`
+- `lst_offset_m`, `lst_pixels_averaged` — borrowed-pixel path only: distance to
+  the ring that carried data, and how many pixels of it were averaged
 - `summer_mean_c`, `summer_p90_c` (ERA5)
 - `building_density` (0-1), `greenspace_factor` (0-1)
 - `confidence_note` (only when `source == era5`)
@@ -80,8 +89,14 @@ Labels: `>=85` Very Cool · `>=60` Cool · `>=40` Moderate Heat · `>=20` Hot ·
 
 1. **1km LST resolution** — intra-block variation below 1km is not resolved; the
    Tarneit-vs-Kew truth anchor is only 1.7C apart at sensor resolution.
-2. **Water-pixel dropout** — waterfront addresses whose 1km sinusoidal pixel
-   centres on water switch to ERA5 (documented truth anchor).
+2. **Water-pixel dropout** — waterfront addresses whose 1km sinusoidal pixel is
+   water-masked have no reading of their own. Since 2026-08-05 the value comes
+   from the nearest ring of pixels that do have data, within 2km, reported via
+   `lst_source` / `lst_offset_m` / `lst_pixels_averaged` and stated in the
+   disclaimer; the UHI term and `modis_area_c` are withheld. Measured over 6000
+   AU DA coordinates: 152 addresses had no reading of their own, 149 recovered
+   (142 at 927m, 7 at 1310m) and 3 stayed "Data unavailable". The ERA5 fallback
+   this used to mention was removed 2026-08-02 (non-commercial-use terms).
 3. **No impervious-surface / wind-corridor / canyon modelling** — density and
    greenspace are proxies for these.
 4. **Mosaic vintage** — the local mosaic is a fixed summer median; refresh by

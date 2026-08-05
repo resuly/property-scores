@@ -312,8 +312,18 @@ function renderDetails(d) {
 
   if (d.modis_lst_c != null) {
     html += `<div class="metric-row"><span class="metric-label">Surface Temp (MODIS)</span><span class="metric-value">${d.modis_lst_c}°C</span></div>`;
-    html += `<div class="metric-row"><span class="metric-label">Area Average</span><span class="metric-value">${d.modis_area_c}°C</span></div>`;
-    html += `<div class="metric-row"><span class="metric-label">UHI Delta</span><span class="metric-value" style="color:${d.uhi_delta_c > 0 ? '#dc2626' : '#16a34a'}">${d.uhi_delta_c > 0 ? '+' : ''}${d.uhi_delta_c}°C</span></div>`;
+    // Both are absent whenever the point/area comparison is not like-for-like
+    // (sea or forest surrounds, or a temperature borrowed from a neighbouring
+    // pixel). Without these guards the rows rendered "undefined°C" in green.
+    if (d.modis_area_c != null) {
+      html += `<div class="metric-row"><span class="metric-label">Area Average</span><span class="metric-value">${d.modis_area_c}°C</span></div>`;
+    }
+    if (d.uhi_delta_c != null) {
+      html += `<div class="metric-row"><span class="metric-label">UHI Delta</span><span class="metric-value" style="color:${d.uhi_delta_c > 0 ? '#dc2626' : '#16a34a'}">${d.uhi_delta_c > 0 ? '+' : ''}${d.uhi_delta_c}°C</span></div>`;
+    }
+    if (d.lst_offset_m != null) {
+      html += `<div class="metric-row"><span class="metric-label">Read from</span><span class="metric-value">${d.lst_offset_m} m away (${d.lst_pixels_averaged || 1} px)</span></div>`;
+    }
   }
   if (d.night_lst_c != null) {
     html += `<div class="metric-row"><span class="metric-label">Night Surface Temp</span><span class="metric-value">${d.night_lst_c}°C</span></div>`;

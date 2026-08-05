@@ -96,8 +96,10 @@ def test_no_modis_coverage_returns_data_unavailable(monkeypatch):
 #
 # Production defect: 1/1 Cavill Avenue, Surfers Paradise QLD 4217 returned
 # score:None "Data unavailable" on every call. MODIS LST water-masks whole 1 km
-# pixels, so the beachfront pixel is NODATA while the land pixel 926 m west
-# reads 32.3C. The whole heat score was lost to a mask, not to missing data.
+# pixels, so the beachfront pixel is NODATA while two pixels in the 927 m ring
+# carry data (raw 31.80999755859375 north, 32.290008544921875 west, mean
+# reported as 32.1C). The whole heat score was lost to a mask, not to missing
+# data.
 # ---------------------------------------------------------------------------
 
 SURFERS = (-28.0027, 153.4296)
@@ -174,7 +176,7 @@ def modis_stub(monkeypatch, tmp_path):
 
 
 def test_neighbour_rings_are_ordered_and_capped():
-    rings = hs._neighbour_rings()
+    rings = hs._neighbour_rings(hs._MODIS_NEIGHBOUR_MAX_M, hs._MODIS_PIXEL_M)
     dists = [d for d, _ in rings]
     assert dists == sorted(dists), "nearest ring must be tried first"
     assert all(d <= hs._MODIS_NEIGHBOUR_MAX_M for d in dists)
@@ -351,6 +353,53 @@ def test_normal_score_keeps_its_uhi_delta_and_disclaimer(monkeypatch):
     assert "water-masked" not in out["disclaimer"]
     # temp_score 60.0 - uhi 3.0 - density 3.0 = 54
     assert out["score"] == 54
+
+
+def test_cli_prints_a_borrowed_pixel_result_without_crashing(modis_stub, capsys):
+    """`python -m property_scores.heat_island.score` indexed result['modis_area_c']
+    directly, which is a KeyError on exactly the addresses this path exists for
+    (caught in review; the suite was green because nothing exercised __main__).
+    """
+    modis_stub(day={(0, 1): 31.80999755859375, (-1, 0): 32.290008544921875},
+               night={(0, 1): 22.829986572265625, (-1, 0): 23.080001831054688},
+               window={"mean": 33.347, "count": 10}, lc_value={(0, 0): 50})
+    hs._cache.clear()
+
+    hs._print_result(hs.heat_island_score(*SURFERS))
+
+    out = capsys.readouterr().out
+    assert "Heat Island Score:" in out
+    assert "area avg: n/a" in out
+    assert "UHI: n/a" in out
+    assert "927 m away" in out
+    assert "undefined" not in out and "None°C" not in out
+
+
+def test_disclaimer_says_how_many_pixels_were_averaged(monkeypatch):
+    """One pixel in five reads a single pixel, so the sentence must not hard-code
+    either number (measured: 31 of 149 recovered addresses)."""
+    monkeypatch.setattr(hs, "_building_density_proxy", lambda lat, lng: 0.5)
+    monkeypatch.setattr(hs, "_greenspace_proxy", lambda lat, lng: 0.35)
+    from property_scores.common import landcover as lc
+    monkeypatch.setattr(lc, "fractions", lambda lat, lng, radius_m=500: {80: 0.0, 10: 0.0})
+
+    base = {"point_lst_c": 32.1, "area_lst_c": None, "uhi_delta_c": None,
+            "night_lst_c": 21.0, "samples": 1,
+            "lst_source": "nearest_land_pixel", "lst_offset_m": 927}
+
+    monkeypatch.setattr(hs, "_modis_lst",
+                        lambda lat, lng: {**base, "lst_pixels_averaged": 1})
+    hs._cache.clear()
+    one = hs.heat_island_score(*SURFERS)["disclaimer"]
+
+    monkeypatch.setattr(hs, "_modis_lst",
+                        lambda lat, lng: {**base, "lst_pixels_averaged": 3})
+    hs._cache.clear()
+    three = hs.heat_island_score(*SURFERS)["disclaimer"]
+
+    assert "the nearest pixel that does" in one
+    assert "pixels" not in one.split("read from")[1].split(",")[0]
+    assert "the nearest 3 pixels that do" in three
 
 
 def test_module_has_no_open_meteo_dependency():

@@ -99,7 +99,7 @@ def _sinusoidal_to_wgs84(x: float, y: float) -> tuple[float, float]:
 
 
 @lru_cache(maxsize=4)
-def _neighbour_rings(max_m: float = None, pixel_m: float = None
+def _neighbour_rings(max_m: float, pixel_m: float
                      ) -> tuple[tuple[float, tuple[tuple[int, int], ...]], ...]:
     """Pixel offsets grouped into equidistant rings, nearest ring first.
 
@@ -108,12 +108,12 @@ def _neighbour_rings(max_m: float = None, pixel_m: float = None
     the west neighbour on an east-facing coast). Every pixel in the nearest
     ring that has data is averaged instead.
 
-    The two constants are arguments rather than globals read inside the cached
-    body, so a caller (or a test) that changes them gets a fresh ring set
-    instead of a silently stale cached one.
+    The two constants are required arguments rather than globals read inside
+    the cached body, so a caller (or a test) that changes them gets a fresh
+    ring set instead of a silently stale cached one. They are required, not
+    defaulted, because a default would reintroduce exactly that hole: the
+    no-argument call would cache the globals under one key.
     """
-    max_m = _MODIS_NEIGHBOUR_MAX_M if max_m is None else max_m
-    pixel_m = _MODIS_PIXEL_M if pixel_m is None else pixel_m
     by_dist: dict[float, list[tuple[int, int]]] = {}
     span = int(max_m // pixel_m) + 1
     for dy in range(-span, span + 1):
@@ -597,19 +597,22 @@ def heat_island_score(lat: float, lng: float) -> dict:
     offset_m = modis.get("lst_offset_m") if modis else None
     if modis and modis.get("lst_source", "pixel") != "pixel":
         # Say it on the customer-facing surface, not just in a field: the
-        # temperature is measured near the address, not on it. Plural, because
-        # equidistant pixels are averaged: over the 149 recovered addresses in
+        # temperature is measured near the address, not on it. The count is
+        # rendered rather than guessed at: over the 149 recovered addresses in
         # the 6000-coordinate sample, 31 read a single pixel and 118 read two
-        # to four, so the singular would be wrong four times out of five.
+        # to four, so neither a fixed singular nor a fixed plural is honest.
         # It does not name a cause: the satellite's water mask is the usual
         # reason a waterfront pixel is empty, but persistent cloud and tile gaps
         # produce the same empty pixel and this code cannot tell them apart.
+        px = (modis.get("lst_pixels_averaged") or 1)
+        source_txt = ("the nearest pixel that does" if px == 1
+                      else f"the nearest {px} pixels that do")
         disclaimer += (
             f" The satellite's own 1km pixel for this address carries no "
             f"reading, which is common on waterfront sites, so the surface "
-            f"temperature is read from the nearest pixels that do, about "
-            f"{offset_m} m away. The urban heat island comparison is not "
-            f"reported for this address.")
+            f"temperature is read from {source_txt}, about {offset_m} m away. "
+            f"The urban heat island comparison is not reported for this "
+            f"address.")
 
     result: dict = {
         "score": score,
@@ -661,6 +664,34 @@ def heat_island_score(lat: float, lng: float) -> dict:
     return result
 
 
+def _print_result(result: dict) -> None:
+    """CLI rendering, split out of __main__ so it is reachable by tests.
+
+    It was inside the `if __name__ == "__main__"` block and therefore never
+    executed by the suite, which is how it kept indexing keys that this module
+    stopped guaranteeing.
+    """
+    print(f"Heat Island Score: {result['score']}/100 ({result['label']})")
+    if result.get("modis_lst_c"):
+        # BOTH uhi_delta_c and modis_area_c are absent whenever the comparison
+        # is not like-for-like: sea/forest surrounds drop the delta, and the
+        # borrowed-pixel path drops the area too. Indexing either one directly
+        # is a KeyError on exactly the addresses this path exists for.
+        uhi = result.get("uhi_delta_c")
+        area = result.get("modis_area_c")
+        parts = [f"area avg: {area}°C" if area is not None else "area avg: n/a"]
+        parts.append(f"UHI: {uhi:+.1f}°C" if uhi is not None else "UHI: n/a")
+        print(f"MODIS LST: {result['modis_lst_c']}°C ({', '.join(parts)})")
+        if result.get("lst_offset_m") is not None:
+            px = result.get("lst_pixels_averaged", 1)
+            print(f"  (own pixel has no reading: LST read from {px} pixel"
+                  f"{'' if px == 1 else 's'} {result['lst_offset_m']} m away)")
+    if result.get("building_density") is not None:
+        print(f"Building density: {result['building_density']}")
+    if result.get("greenspace_factor") is not None:
+        print(f"Green space: {result['greenspace_factor']}")
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -669,18 +700,4 @@ if __name__ == "__main__":
     parser.add_argument("--lng", type=float, required=True)
     args = parser.parse_args()
 
-    result = heat_island_score(args.lat, args.lng)
-    print(f"Heat Island Score: {result['score']}/100 ({result['label']})")
-    if result.get("modis_lst_c"):
-        # uhi_delta_c is absent whenever the comparison is not like-for-like
-        # (sea/forest surrounds, or a borrowed neighbour pixel).
-        uhi = result.get("uhi_delta_c")
-        uhi_txt = f", UHI: {uhi:+.1f}°C" if uhi is not None else ", UHI: n/a"
-        print(f"MODIS LST: {result['modis_lst_c']}°C "
-              f"(area avg: {result['modis_area_c']}°C{uhi_txt})")
-        if result.get("lst_source") == "nearest_land_pixel":
-            print(f"  (water-masked pixel: LST read {result['lst_offset_m']} m away)")
-    if result.get("building_density") is not None:
-        print(f"Building density: {result['building_density']}")
-    if result.get("greenspace_factor") is not None:
-        print(f"Green space: {result['greenspace_factor']}")
+    _print_result(heat_island_score(args.lat, args.lng))

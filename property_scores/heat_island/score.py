@@ -462,6 +462,12 @@ def heat_island_score(lat: float, lng: float) -> dict:
     density and greenspace factors. Points with no MODIS coverage return
     "Data unavailable" (see the module-level note above `_building_density_proxy`
     about the removed Open-Meteo ERA5 fallback).
+
+    A waterfront address whose own 1km pixel is water-masked is scored off the
+    nearest land pixel within 2km (`_modis_lst`), with `lst_source` /
+    `lst_offset_m` in the payload, the distance stated in the disclaimer, and
+    no UHI term. The local building-density and greenspace factors are always
+    measured at the true address, on both paths.
     """
     key = _cache_key(lat, lng)
     now = _time.time()

@@ -92,7 +92,7 @@ def test_no_modis_coverage_returns_data_unavailable(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Waterfront (water-masked MODIS pixel) fallback — 2026-08-05.
+# Waterfront (water-masked MODIS pixel) fallback, 2026-08-05.
 #
 # Production defect: 1/1 Cavill Avenue, Surfers Paradise QLD 4217 returned
 # score:None "Data unavailable" on every call. MODIS LST water-masks whole 1 km
@@ -117,8 +117,12 @@ class _FakeSampler:
         self.day = day
         self.night = night or {}
         self.window = window
-        self.lc = lc
+        # Land cover is keyed by offset like everything else. A constant here
+        # would make `_point_is_water(lat + 0.5, lng + 0.5)` pass, which is a
+        # real bug the tests must be able to see.
+        self.lc = lc if isinstance(lc, dict) else ({} if lc is None else {(0, 0): lc})
         self.sampled = []
+        self.window_calls = []
 
     def _offset(self, lat, lng):
         x, y = hs._wgs84_to_sinusoidal(lat, lng)
@@ -132,10 +136,19 @@ class _FakeSampler:
             return self.day.get(off, float("nan"))
         if path == hs._NIGHT_VRT:
             return self.night.get(off, float("nan"))
-        return self.lc if self.lc is not None else float("nan")
+        return self.lc.get(off, float("nan"))
 
     def window_stats(self, path, lat, lng, radius_m, **kw):
-        return dict(self.window) if self.window else {}
+        # Records where and how wide it was asked, so a test can pin the 2 km
+        # radius the whole fallback cap is justified against. The real sampler
+        # also returns 'max'; score.py does not read it, but the shape should
+        # not diverge silently.
+        self.window_calls.append((path, self._offset(lat, lng), radius_m))
+        if not self.window:
+            return {}
+        st = dict(self.window)
+        st.setdefault("max", st.get("mean"))
+        return st
 
 
 @pytest.fixture
@@ -177,32 +190,71 @@ def test_neighbour_rings_are_ordered_and_capped():
     assert (3, 0) not in all_offs
 
 
-def test_waterfront_pixel_reads_the_nearest_land_pixel(modis_stub):
-    """The production case: centre NODATA, land 926 m west."""
-    modis_stub(day={(-1, 0): 32.3}, night={(-1, 0): 22.0},
-               window={"mean": 33.3, "count": 10}, lc_value=50)  # 50 = built-up
+def test_waterfront_pixel_reads_the_nearest_land_pixels(modis_stub):
+    """The production case, sampled off the live mosaic 2026-08-05: the centre
+    pixel is NODATA and TWO pixels in the 927 m ring carry data, so the address
+    reads their mean.
+
+    The day/night numbers below are the raw sampler values from the server, not
+    rounded ones. It matters: the mean of the raw pair is 32.050003, which
+    rounds to 32.1, while the mean of their rounded display values (31.8, 32.3)
+    is 32.05 and rounds to 32.0.
+    """
+    fake = modis_stub(day={(0, 1): 31.80999755859375, (-1, 0): 32.290008544921875},
+                      night={(0, 1): 22.829986572265625, (-1, 0): 23.080001831054688},
+                      window={"mean": 33.347, "count": 10},
+                      lc_value={(0, 0): 50})  # 50 = built-up
 
     out = hs._modis_lst(*SURFERS)
 
     assert out is not None, "a masked centre pixel must no longer kill the score"
-    assert out["point_lst_c"] == 32.3
+    assert out["point_lst_c"] == 32.1
     assert out["lst_source"] == "nearest_land_pixel"
     assert out["lst_offset_m"] == 927
-    assert out["uhi_delta_c"] is None, "borrowed pixel vs its own neighbourhood"
-    assert out["area_lst_c"] == 33.3, "centre is NODATA; nothing to back out"
-    assert out["night_lst_c"] == 22.0, "night must come from the same pixel"
+    assert out["lst_pixels_averaged"] == 2
+    assert out["uhi_delta_c"] is None, "borrowed pixels vs their own neighbourhood"
+    assert out["area_lst_c"] is None, "no like-for-like area to report either"
+    # Reading night at the address (NODATA) or at only one of the two borrowed
+    # pixels would give something other than 23.0.
+    assert out["night_lst_c"] == 23.0
+
+    # The 2 km cap is justified as "inside the window the area is averaged
+    # over", so pin that the window really is asked for 2 km at the address.
+    assert fake.window_calls == [(hs._DAY_VRT, (0, 0), 2000)]
 
 
 def test_equidistant_land_pixels_are_averaged(modis_stub):
     """No compass tie-break: same-distance pixels with data are averaged."""
     modis_stub(day={(-1, 0): 30.0, (0, 1): 34.0, (-2, 0): 20.0},
-               window={"mean": 32.0, "count": 8}, lc_value=50)
+               window={"mean": 32.0, "count": 8}, lc_value={(0, 0): 50})
 
     out = hs._modis_lst(*SURFERS)
 
-    assert out["point_lst_c"] == 32.0  # (30+34)/2, the 926 m ring only
+    assert out["point_lst_c"] == 32.0  # (30+34)/2, the 927 m ring only
     assert out["lst_offset_m"] == 927
-    assert out["samples"] == 2
+    assert out["lst_pixels_averaged"] == 2
+    assert out["samples"] == 1, "'samples' counts composites, not pixels"
+
+
+def test_second_ring_is_used_when_the_first_is_empty(modis_stub):
+    """A wider inlet: the 927 m ring is all water, the 1310 m diagonal is not."""
+    modis_stub(day={(-1, 1): 30.0}, window={"mean": 30.0, "count": 4},
+               lc_value={(0, 0): 50})
+
+    out = hs._modis_lst(*SURFERS)
+
+    assert out["point_lst_c"] == 30.0
+    assert out["lst_offset_m"] == 1310
+
+
+def test_water_cover_is_checked_at_the_address_itself(modis_stub):
+    """Guard against reading land cover at the wrong coordinate: only the
+    address's own cell is water here, the neighbours are built-up."""
+    modis_stub(day={(-1, 0): 32.3}, window={"mean": 33.3, "count": 10},
+               lc_value={(0, 0): 80, (-1, 0): 50, (0, 1): 50, (1, 0): 50,
+                         (0, -1): 50})
+
+    assert hs._modis_lst(*SURFERS) is None
 
 
 def test_fallback_does_not_reach_beyond_the_cap(modis_stub):
@@ -210,6 +262,16 @@ def test_fallback_does_not_reach_beyond_the_cap(modis_stub):
     modis_stub(day={(3, 0): 31.0}, window={"mean": 31.0, "count": 1}, lc_value=50)
 
     assert hs._modis_lst(*SURFERS) is None
+
+
+def test_no_data_anywhere_in_the_window_skips_the_ring_search(modis_stub):
+    """Outside tile coverage (any non-AU coordinate) the 2 km window is empty,
+    so the 12 neighbour samples must not be attempted at all."""
+    fake = modis_stub(day={}, window=None, lc_value={(0, 0): 50})
+
+    assert hs._modis_lst(*SURFERS) is None
+    day_samples = [o for p, o in fake.sampled if p == hs._DAY_VRT]
+    assert day_samples == [(0, 0)], f"only the centre should be sampled: {day_samples}"
 
 
 def test_point_on_water_is_not_given_a_land_temperature(modis_stub):
@@ -242,9 +304,11 @@ def test_score_on_a_borrowed_pixel_drops_the_uhi_penalty(monkeypatch):
     even if a borrowed reading arrives carrying a delta."""
     monkeypatch.setattr(hs, "_building_density_proxy", lambda lat, lng: 0.5)
     monkeypatch.setattr(hs, "_greenspace_proxy", lambda lat, lng: 0.35)
+    # area_lst_c/uhi_delta_c carry values here on purpose: the caller must
+    # refuse to publish a comparison even if a reading arrives with one.
     monkeypatch.setattr(hs, "_modis_lst", lambda lat, lng: {
         "point_lst_c": 32.3, "area_lst_c": 33.3, "uhi_delta_c": 5.0,
-        "night_lst_c": 21.0, "samples": 1,
+        "night_lst_c": 21.0, "samples": 1, "lst_pixels_averaged": 2,
         "lst_source": "nearest_land_pixel", "lst_offset_m": 927})
     # Force the water/tree context check to say "ordinary land", so the only
     # thing that can suppress the penalty is the borrowed-pixel rule.
@@ -255,8 +319,12 @@ def test_score_on_a_borrowed_pixel_drops_the_uhi_penalty(monkeypatch):
 
     assert out["score"] is not None
     assert "uhi_delta_c" not in out
+    # DA Leads' map computes its own delta from (modis_lst_c - modis_area_c),
+    # so withholding uhi_delta_c alone would not stop it rendering one.
+    assert "modis_area_c" not in out
     assert out["lst_source"] == "nearest_land_pixel"
     assert out["lst_offset_m"] == 927
+    assert out["lst_pixels_averaged"] == 2
     assert "927 m away" in out["disclaimer"]
     # temp_score 63.5 - night penalty 4.5 - density 3.0 + green 0.0 = 56.
     # Applying the +5.0 delta would give 41, so this number is what proves the

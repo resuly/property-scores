@@ -64,15 +64,17 @@ _NIGHT_VRT = str(_data_path("global/modis_lst_night.vrt"))
 # MODIS LST is water-masked at source: any 1km pixel MODIS classes as water is
 # written as fill, so a beachfront address sits on a NODATA pixel even though
 # the mosaic covers it and the land pixels a few hundred metres inland are fine.
-# Before 2026-08-05 that returned "Data unavailable" for the whole heat score
-# (production: 1/1 Cavill Avenue, Surfers Paradise QLD — centre pixel NODATA,
-# nearest valid land pixel 926 m west at 32.3C). The nearest-land-pixel fallback
-# below reads that neighbour instead, within a hard 2 km cap.
+# Before 2026-08-05 that returned "Data unavailable" for the whole heat score.
+# Production, 1/1 Cavill Avenue Surfers Paradise QLD (-28.0027, 153.4296):
+# centre pixel NODATA, two pixels in the 927 m ring carry data (raw samples
+# 31.80999755859375 north and 32.290008544921875 west), so the address now
+# reads their mean, reported as 32.1C. Score 48, "Moderate Heat".
 _MODIS_PIXEL_M = 926.625  # MODIS sinusoidal grid step (~1 km)
-# 2 km == the radius of the UHI window this module already treats as "the
-# surrounding area" for the same address, so the fallback never reaches for a
-# temperature the score was not already comparing against. Rings inside it:
-# 926 m (edge-adjacent), 1311 m (diagonal), 1853 m (two pixels out).
+# 2 km is the radius of the window this module already averages to define "the
+# surrounding area", so every candidate is a pixel the score was already
+# reading. Rings inside it: 927 m (edge-adjacent), 1310 m (diagonal), 1853 m
+# (two pixels out). Measured on a 2000-point coastal sample: 87% of recovered
+# points resolve in the first ring, 13% in the second, none in the third.
 _MODIS_NEIGHBOUR_MAX_M = 2000.0
 
 
@@ -95,23 +97,30 @@ def _sinusoidal_to_wgs84(x: float, y: float) -> tuple[float, float]:
     return lat, math.degrees(x / (MODIS_R * cos_lat))
 
 
-@lru_cache(maxsize=1)
-def _neighbour_rings() -> tuple[tuple[float, tuple[tuple[int, int], ...]], ...]:
+@lru_cache(maxsize=4)
+def _neighbour_rings(max_m: float = None, pixel_m: float = None
+                     ) -> tuple[tuple[float, tuple[tuple[int, int], ...]], ...]:
     """Pixel offsets grouped into equidistant rings, nearest ring first.
 
     Grouping matters: picking one pixel out of several at the same distance
     would need a tie-break, and any fixed tie-break is a compass bias (always
     the west neighbour on an east-facing coast). Every pixel in the nearest
     ring that has data is averaged instead.
+
+    The two constants are arguments rather than globals read inside the cached
+    body, so a caller (or a test) that changes them gets a fresh ring set
+    instead of a silently stale cached one.
     """
+    max_m = _MODIS_NEIGHBOUR_MAX_M if max_m is None else max_m
+    pixel_m = _MODIS_PIXEL_M if pixel_m is None else pixel_m
     by_dist: dict[float, list[tuple[int, int]]] = {}
-    span = int(_MODIS_NEIGHBOUR_MAX_M // _MODIS_PIXEL_M) + 1
+    span = int(max_m // pixel_m) + 1
     for dy in range(-span, span + 1):
         for dx in range(-span, span + 1):
             if dx == 0 and dy == 0:
                 continue
-            dist = math.hypot(dx, dy) * _MODIS_PIXEL_M
-            if dist > _MODIS_NEIGHBOUR_MAX_M:
+            dist = math.hypot(dx, dy) * pixel_m
+            if dist > max_m:
                 continue
             by_dist.setdefault(round(dist, 3), []).append((dx, dy))
     return tuple((d, tuple(sorted(by_dist[d]))) for d in sorted(by_dist))
@@ -142,12 +151,12 @@ def _nearest_land_pixel(rs, lat: float, lng: float
 
     Returns (mean day LST, the coordinates of the pixels averaged, distance in
     metres), or None when nothing within _MODIS_NEIGHBOUR_MAX_M has data. The
-    coordinates come back so the night reading is taken from the SAME pixels —
-    a day value from one place and a night value from another would not be a
+    coordinates come back so the night reading is taken from the SAME pixels.
+    A day value from one place and a night value from another would not be a
     single site's diurnal behaviour.
     """
     sx, sy = _wgs84_to_sinusoidal(lat, lng)
-    for dist, offsets in _neighbour_rings():
+    for dist, offsets in _neighbour_rings(_MODIS_NEIGHBOUR_MAX_M, _MODIS_PIXEL_M):
         vals: list[float] = []
         coords: list[tuple[float, float]] = []
         for dx, dy in offsets:
@@ -187,13 +196,17 @@ def _modis_lst(lat: float, lng: float) -> dict | None:
     the centre pixel backed out) = area LST, matching the remote path's
     neighbourhood.
 
-    When the centre pixel itself is NODATA — MODIS water-masks any 1km cell it
-    reads as water, which is most of a beachfront address's pixel — the reading
-    falls back to the nearest ring of land pixels within 2 km and reports
-    ``lst_source="nearest_land_pixel"`` with its distance. In that case the
-    point/area comparison is between a neighbour and its own neighbourhood, so
-    ``uhi_delta_c`` is not a like-for-like UHI signal and is returned as None
-    (the caller drops the penalty and the "+X.XC vs surrounding area" line).
+    When the centre pixel itself has no reading, the value comes instead from
+    the nearest ring of 1km pixels that do, within 2 km, reported as
+    ``lst_source="nearest_land_pixel"`` with its distance and the number of
+    pixels averaged. The commonest cause is MODIS water-masking a waterfront
+    address's own pixel, but persistent cloud and tile gaps land in the same
+    NODATA, so nothing here claims to know which it was.
+
+    On that path there is no like-for-like point/area comparison to make: the
+    borrowed pixels are members of the same window the "area" is averaged over.
+    ``uhi_delta_c`` and ``area_lst_c`` are both returned as None so no consumer
+    can render a difference between the two.
 
     Returns None outside tile coverage, when nothing within 2 km has data, when
     the point itself is water, or on any sampler error, so the caller reports
@@ -208,34 +221,41 @@ def _modis_lst(lat: float, lng: float) -> dict | None:
 
         lst_source = "pixel"
         offset_m = 0.0
+        pixels = 1
         night_points = [(lat, lng)]
+
+        # Area LST over the 5x5 1km-pixel window (radius 2km on the ~926m
+        # sinusoidal grid -> +/-2 pixels), which is also the window every
+        # fallback candidate lives in.
+        st = rs.window_stats(_DAY_VRT, lat, lng, radius_m=2000)
+        n = int(st.get("count", 0)) if st else 0
 
         day = rs.sample(_DAY_VRT, lat, lng)
         if day is None or day != day:  # None or NaN (outside coverage / nodata)
+            if n == 0:
+                return None  # nothing within 2 km has data; skip the ring search
             if _point_is_water(lat, lng):
                 return None  # the address really is on water; do not invent land
             hit = _nearest_land_pixel(rs, lat, lng)
             if hit is None:
-                return None  # outside tile coverage, or >2 km of water/fill
+                return None  # only corner pixels had data, outside the 2 km cap
             day, night_points, offset_m = hit
             lst_source = "nearest_land_pixel"
+            pixels = len(night_points)
         else:
             day = float(day)
 
-        # Area LST over the 5x5 1km-pixel window (radius 2km on the ~926m
-        # sinusoidal grid -> +/-2 pixels). window_stats INCLUDES the centre
-        # pixel, but the remote path averages the 24 neighbours only; back the
-        # centre out with (mean*n - centre)/(n-1) so uhi_delta matches remote.
-        # On the fallback path the centre pixel is NODATA, so window_stats never
-        # counted it and there is nothing to back out.
-        st = rs.window_stats(_DAY_VRT, lat, lng, radius_m=2000)
-        n = int(st.get("count", 0)) if st else 0
+        # window_stats INCLUDES the centre pixel, but the remote path averages
+        # the 24 neighbours only; back the centre out with
+        # (mean*n - centre)/(n-1) so uhi_delta matches remote. On the fallback
+        # path the centre pixel is NODATA, so window_stats never counted it and
+        # there is no area figure worth reporting anyway.
         mean_incl = float(st.get("mean", day)) if st else day
         if lst_source == "pixel":
             area = (mean_incl * n - day) / (n - 1) if n > 1 else mean_incl
             uhi_delta = day - area
         else:
-            area = mean_incl
+            area = None
             uhi_delta = None
 
         nights = []
@@ -249,13 +269,14 @@ def _modis_lst(lat: float, lng: float) -> dict | None:
 
     result: dict = {
         "point_lst_c": round(day, 1),
-        "area_lst_c": round(area, 1),
+        "area_lst_c": round(area, 1) if area is not None else None,
         "uhi_delta_c": round(uhi_delta, 1) if uhi_delta is not None else None,
-        "samples": len(night_points),
+        "samples": 1,  # composites averaged; the local mosaic is one composite
         "lst_source": lst_source,
     }
     if lst_source != "pixel":
         result["lst_offset_m"] = int(round(offset_m))
+        result["lst_pixels_averaged"] = pixels
     if night is not None:
         result["night_lst_c"] = round(night, 1)
         result["night_retention_c"] = round(night - (day - 15), 1)
@@ -575,12 +596,18 @@ def heat_island_score(lat: float, lng: float) -> dict:
     offset_m = modis.get("lst_offset_m") if modis else None
     if modis and modis.get("lst_source", "pixel") != "pixel":
         # Say it on the customer-facing surface, not just in a field: the
-        # temperature is measured near the address, not on it.
+        # temperature is measured near the address, not on it. Plural, because
+        # equidistant pixels are averaged (measured on a 2000-point coastal
+        # sample: 16% of recovered points read one pixel, 84% read two to four).
+        # It does not name a cause: the satellite's water mask is the usual
+        # reason a waterfront pixel is empty, but persistent cloud and tile gaps
+        # produce the same empty pixel and this code cannot tell them apart.
         disclaimer += (
-            f" This address sits on a water-masked satellite pixel (typically "
-            f"coastal or waterfront), so the surface temperature is read from "
-            f"the nearest land pixel about {offset_m} m away and the "
-            f"urban-heat-island comparison is not reported.")
+            f" The satellite's own 1km pixel for this address carries no "
+            f"reading, which is common on waterfront sites, so the surface "
+            f"temperature is read from the nearest pixels that do, about "
+            f"{offset_m} m away. The urban heat island comparison is not "
+            f"reported for this address.")
 
     result: dict = {
         "score": score,
@@ -597,10 +624,24 @@ def heat_island_score(lat: float, lng: float) -> dict:
         result["night_lst_c"] = modis["night_lst_c"]
     if modis:
         result["modis_lst_c"] = modis["point_lst_c"]
-        result["modis_area_c"] = modis["area_lst_c"]
+        # Withheld on the borrowed-pixel path, because DA Leads' map panel
+        # renders its own "vs surroundings" figure from
+        # (modis_lst_c - modis_area_c) rather than from uhi_delta_c
+        # (frontend/map/components/panel/scores/GenericScore.vue). Suppressing
+        # only uhi_delta_c would leave that surface printing the very difference
+        # this path says it cannot measure. The same divergence exists on the
+        # older sea/forest suppression path and is NOT changed here: those
+        # addresses have shipped an area figure for months, and the right fix
+        # is in the renderer, not in a field removal that would silently move
+        # payloads that are currently correct in every other respect.
+        if (modis.get("lst_source", "pixel") == "pixel"
+                and modis.get("area_lst_c") is not None):
+            result["modis_area_c"] = modis["area_lst_c"]
         result["lst_source"] = modis.get("lst_source", "pixel")
         if offset_m is not None:
             result["lst_offset_m"] = offset_m
+        if modis.get("lst_pixels_averaged") is not None:
+            result["lst_pixels_averaged"] = modis["lst_pixels_averaged"]
         # The "+X.XC compared with surrounding area" sentence renders off
         # this field; omit it where the neighbourhood is sea/forest and the
         # comparison is meaningless.

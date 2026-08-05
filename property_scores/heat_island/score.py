@@ -73,8 +73,9 @@ _MODIS_PIXEL_M = 926.625  # MODIS sinusoidal grid step (~1 km)
 # 2 km is the radius of the window this module already averages to define "the
 # surrounding area", so every candidate is a pixel the score was already
 # reading. Rings inside it: 927 m (edge-adjacent), 1310 m (diagonal), 1853 m
-# (two pixels out). Measured on a 2000-point coastal sample: 87% of recovered
-# points resolve in the first ring, 13% in the second, none in the third.
+# (two pixels out). Measured 2026-08-05 over 6000 random AU DA coordinates:
+# 149 addresses recovered here, 142 in the first ring and 7 in the second,
+# none in the third; 3 more stayed unavailable.
 _MODIS_NEIGHBOUR_MAX_M = 2000.0
 
 
@@ -597,8 +598,9 @@ def heat_island_score(lat: float, lng: float) -> dict:
     if modis and modis.get("lst_source", "pixel") != "pixel":
         # Say it on the customer-facing surface, not just in a field: the
         # temperature is measured near the address, not on it. Plural, because
-        # equidistant pixels are averaged (measured on a 2000-point coastal
-        # sample: 16% of recovered points read one pixel, 84% read two to four).
+        # equidistant pixels are averaged: over the 149 recovered addresses in
+        # the 6000-coordinate sample, 31 read a single pixel and 118 read two
+        # to four, so the singular would be wrong four times out of five.
         # It does not name a cause: the satellite's water mask is the usual
         # reason a waterfront pixel is empty, but persistent cloud and tile gaps
         # produce the same empty pixel and this code cannot tell them apart.

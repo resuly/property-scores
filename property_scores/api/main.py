@@ -128,6 +128,24 @@ app.add_middleware(
 
 
 @app.on_event("startup")
+def _resolve_score_stamp():
+    """Pin the code revision to what THIS process loaded.
+
+    Deploys are `git pull` then restart. Resolving the revision lazily on the
+    first /version could land inside that window and report the new commit
+    while the old code is still running -- see stamp.code_revision. Doing it
+    here also puts the stamp in the startup log, so "why did every consumer
+    cache flush" is answerable from the journal.
+    """
+    try:
+        from property_scores.api import stamp
+        logger.info("STARTUP: score model_stamp=%s components=%s",
+                    stamp.model_stamp(), stamp.components())
+    except Exception:
+        logger.exception("STARTUP: score model stamp could not be resolved")
+
+
+@app.on_event("startup")
 def _check_bushfire_data():
     """Warn loudly if the WorldCover mosaic is missing: bushfire fuel silently
     falls back to the weaker Overture proxy, which monitoring would not catch."""
@@ -145,6 +163,34 @@ def _check_bushfire_data():
 @app.get("/api/config")
 def get_config():
     return {"mapbox_token": os.getenv("MAPBOX_TOKEN", "")}
+
+
+@app.get("/version")
+def get_version():
+    """What this service is running, and the stamp consumers cache against.
+
+    `model_stamp` is the contract: a consumer that cached a /scores payload
+    under a different stamp must treat it as a miss. `components` is there so
+    a stamp change can be explained rather than merely observed.
+
+    Cheap on purpose because the consumer polls it. Measured on this repo:
+    model_stamp() has a p50 of 0.08 ms (stats plus content hashes of three
+    small artefacts; the code hash and the registry resolution behind it are
+    both memoised per process, the code hash costing ~10 ms once over 51 files
+    / 0.5 MB, at startup). /scores computes the same stamp per request --
+    0.08 ms against that endpoint's 25 s batch deadline.
+
+    Internal only: bound to 127.0.0.1 in production and absent from the
+    da_leads proxy's endpoint allowlist (web/property_scores_proxy.py), so the
+    artefact sizes and commit id in `components` are not published to the web.
+    """
+    from property_scores.api import stamp
+    return {"model_stamp": stamp.model_stamp(),
+            "components": stamp.components(),
+            # Not a stamp input (a docs-only commit must not flush every
+            # downstream cache -- see stamp.code_revision); here because it is
+            # the first thing a human wants when asking why the stamp moved.
+            "repo_head": stamp.repo_head()}
 
 
 @app.get("/")
@@ -220,7 +266,15 @@ def get_all_scores(
         "contamination": lambda: contamination_score(lat, lng),
         "aircraft_noise": lambda: aircraft_noise_penalty(lat, lng),
     }
-    out = {"lat": lat, "lng": lng, "disclaimer": DISCLAIMER}
+    # Stamped with what produced THIS payload, so a caching consumer records
+    # provenance from the response itself rather than from a separate poll it
+    # made at some other moment. /version answers "what is current"; this
+    # answers "what made this", and the two together are what let a cache
+    # decide. Computed before the batch runs so a component that times out
+    # cannot leave the payload unstamped.
+    from property_scores.api import stamp as _stamp
+    out = {"lat": lat, "lng": lng, "disclaimer": DISCLAIMER,
+           "model_stamp": _stamp.model_stamp()}
     pool = ThreadPoolExecutor(max_workers=len(components))
     futures: dict = {}
     try:

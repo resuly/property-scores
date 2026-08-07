@@ -126,3 +126,50 @@ def test_school_options_are_complete_while_other_categories_stay_bounded(monkeyp
     restaurant = categories["restaurant"]
     assert restaurant["count"] == 7
     assert len(restaurant["options"]) == 3
+
+
+def test_school_option_dedup_does_not_move_score_baseline(monkeypatch):
+    """Disclosure count may shrink to distinct options; scoring count must not.
+
+    Before the options fix, density decay used every matched source row.  The
+    response now deduplicates same-named school options, but that disclosure
+    change must not silently recalibrate customer scores.
+    """
+    from property_scores.walkability import score as walk
+
+    rows = [
+        ("primary_school", distance, 144.9600 + i * 0.0001, -37.8100,
+         "One Primary School")
+        for i, distance in enumerate((100, 120, 140))
+    ] + [
+        ("secondary_school", distance, 144.9700 + i * 0.0001, -37.8110,
+         "One Secondary School")
+        for i, distance in enumerate((200, 220, 240))
+    ]
+
+    monkeypatch.setattr(walk, "get_db", lambda: object())
+    monkeypatch.setattr(walk, "pois_near_detailed", lambda *a, **k: rows)
+    for name in ("transit_stops_near", "sports_fields_near",
+                 "osm_amenities_near", "rail_stops_near", "roads_near"):
+        monkeypatch.setattr(walk, name, lambda *a, **k: [])
+    monkeypatch.setattr(walk, "water_crossings", lambda *a, **k: set())
+    monkeypatch.setattr(walk, "_slope_penalty", lambda *a, **k: 1.0)
+
+    result = walk.walkability_score(-37.8100, 144.9600)
+    primary = result["category_scores"]["primary_school"]
+    secondary = result["category_scores"]["secondary_school"]
+
+    # Three raw matches in each category avoid the <=1/<=2 density discounts,
+    # exactly as before this change. The one delivered option is the distinct
+    # school an integration can render.
+    assert primary["count"] == len(primary["options"]) == 1
+    assert secondary["count"] == len(secondary["options"]) == 1
+    assert primary["decay"] == round(walk._decay(100), 2)
+    assert secondary["decay"] == round(walk._decay(200), 2)
+
+    total_weight = sum(cfg["weight"] for cfg in walk.SCENARIO_CONFIG.values())
+    expected_score = round((
+        walk.SCENARIO_CONFIG["primary_school"]["weight"] * walk._decay(100)
+        + walk.SCENARIO_CONFIG["secondary_school"]["weight"] * walk._decay(200)
+    ) / total_weight * 100)
+    assert result["score"] == expected_score

@@ -85,3 +85,44 @@ def test_sports_fields_missing_file_graceful():
 
 def test_sports_category_maps_to_sports_scenario():
     assert _match_category("sports_and_recreation_venue", "Golden Jubilee Field") == "sports"
+
+
+def test_school_options_are_complete_while_other_categories_stay_bounded(monkeypatch):
+    """The licensed score must not say eight schools and name only three."""
+    from property_scores.walkability import score as walk
+
+    rows = []
+    for i in range(8):
+        rows.append(("primary_school", 100 + i * 20,
+                     144.9600 + i * 0.0001, -37.8100,
+                     f"Primary School {i}"))
+    for i in range(5):
+        rows.append(("secondary_school", 200 + i * 20,
+                     144.9700 + i * 0.0001, -37.8110,
+                     f"Secondary School {i}"))
+    for i in range(7):
+        rows.append(("restaurant", 50 + i * 10,
+                     144.9800 + i * 0.0001, -37.8120,
+                     f"Restaurant {i}"))
+
+    monkeypatch.setattr(walk, "get_db", lambda: object())
+    monkeypatch.setattr(walk, "pois_near_detailed", lambda *a, **k: rows)
+    for name in ("transit_stops_near", "sports_fields_near",
+                 "osm_amenities_near", "rail_stops_near", "roads_near"):
+        monkeypatch.setattr(walk, name, lambda *a, **k: [])
+    monkeypatch.setattr(walk, "water_crossings", lambda *a, **k: set())
+    monkeypatch.setattr(walk, "_slope_penalty", lambda *a, **k: 1.0)
+
+    result = walk.walkability_score(-37.8100, 144.9600)
+    categories = result["category_scores"]
+
+    for scenario, expected in (("primary_school", 8),
+                               ("secondary_school", 5)):
+        school = categories[scenario]
+        assert school["count"] == expected
+        assert len(school["options"]) == expected
+        assert school["count"] == len(school["options"])
+
+    restaurant = categories["restaurant"]
+    assert restaurant["count"] == 7
+    assert len(restaurant["options"]) == 3

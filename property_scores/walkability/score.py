@@ -176,6 +176,13 @@ _FALSE_POSITIVES = {
 MAX_WALK_DISTANCE_M = 1500.0
 BARRIER_CLASSES = {"motorway", "trunk"}
 BARRIER_PENALTY = 2.5
+# These are data rows in a licensed property response, not a presentation
+# carousel. Foundit caught the old contradiction directly: `count: 8` beside
+# three `options`. Keep the compact three-option boundary for high-volume
+# amenity categories (restaurants, cafes, stops, etc.), but return every
+# distinct school the radius query found.
+_UNCAPPED_OPTION_SCENARIOS = frozenset({"primary_school", "secondary_school"})
+_DEFAULT_OPTIONS_LIMIT = 3
 
 
 def _match_category(poi_category: str | None, poi_name: str | None = None) -> str | None:
@@ -343,8 +350,6 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
     nearest_detail: dict[str, dict] = {}
     top_pois: dict[str, list] = {}
     cat_counts: dict[str, int] = {}
-    MAX_TOP = 3
-
     items = pois_full if detailed else [(c, d, None, None, None) for c, d in pois]
     seen_names: dict[str, set] = {}
     for poi_cat, dist_m, plng, plat, pname in items:
@@ -365,7 +370,9 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
                 if norm not in seen_names.get(matched, set()):
                     if matched not in top_pois:
                         top_pois[matched] = []
-                    if len(top_pois[matched]) < MAX_TOP:
+                    option_limit = (None if matched in _UNCAPPED_OPTION_SCENARIOS
+                                    else _DEFAULT_OPTIONS_LIMIT)
+                    if option_limit is None or len(top_pois[matched]) < option_limit:
                         top_pois[matched].append({
                             "lng": round(plng, 6), "lat": round(plat, 6),
                             "name": pname or poi_cat,
@@ -435,11 +442,19 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
             if eff_dist > raw_dist:
                 barriers_crossed += 1
             d = _decay(eff_dist)
-            count = cat_counts.get(scenario, 0)
-            if count <= 1:
+            scoring_count = cat_counts.get(scenario, 0)
+            if scoring_count <= 1:
                 d *= 0.7
-            elif count <= 2:
+            elif scoring_count <= 2:
                 d *= 0.85
+            # On the detailed production path, school `options` are the
+            # distinct, locatable schools we can actually deliver. Publish a
+            # count that describes that list. Keep the pre-existing raw count
+            # for score weighting above so this disclosure fix does not move
+            # customers' walkability baselines.
+            count = scoring_count
+            if scenario in _UNCAPPED_OPTION_SCENARIOS and scenario in top_pois:
+                count = len(top_pois[scenario])
             cs = {
                 "distance_m": round(raw_dist),
                 "decay": round(d, 2),

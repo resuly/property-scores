@@ -52,7 +52,26 @@ def _detect_state(lat: float, lng: float) -> str | None:
 # EPA register queries
 # ---------------------------------------------------------------------------
 
-def _vic_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict]:
+# ArcGIS REST wraps a failed query in {"error": {...}} and GeoServer WFS in
+# {"exceptions": [...]}, both under HTTP 200. A green status code is therefore
+# not evidence that the register was searched, and it is the more common of the
+# two failure modes for these services (2026-08-10 fail-closed audit).
+_UPSTREAM_ERROR_KEYS = ("error", "exceptions", "exceptionReport")
+
+
+def _features_or_none(data) -> list | None:
+    """Return the feature list of a successful query, or None for any payload
+    that is not one. A body with no usable `features` list is an outage, not an
+    empty register, and the two must stay distinguishable all the way up."""
+    if not isinstance(data, dict):
+        return None
+    if any(k in data for k in _UPSTREAM_ERROR_KEYS):
+        return None
+    features = data.get("features")
+    return features if isinstance(features, list) else None
+
+
+def _vic_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict] | None:
     """Query VIC EPA Priority Sites Register via WFS."""
     deg = radius_m / 111_000
     bbox = f"{lng - deg},{lat - deg},{lng + deg},{lat + deg},EPSG:4326"
@@ -71,9 +90,12 @@ def _vic_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict]:
             timeout=TIMEOUT,
         )
         if not resp.ok:
-            return []
-        data = resp.json()
-        features = data.get("features", [])
+            # a non-2xx is an outage, not an empty register: same semantics
+            # as the except branch below (2026-08-10 fail-closed audit)
+            return None
+        features = _features_or_none(resp.json())
+        if features is None:
+            return None
         results = []
         m_per_deg = 111_320 * math.cos(math.radians(lat))
         for f in features:
@@ -97,7 +119,7 @@ def _vic_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict]:
         return None  # error must stay distinguishable from a clean register
 
 
-def _nsw_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict]:
+def _nsw_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict] | None:
     """Query NSW EPA Contaminated Land Notified Sites."""
     url = (
         "https://mapprod2.environment.nsw.gov.au/arcgis/rest/services"
@@ -115,10 +137,14 @@ def _nsw_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict]:
             "f": "json",
         }, timeout=TIMEOUT)
         if not resp.ok:
-            return []
-        data = resp.json()
+            # a non-2xx is an outage, not an empty register: same semantics
+            # as the except branch below (2026-08-10 fail-closed audit)
+            return None
+        features = _features_or_none(resp.json())
+        if features is None:
+            return None
         results = []
-        for feat in data.get("features", []):
+        for feat in features:
             a = feat.get("attributes", {})
             flng = a.get("Longitude")
             flat = a.get("Latitude")
@@ -140,7 +166,7 @@ def _nsw_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict]:
         return None  # error must stay distinguishable from a clean register
 
 
-def _wa_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict]:
+def _wa_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict] | None:
     """Query WA DWER Contaminated Sites Database."""
     url = (
         "https://public-services.slip.wa.gov.au/public/rest/services"
@@ -165,8 +191,12 @@ def _wa_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict]:
             "f": "json",
         }, timeout=TIMEOUT)
         if not resp.ok:
-            return []
-        data = resp.json()
+            # a non-2xx is an outage, not an empty register: same semantics
+            # as the except branch below (2026-08-10 fail-closed audit)
+            return None
+        features = _features_or_none(resp.json())
+        if features is None:
+            return None
         m_per_deg = 111_320 * math.cos(math.radians(lat))
 
         def _inside(rings):
@@ -184,7 +214,7 @@ def _wa_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict]:
             return hit
 
         results = []
-        for feat in data.get("features", []):
+        for feat in features:
             a = {str(k).lower(): v for k, v in feat.get("attributes", {}).items()}
             geom = feat.get("geometry", {})
             rings = geom.get("rings") or []
@@ -285,9 +315,21 @@ def _industrial_proximity(lat: float, lng: float) -> dict:
             "nearest_m": industrial[0]["distance_m"] if industrial else None,
             "nearest_type": industrial[0]["type"] if industrial else None,
             "sites": industrial[:10],
+            "industrial_status": "ok",
         }
     except Exception:
-        return {"count_500m": 0, "nearest_m": None, "nearest_type": None, "sites": []}
+        # count_500m 0 is indistinguishable from "queried fine, nothing near",
+        # which turned an Overture outage into a 95 "Very Clean". The status
+        # field is what callers must branch on (2026-08-10 fail-closed audit);
+        # the legacy keys stay for backward compatibility.
+        logger.exception("industrial proximity lookup failed at %s,%s", lat, lng)
+        return {
+            "count_500m": 0,
+            "nearest_m": None,
+            "nearest_type": None,
+            "sites": [],
+            "industrial_status": "error",
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -364,10 +406,64 @@ def _industrial_to_score(ind: dict) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Labelling
+# ---------------------------------------------------------------------------
+
+# Labels a reader takes as "this address was checked and it came back clean".
+# They are the ones that must never be produced off an incomplete check.
+_REASSURING_LABELS = {"Very Clean", "Clean"}
+
+LABEL_CHECK_UNAVAILABLE = "Check Unavailable"
+LABEL_INCOMPLETE = "Incomplete Check"
+LABEL_REGISTER_NOT_CHECKED = "No Mapped Red Flag (Register Not Checked)"
+
+
+def _score_band_label(score: int) -> str:
+    if score >= 90:
+        return "Very Clean"
+    if score >= 70:
+        return "Clean"
+    if score >= 50:
+        return "Low Risk"
+    if score >= 30:
+        return "Moderate Risk"
+    if score >= 15:
+        return "High Risk"
+    return "Very High Risk"
+
+
+def _contamination_label(score: int | None, epa_status: str, ind_failed: bool) -> str:
+    """Pick the public label, refusing to sound reassuring off a partial check.
+
+    A score computed while a core signal was down (or while the state has no
+    integrated register) can still be a useful risk warning, so a bad band is
+    kept as is. What it may never do is tell the reader the address is clean,
+    because the evidence that would show otherwise was never retrieved.
+    """
+    if score is None:
+        return LABEL_CHECK_UNAVAILABLE
+
+    label = _score_band_label(score)
+    if label not in _REASSURING_LABELS:
+        return label
+    if epa_status == "error" or ind_failed:
+        return LABEL_INCOMPLETE
+    if epa_status == "not_integrated":
+        return LABEL_REGISTER_NOT_CHECKED
+    return label
+
+
+# ---------------------------------------------------------------------------
 # Main scoring function
 # ---------------------------------------------------------------------------
 
 _contam_cache: OrderedDict[tuple[float, float], tuple[dict, float]] = OrderedDict()
+# Measured 2026-08-10: an entry is ~372 B empty and ~2.9 KB at its worst
+# (Sydney CBD, 19 EPA sites), so this cap costs 0.7-5.9 MB. The round(4) key
+# above made each entry cover ~98 m2 instead of ~9,800 m2, so the same cap now
+# holds roughly one entry per queried address rather than one per block. Raise
+# it if the hit rate is measured to have dropped; do not lower the key
+# precision to buy the hit rate back.
 _CONTAM_CACHE_MAX = 2000
 _CONTAM_CACHE_TTL = 3600
 
@@ -378,8 +474,10 @@ def contamination_score(lat: float, lng: float) -> dict:
     Combines official EPA registers (VIC/NSW/WA) with industrial POI
     proximity from Overture data for national coverage.
     """
-    # EPA sites have specific locations; round(3) gives ~111m grid
-    key = (round(lat, 3), round(lng, 3))
+    # EPA sites have specific locations and the score bands break at 100m /
+    # 250m, so a round(3) key (~111m grid) let neighbouring parcels on either
+    # side of a band edge share one answer. round(4) is ~11m (2026-08-10).
+    key = (round(lat, 4), round(lng, 4))
     now = _time.time()
     if key in _contam_cache:
         cached, ts = _contam_cache[key]
@@ -427,28 +525,17 @@ def contamination_score(lat: float, lng: float) -> dict:
                  else None)
 
     industrial = f_ind.result()
-    ind_score = _industrial_to_score(industrial)
+    ind_failed = industrial.get("industrial_status") == "error"
+    ind_score = None if ind_failed else _industrial_to_score(industrial)
 
     # --- Combine ---
-    if epa_score is not None:
-        score = min(epa_score, ind_score)
-    else:
-        score = ind_score
+    components = [s for s in (epa_score, ind_score) if s is not None]
+    score = max(0, min(100, min(components))) if components else None
 
-    score = max(0, min(100, score))
-
-    if score >= 90:
-        label = "Very Clean"
-    elif score >= 70:
-        label = "Clean"
-    elif score >= 50:
-        label = "Low Risk"
-    elif score >= 30:
-        label = "Moderate Risk"
-    elif score >= 15:
-        label = "High Risk"
-    else:
-        label = "Very High Risk"
+    epa_status = ("error" if epa_failed
+                  else "ok" if state in ("VIC", "NSW", "WA")
+                  else "not_integrated")
+    label = _contamination_label(score, epa_status=epa_status, ind_failed=ind_failed)
 
     result: dict = {
         "score": score,
@@ -459,19 +546,33 @@ def contamination_score(lat: float, lng: float) -> dict:
         "epa_sites": epa_sites[:10],
         "industrial": industrial,
     }
-    result["epa_status"] = ("error" if epa_failed
-                            else "ok" if state in ("VIC", "NSW", "WA")
-                            else "not_integrated")
-    if epa_failed:
-        result["note"] = (f"The {state} EPA register could not be reached for this "
-                          "check; the score uses industrial proximity only and may "
-                          "understate risk.")
-    elif state not in ("VIC", "NSW", "WA"):
-        result["note"] = (f"No {state} EPA register is integrated. Score based on "
-                          "industrial POI proximity only; check the state register "
-                          "directly for this address.")
+    result["epa_status"] = epa_status
+    result["industrial_status"] = industrial.get("industrial_status", "ok")
 
-    if not epa_failed:
+    notes: list[str] = []
+    if epa_failed:
+        notes.append(f"The {state} EPA register could not be reached for this "
+                     "check, so any listed site near this address would not "
+                     "show up here.")
+    elif epa_status == "not_integrated":
+        notes.append(f"No {state} EPA register is integrated. Check the state "
+                     "register directly for this address.")
+    if ind_failed:
+        notes.append("The industrial land use data could not be reached for "
+                     "this check.")
+    if notes:
+        if score is None:
+            notes.append("No score could be produced for this address. Try again later.")
+        else:
+            notes.append("The result is incomplete and may understate risk.")
+        result["note"] = " ".join(notes)
+
+    # A degraded result must not be pinned for an hour. `not epa_failed` has
+    # been here since the 2026-06-11 dropped-connection fix; `not ind_failed`
+    # is the new half, because before it an Overture outage cached a 95
+    # "Very Clean" for every later caller on the same grid cell. A
+    # not_integrated state is a stable fact, not an outage, so it still caches.
+    if not epa_failed and not ind_failed:
         _contam_cache[key] = (result, _time.time())
         if len(_contam_cache) > _CONTAM_CACHE_MAX:
             _contam_cache.popitem(last=False)

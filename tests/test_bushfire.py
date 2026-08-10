@@ -92,3 +92,33 @@ def test_check_layer_nsw_category_mapping():
     with mock.patch("property_scores.bushfire.score._query_arcgis", return_value=data):
         sev, detail, ok = _check_layer("NSW", "BPL", "http://x", "high", -33.7, 151.1)
     assert (sev, detail, ok) == ("extreme", "Vegetation Category 1", True)
+
+
+# --- ACT Bushfire_Prone_Area_Details_2026.Hazard_Category ------------------
+# The predecessor service (SBMP_BPA_current) was withdrawn upstream and every
+# ACT address fell back to official_zone_status "unavailable". The replacement
+# classifies, so the parser must read Hazard_Category rather than return a
+# fixed "high" for any hit.
+
+def _act_layer(attrs):
+    data = {"features": [{"attributes": attrs}]}
+    with mock.patch("property_scores.bushfire.score._query_arcgis", return_value=data):
+        return _check_layer("ACT", "Bushfire Prone Area (ACT BPA 2026)",
+                            "http://x", "high", -35.30, 149.10)
+
+
+def test_check_layer_act_category_mapping():
+    assert _act_layer({"Hazard_Category": "1"}) == ("extreme", "Hazard Category 1", True)
+    assert _act_layer({"Hazard_Category": "2"}) == ("moderate", "Hazard Category 2", True)
+    assert _act_layer({"Hazard_Category": "3"}) == ("low", "Hazard Category 3", True)
+
+
+def test_check_layer_act_buffer():
+    assert _act_layer({"Hazard_Category": "Buffer"}) == ("low", "Buffer", True)
+
+
+def test_check_layer_act_unknown_category_stays_severe():
+    # a class the publisher adds later must not read as the mildest band
+    assert _act_layer({"Hazard_Category": "4"}) == ("high", "Hazard Category 4", True)
+    sev, detail, ok = _act_layer({"OBJECTID": 1})
+    assert (sev, ok) == ("high", True)

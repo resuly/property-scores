@@ -82,8 +82,13 @@ def evaluate(expected: str, payload: dict) -> tuple[str, str]:
     score = payload.get("score")
 
     m = re.match(r"score\s*(<=|<|>=|>)\s*(\d+)", e)
-    if m and isinstance(score, (int, float)):
+    if m:
         op, n = m.group(1), int(m.group(2))
+        if not isinstance(score, (int, float)):
+            # an anchor that asks about the score and gets no score is a dead
+            # signal, not a MANUAL: MANUAL never reaches new_failures
+            return ("FAIL", f"no score in payload (expected {op}{n}, "
+                            f"label={payload.get('label')!r})")
         ok = {"<": score < n, "<=": score <= n, ">": score > n, ">=": score >= n}[op]
         return ("PASS" if ok else "FAIL", f"score={score} expected {op}{n}")
 
@@ -105,7 +110,13 @@ def evaluate(expected: str, payload: dict) -> tuple[str, str]:
         if isinstance(score, (int, float)):
             return ("PASS" if score <= 40 else "FAIL",
                     f"score={score} expected <=40 (high risk site)")
-        return ("MANUAL", "no score in payload")
+        # A known-positive anchor that comes back without a score is a dead
+        # signal, not a case for a human to look at later: MANUAL never reaches
+        # new_failures, so this is exactly the silent-death this file exists to
+        # catch. Contamination can now legitimately return score None when both
+        # its signal layers are down (2026-08-10 fail-closed change), which made
+        # that gap reachable in production.
+        return ("FAIL", f"no score in payload (label={payload.get('label')!r})")
 
     m = re.search(r"label\s+(?:>=\s*)?([A-Za-z][A-Za-z /]+)", e)
     if m and payload.get("label"):

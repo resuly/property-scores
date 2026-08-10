@@ -3,7 +3,7 @@ Bushfire risk score combining planning overlays + satellite vegetation/slope.
 
 Three complementary signals:
 1. ArcGIS REST overlays — official bushfire-prone zones, 7 of 8 states:
-   VIC/NSW/QLD/WA/SA/TAS/ACT (QLD = QFD 2017-vintage proxy, ACT = SBMP BPA;
+   VIC/NSW/QLD/WA/SA/TAS/ACT (QLD = QFD 2017-vintage proxy, ACT = BPA 2026;
    only the NT has none). Keep this list in sync with OVERLAY_ENDPOINTS below;
    a stale 5-state version of this line caused wrong public copy 2026-07-03.
 2. ESA WorldCover 10m — land cover / vegetation fuel load (global COG)
@@ -80,12 +80,18 @@ ENDPOINTS: dict[str, list[tuple[str, str, str]]] = {
     ],
     # Verified 2026-06-11 (recon agents, point probes pasted in the audit log)
     "ACT": [
-        # Binary in/out Strategic Bushfire Management Plan BPA (ACTmapi,
-        # CC-BY). Chapman hits; 2003-firestorm Duffy core is officially
-        # outside the CURRENT BPA, which is the honest answer.
-        ("Bushfire Prone Area (ACT SBMP)",
+        # ACTmapi (CC-BY), Strategic Bushfire Management Plan BPA. The old
+        # SBMP_BPA_current service was withdrawn upstream and now answers
+        # code 400 "Invalid URL", so ACT scored overlay-unavailable; replaced
+        # 2026-08-10 with Bushfire_Prone_Area_Details_2026 from the same org.
+        # Details (4,879 polygons, Hazard_Category field) over
+        # Bushfire_Prone_Area_Overview_2026 (21 dissolved polygons, no
+        # classification field): the two cover the same footprint (summed
+        # Shape__Area 2.1211e9 vs 2.1211e9, 0.002% apart, identical service
+        # extent) so Details costs no coverage and adds the category.
+        ("Bushfire Prone Area (ACT BPA 2026)",
          "https://services1.arcgis.com/E5n4f1VY84i0xSjy/arcgis/rest/services"
-         "/SBMP_BPA_current/FeatureServer/0",
+         "/Bushfire_Prone_Area_Details_2026/FeatureServer/0",
          "high"),
     ],
     "QLD": [
@@ -110,6 +116,23 @@ NSW_CATEGORY_MAP = {
     "Vegetation Category 2": "high",
     "Vegetation Category 3": "moderate",
     "Vegetation Buffer": "low",
+}
+
+# ACT Bushfire_Prone_Area_Details_2026.Hazard_Category. Ranking taken from the
+# publisher's own wording on the ACTmapi item (d1d8726b6f3c461b82729180b0991b41):
+# Category 1 "is the highest risk for bush fire ... highest combustibility and
+# likelihood of forming fully developed fires including heavy ember production"
+# (forest, woodland, heath, plantation); Category 2 "is medium bush fire risk
+# vegetation" (grassland, open woodland); Category 3 "is a lower bush fire risk
+# than Category 1 and Category 2" (linear strips beside roads and laneways);
+# Buffers are the up-to-100 m skirt around the mapped vegetation, matching how
+# NSW "Vegetation Buffer" is scored above. An unrecognised value falls back to
+# the layer's default severity (high), so a new class never reads as mild.
+ACT_CATEGORY_MAP = {
+    "1": "extreme",
+    "2": "moderate",
+    "3": "low",
+    "buffer": "low",
 }
 
 TIMEOUT = 10
@@ -217,7 +240,13 @@ def _check_layer(state: str, layer_name: str, url: str, severity: str,
         return sev, cls or layer_name, True
 
     if state == "ACT":
-        return severity, "Bushfire Prone Area (ACT SBMP)", True
+        cat = str(attrs.get("Hazard_Category") or "").strip()
+        if not cat:
+            return severity, layer_name, True
+        sev = ACT_CATEGORY_MAP.get(cat.lower(), severity)
+        detail = ("Buffer" if cat.lower() == "buffer"
+                  else f"Hazard Category {cat}")
+        return sev, detail, True
 
     detail = attrs.get("ZONE_CODE") or attrs.get("classvalue") or layer_name
     return severity, str(detail), True

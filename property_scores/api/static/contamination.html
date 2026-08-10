@@ -98,6 +98,8 @@ function setPoint(lat, lng) {
   query();
 }
 function scoreColor(s) {
+  // no score means the check could not be completed: neutral, never red or green
+  if (s === null || s === undefined) return 'var(--text-3)';
   if (s >= 80) return '#16a34a';
   if (s >= 60) return '#65a30d';
   if (s >= 40) return '#d97706';
@@ -221,17 +223,22 @@ async function query() {
     const sc = d.score; const color = scoreColor(sc);
     scoreBox.classList.remove('hidden');
 
+    // A signal that failed reports zero sites, which is the same shape as
+    // "checked, nothing there". Nothing reassuring may be rendered off it.
+    const epaOk = d.epa_status === 'ok';
+    const indOk = (d.industrial_status || d.industrial.industrial_status || 'ok') !== 'error';
+
     // Summary
     const parts = [];
     if (d.epa_sites_count > 0) parts.push(`${d.epa_sites_count} EPA contamination record${d.epa_sites_count > 1 ? 's' : ''} within 2km`);
     if (d.industrial.count_500m > 0) parts.push(`${d.industrial.count_500m} industrial sites within 500m`);
-    if (!parts.length && sc >= 80) parts.push('No contamination records or industrial sites nearby');
-    const summary = parts.join('. ') + '.';
+    if (!parts.length && epaOk && indOk && sc >= 80) parts.push('No contamination records or industrial sites nearby');
+    const summary = parts.length ? parts.join('. ') + '.' : '';
 
     scoreBox.innerHTML = `<div class="score-card">
       <div style="display:flex;align-items:baseline;gap:6px">
-        <div class="score-num" style="color:${color}">${sc}</div>
-        <div style="font-size:14px;font-weight:600;color:var(--text-3)">/100</div>
+        <div class="score-num" style="color:${color}">${sc === null || sc === undefined ? 'n/a' : sc}</div>
+        <div style="font-size:14px;font-weight:600;color:var(--text-3)">${sc === null || sc === undefined ? '' : '/100'}</div>
         <div style="margin-left:auto;font-size:11px;color:var(--text-3)">${d.state || ''}</div>
       </div>
       <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-top:2px">${d.label}</div>
@@ -261,7 +268,9 @@ async function query() {
       }
     } else if (d.state && ['VIC','NSW','WA'].includes(d.state)) {
       html += '<div class="section-hdr">EPA Registered Sites</div>';
-      html += '<div style="font-size:12px;color:var(--safe);padding:4px 0">&#10003; No contamination sites found within 2km</div>';
+      html += epaOk
+        ? '<div style="font-size:12px;color:var(--safe);padding:4px 0">&#10003; No contamination sites found within 2km</div>'
+        : `<div style="font-size:12px;color:var(--warn);padding:4px 0">The ${d.state} EPA register could not be searched for this address. Nothing here means it was not checked.</div>`;
     }
 
     // Industrial POIs on map + sidebar
@@ -283,7 +292,9 @@ async function query() {
       }
       if (ind.sites.length > 5) html += `<div style="font-size:11px;color:var(--text-3);padding:2px 0">+${ind.sites.length - 5} more</div>`;
     } else {
-      html += '<div style="font-size:12px;color:var(--safe);padding:4px 0">&#10003; No industrial sites within 500m</div>';
+      html += indOk
+        ? '<div style="font-size:12px;color:var(--safe);padding:4px 0">&#10003; No industrial sites within 500m</div>'
+        : '<div style="font-size:12px;color:var(--warn);padding:4px 0">The industrial land use data could not be searched for this address. Nothing here means it was not checked.</div>';
     }
 
     html += `<div style="font-size:10px;color:var(--text-3);margin-top:12px;padding-top:8px;border-top:1px solid var(--border)">${d.disclaimer}</div>`;

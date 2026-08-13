@@ -67,6 +67,13 @@ ENDPOINTS: dict[str, list[tuple[str, str, str]]] = {
          "https://lsa2.geohub.sa.gov.au/arcgis/rest/services"
          "/SAPPA/PropertyPlanningAtlasV18/MapServer/367",
          "flood"),
+        # This control says that site-specific flood evidence is required; it
+        # does not publish a flood extent or severity band.  Keep the hit in
+        # flood_zones, but do not translate it into either risk or safety.
+        ("Hazards (Flooding Evidence Required)",
+         "https://lsa2.geohub.sa.gov.au/arcgis/rest/services"
+         "/SAPPA/PropertyPlanningAtlasV18/MapServer/403",
+         "evidence_required"),
     ],
     "TAS": [
         # Statewide overlay layer (14). Layer 3 is the Kingborough Interim
@@ -91,6 +98,15 @@ SEVERITY_SCORES: dict[str, tuple[int, int]] = {
     "flood":    (20, 40),
     "moderate": (40, 60),
 }
+
+
+def _score_bearing_zone_count(state: str, hit_zones: list[str]) -> int:
+    """Number of hits whose configured severity can affect the score."""
+    configured = {
+        name for name, _url, severity in ENDPOINTS.get(state, [])
+        if severity in SEVERITY_SCORES
+    }
+    return sum(1 for zone in hit_zones if zone in configured)
 
 # ---------------------------------------------------------------------------
 # JRC Global Surface Water — Planetary Computer COG tiles
@@ -190,7 +206,11 @@ def _overlay_check(state: str, lat: float, lng: float) -> tuple[str | None, list
             continue
         if result:
             hit_zones.append(layer_name)
-            if worst_severity is None or severity_rank.get(severity, 99) < severity_rank.get(worst_severity, 99):
+            # Evidence Required is an assessment trigger, not a mapped hazard
+            # class.  It must remain visible without becoming a guessed score.
+            if severity not in severity_rank:
+                continue
+            if worst_severity is None or severity_rank[severity] < severity_rank.get(worst_severity, 99):
                 worst_severity = severity
 
     return worst_severity, hit_zones, warnings
@@ -793,15 +813,21 @@ def flood_score(lat: float, lng: float) -> dict:
             # there says nothing about Windsor or Lismore (both zero in it,
             # 2026-06-11 audit), so it cannot vouch a 90 "checked clean".
             overlay_trust, overlay_basis = "hit_only", "state_service"
+        elif state == "SA" and warnings:
+            # An outage on any PlanSA flood layer means the official check did
+            # not complete.  Do not describe the remaining empty responses as
+            # checked clean or award the old warning-softened 80 contribution.
+            overlay_trust, overlay_basis = None, "state_service"
         else:
             overlay_trust, overlay_basis = "full", "state_service"
 
     overlay_score: int | None = None
     if worst_severity is not None:
         lo, hi = SEVERITY_SCORES[worst_severity]
-        zone_penalty = min(len(hit_zones) - 1, 3) * 3
+        score_bearing_hits = _score_bearing_zone_count(state, hit_zones)
+        zone_penalty = min(max(score_bearing_hits - 1, 0), 3) * 3
         overlay_score = max(lo, hi - zone_penalty)
-    elif overlay_trust == "full":
+    elif overlay_trust == "full" and not hit_zones:
         # Statewide statutory overlay checked clean.
         overlay_score = 90 if not warnings else 80
     else:
@@ -933,6 +959,14 @@ def flood_score(lat: float, lng: float) -> dict:
     )
     if overlay_basis:
         result_dict["overlay_basis"] = overlay_basis
+    if any("Evidence Required" in zone for zone in hit_zones):
+        result_dict["official_layer_note"] = (
+            "The official PlanSA Hazards (Flooding Evidence Required) "
+            "control covers this address. It requires site-specific flood "
+            "evidence but does not state a flood extent or severity, so its "
+            "risk contribution is unknown and neutral in this score. Obtain "
+            "the required flood evidence before relying on the screening result."
+        )
     # reg-09: graded ARR flood-hazard class (H1..H6) with study provenance,
     # surfaced when the library carries it. Turns a binary "in the flood zone"
     # into "H2 - unsafe for small vehicles, source <study>" so shallow nuisance

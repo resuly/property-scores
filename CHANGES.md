@@ -1,5 +1,15 @@
 # 本对话改动说明
 
+## 2026-08-13 — PlanSA Flooding Evidence Required 不再当作安全证据
+
+- 将 PlanSA `Hazards (Flooding Evidence Required)` layer 403 纳入 SA 官方
+  洪水检查。
+- 该控制是“需要地块级证据”的审批触发器，不是洪水范围或严重度。命中现在保留在
+  `flood_zones`，但对分数作中性贡献；不会再因没有命中其余 SA 洪水层而得到
+  `checked_no_hit` 对应的 90 分安全贡献。
+- `official_layer_note` 明确说明风险未知、需要补充洪水证据。已有 General / Coastal
+  等严重度层命中时仍按原规则计分。
+
 ## 基本信息
 - 分支名: scores-model-stamp-20260806
 - 从哪切的: master (6c89a8a)

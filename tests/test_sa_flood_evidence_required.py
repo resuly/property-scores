@@ -80,6 +80,57 @@ def test_evidence_required_does_not_add_a_multi_zone_penalty(monkeypatch):
     assert result["score"] == 60
 
 
+def test_local_library_labels_keep_existing_multi_zone_penalty(monkeypatch):
+    monkeypatch.setattr(fs, "_detect_state", lambda *_: "VIC")
+    monkeypatch.setattr(
+        "property_scores.flood.local_overlays.check",
+        lambda *_: {
+            "worst": "floodway",
+            "hit_zones": [
+                "FO/RFO - Floodway Overlay",
+                "LSIO - Land Subject to Inundation Overlay",
+            ],
+            "trust": "full",
+        },
+    )
+    monkeypatch.setattr(fs, "_water_proximity_local", lambda *_: None)
+    monkeypatch.setattr(fs, "_hand_local", lambda *_: None)
+    monkeypatch.setattr(fs, "_query_ifd", lambda *_: None)
+    monkeypatch.setattr(
+        "property_scores.flood.study_depth.depth_at", lambda *_: None)
+
+    result = fs.flood_score(-37.8, 145.0)
+
+    assert result["score"] == 17
+
+
+def test_sa_outage_with_study_depth_does_not_claim_default_estimate(monkeypatch):
+    monkeypatch.setattr(fs, "_detect_state", lambda *_: "SA")
+    monkeypatch.setattr(
+        "property_scores.flood.local_overlays.check", lambda *_: None)
+    monkeypatch.setattr(
+        fs, "_overlay_check", lambda *_: (None, [], ["PlanSA unavailable"]))
+    monkeypatch.setattr(fs, "_water_proximity_local", lambda *_: None)
+    monkeypatch.setattr(fs, "_hand_local", lambda *_: None)
+    monkeypatch.setattr(fs, "_query_ifd", lambda *_: None)
+    monkeypatch.setattr(
+        "property_scores.flood.study_depth.depth_at",
+        lambda *_: {
+            "depth_m": 1.2,
+            "aep": "1% AEP",
+            "source": "Council study",
+            "licence": "CC BY 4.0",
+        },
+    )
+
+    result = fs.flood_score(-35.0, 139.0)
+
+    assert result["score"] == 15
+    assert result["label"] == "Very High Risk"
+    assert "note" not in result
+    assert result["flood_depth"]["depth_m"] == 1.2
+
+
 def test_incomplete_sa_service_check_is_not_checked_clean(monkeypatch):
     monkeypatch.setattr(fs, "_detect_state", lambda *_: "SA")
     monkeypatch.setattr(

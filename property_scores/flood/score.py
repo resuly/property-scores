@@ -101,12 +101,18 @@ SEVERITY_SCORES: dict[str, tuple[int, int]] = {
 
 
 def _score_bearing_zone_count(state: str, hit_zones: list[str]) -> int:
-    """Number of hits whose configured severity can affect the score."""
-    configured = {
-        name for name, _url, severity in ENDPOINTS.get(state, [])
-        if severity in SEVERITY_SCORES
-    }
-    return sum(1 for zone in hit_zones if zone in configured)
+    """Number of mapped hazard hits, excluding known non-severity controls.
+
+    Local-library display labels intentionally differ from remote ArcGIS layer
+    names, so an allow-list built from ENDPOINTS silently drops legitimate
+    multi-zone penalties.  Evidence Required is the one configured control
+    that is explicitly non-score-bearing; all other returned hits retain the
+    established penalty semantics.
+    """
+    del state  # kept in the signature for callers and future state controls
+    return sum(
+        1 for zone in hit_zones if "Evidence Required" not in zone
+    )
 
 # ---------------------------------------------------------------------------
 # JRC Global Surface Water — Planetary Computer COG tiles
@@ -1011,7 +1017,7 @@ def flood_score(lat: float, lng: float) -> dict:
             f"~{depth['depth_m']} m modelled depth at {depth['aep']} "
             f"({depth['source']}, {depth['licence']})"
         )
-    if overlay_trust is None and not jrc:
+    if overlay_trust is None and not jrc and not depth and score is not None:
         result_dict["note"] = (
             f"No official flood overlay for {state} and no water-proximity "
             "signal. Score is a default estimate."

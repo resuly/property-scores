@@ -201,7 +201,12 @@ function renderResults(lat, lng, scores) {
     }
     if (s.hand) d += `<dt>HAND</dt><dd>${s.hand.hand_m}m above drainage</dd>`;
     if (s.design_rainfall) d += `<dt>1% AEP Rain (1h)</dt><dd>${s.design_rainfall.ifd_1pct_1h_mm}mm</dd>`;
+    if (s.official_layer_note) d += `<dt>Official control</dt><dd>${s.official_layer_note}</dd>`;
     html += scoreCard('Flood Risk', s.score, `${s.label} (${s.state || 'N/A'})`, 'bar-flood', 'badge-flood', d);
+  } else if (scores.flood && !scores.flood.error && scores.flood.score == null) {
+    const s = scores.flood;
+    const note = s.official_layer_note || s.note || 'A numeric flood risk cannot be determined from the available evidence.';
+    html += unknownCard('Flood Risk', `${s.label} (${s.state || 'N/A'})`, note);
   } else { html += errorCard('Flood Risk', scores.flood); }
 
   // Bushfire
@@ -286,6 +291,18 @@ function errorCard(name, data) {
         <span class="text-2xl font-bold text-slate-300">&mdash;</span>
       </div>
       <div class="text-xs text-red-500 mt-2">${msg}</div>
+    </div>`;
+}
+
+function unknownCard(name, label, note) {
+  return `
+    <div class="card p-4 mb-3">
+      <div class="flex justify-between items-center">
+        <span class="text-sm font-semibold text-slate-700">${name}</span>
+        <span class="text-2xl font-bold text-amber-600">Unknown</span>
+      </div>
+      <div class="text-xs font-semibold text-amber-700 mt-2">${label}</div>
+      <div class="text-xs text-slate-600 mt-2 leading-relaxed">${note}</div>
     </div>`;
 }
 </script>

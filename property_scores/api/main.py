@@ -19,6 +19,7 @@ from property_scores.noise.terrain import elevation_profile
 from property_scores.walkability import walkability_score
 from property_scores.solar import solar_score
 from property_scores.flood import flood_score
+from property_scores.flood.score import _detect_state as flood_detect_state
 from property_scores.flood.cache import lookup as flood_cache_lookup
 from property_scores.bushfire import bushfire_score
 from property_scores.heat_island import heat_island_score
@@ -351,7 +352,10 @@ def get_solar(
 def get_flood(lat: float = Query(...), lng: float = Query(...),
               nocache: bool = Query(False)):
     try:
-        if not nocache:
+        # The legacy regional cache stores only a numeric score and cannot
+        # represent PlanSA's Evidence Required / incomplete-check unknown
+        # state.  Never let a stale numeric cache override live SA semantics.
+        if not nocache and flood_detect_state(lat, lng) != "SA":
             cached = flood_cache_lookup(lat, lng)
             if cached:
                 return cached

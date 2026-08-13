@@ -861,6 +861,13 @@ def flood_score(lat: float, lng: float) -> dict:
         depth_score = (15 if d >= 1.2 else 30 if d >= 0.5
                        else 45 if d >= 0.2 else 58)
 
+    evidence_required = any(
+        "Evidence Required" in zone for zone in hit_zones
+    )
+    official_sa_unknown = state == "SA" and (
+        evidence_required or bool(warnings)
+    ) and worst_severity is None and depth_score is None
+
     # --- Combine ---
     # Overlay + JRC determine base risk; HAND modifies it.
     # JRC water occurrence is satellite classification, not physics: dense dark
@@ -873,14 +880,20 @@ def flood_score(lat: float, lng: float) -> dict:
     # flow paths can flag genuinely hilly lots).
     jrc_score = _hand_discounted_jrc(jrc_score, hand)
     base_scores = [s for s in (overlay_score, jrc_score, depth_score) if s is not None]
-    if base_scores:
+    if official_sa_unknown:
+        # A PlanSA evidence trigger (or an incomplete PlanSA layer check) is
+        # not evidence of safety.  Satellite/HAND screening cannot close the
+        # statutory due-diligence gap.  Keep a real mapped severity or study
+        # depth when one exists; otherwise return an explicit unknown result.
+        score = None
+    elif base_scores:
         score = min(base_scores)
     else:
         score = 85
 
     # HAND adjustment: modifies score based on physical elevation
     has_flood_evidence = bool(base_scores and min(base_scores) < 80)
-    if hand:
+    if hand and score is not None:
         hand_m = hand["hand_m"]
         # GLO-30 relief below ~5m is within DEM noise → unreliable HAND, defer to
         # overlay/JRC rather than (de)penalising on it.
@@ -909,20 +922,25 @@ def flood_score(lat: float, lng: float) -> dict:
     # = compound risk. 70mm/1h is the upper-intensity band (Brisbane 98,
     # Sydney 59, Melbourne 49), so only genuinely storm-heavy locations with
     # independent flood evidence take the penalty.
-    if ifd and has_flood_evidence and ifd["ifd_1pct_1h_mm"] > 70:
+    if (score is not None and ifd and has_flood_evidence
+            and ifd["ifd_1pct_1h_mm"] > 70):
         score = max(0, score - 5)
 
-    score = max(0, min(100, score))
-
-    if score >= 90:
-        label = "Very Low Risk"
-    elif score >= 70:
-        label = "Low Risk"
-    elif score >= 40:
-        label = "Moderate Risk"
-    elif score >= 20:
-        label = "High Risk"
+    if score is None:
+        label = ("Flood Evidence Required" if evidence_required
+                 else "Official Flood Check Incomplete")
     else:
+        score = max(0, min(100, score))
+
+    if score is not None and score >= 90:
+        label = "Very Low Risk"
+    elif score is not None and score >= 70:
+        label = "Low Risk"
+    elif score is not None and score >= 40:
+        label = "Moderate Risk"
+    elif score is not None and score >= 20:
+        label = "High Risk"
+    elif score is not None:
         label = "Very High Risk"
 
     result_dict: dict = {
@@ -959,7 +977,7 @@ def flood_score(lat: float, lng: float) -> dict:
     )
     if overlay_basis:
         result_dict["overlay_basis"] = overlay_basis
-    if any("Evidence Required" in zone for zone in hit_zones):
+    if evidence_required:
         result_dict["official_layer_note"] = (
             "The official PlanSA Hazards (Flooding Evidence Required) "
             "control covers this address. It requires site-specific flood "

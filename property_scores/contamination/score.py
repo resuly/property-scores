@@ -15,7 +15,7 @@ from collections import OrderedDict
 
 import requests
 
-from property_scores.common.overture import get_db, pois_near, pois_near_detailed
+from property_scores.common.overture import get_db, pois_near_detailed
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +57,8 @@ def _detect_state(lat: float, lng: float) -> str | None:
 # not evidence that the register was searched, and it is the more common of the
 # two failure modes for these services (2026-08-10 fail-closed audit).
 _UPSTREAM_ERROR_KEYS = ("error", "exceptions", "exceptionReport")
+_EARTH_RADIUS_M = 6_371_008.8
+_EPA_RADIUS_M = 2000
 
 
 def _features_or_none(data) -> list | None:
@@ -71,10 +73,98 @@ def _features_or_none(data) -> list | None:
     return features if isinstance(features, list) else None
 
 
+def _search_envelope(
+    lat: float, lng: float, radius_m: int
+) -> tuple[float, float, float, float]:
+    """Return a conservative WGS84 envelope around an Australian point.
+
+    Longitude degrees cover less ground away from the equator. Reusing the
+    latitude delta for longitude made the nominal 2 km search only about
+    1.58 km wide east-west in Melbourne. The envelope is only a prefilter;
+    `_distance_m` below remains authoritative for the circular cutoff.
+    """
+    if not (-90 < lat < 90) or not math.isfinite(lng) or radius_m <= 0:
+        raise ValueError("finite non-polar coordinates and a positive radius are required")
+    angular = radius_m / _EARTH_RADIUS_M
+    lat_delta = math.degrees(angular)
+    cos_lat = max(abs(math.cos(math.radians(lat))), 1e-12)
+    lon_delta = math.degrees(math.asin(min(1.0, math.sin(angular) / cos_lat)))
+    return lng - lon_delta, lat - lat_delta, lng + lon_delta, lat + lat_delta
+
+
+def _distance_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Great-circle distance in metres between two WGS84 coordinates."""
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = phi2 - phi1
+    dlambda = math.radians(lng2 - lng1)
+    a = (math.sin(dphi / 2) ** 2
+         + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2)
+    return 2 * _EARTH_RADIUS_M * math.asin(min(1.0, math.sqrt(a)))
+
+
+def _nearest_point_on_segment(
+    lat: float, lng: float, a_lng: float, a_lat: float, b_lng: float, b_lat: float
+) -> tuple[float, float, float]:
+    """Return local-planar distance and nearest WGS84 point on a segment."""
+    metres_per_lng = 111_320 * math.cos(math.radians(lat))
+    ax, ay = (a_lng - lng) * metres_per_lng, (a_lat - lat) * 111_320
+    bx, by = (b_lng - lng) * metres_per_lng, (b_lat - lat) * 111_320
+    dx, dy = bx - ax, by - ay
+    denom = dx * dx + dy * dy
+    t = 0.0 if denom == 0 else max(0.0, min(1.0, -(ax * dx + ay * dy) / denom))
+    nx, ny = ax + t * dx, ay + t * dy
+    nearest_lng = lng + nx / metres_per_lng
+    nearest_lat = lat + ny / 111_320
+    return math.hypot(nx, ny), nearest_lng, nearest_lat
+
+
+def _inside_polygon_rings(lat: float, lng: float, rings: list[list]) -> bool:
+    """Even-odd point-in-polygon for ArcGIS multipart polygons with holes."""
+    inside = False
+    for ring in rings:
+        j = len(ring) - 1
+        for i, point in enumerate(ring):
+            xi, yi = float(point[0]), float(point[1])
+            xj, yj = float(ring[j][0]), float(ring[j][1])
+            if (yi > lat) != (yj > lat):
+                crossing = (xj - xi) * (lat - yi) / (yj - yi) + xi
+                if lng < crossing:
+                    inside = not inside
+            j = i
+    return inside
+
+
+def _nearest_polygon_boundary(
+    lat: float, lng: float, rings: list[list]
+) -> tuple[float, float, float]:
+    candidates = (
+        _nearest_point_on_segment(lat, lng, *ring[i - 1], *ring[i])
+        for ring in rings for i in range(len(ring))
+    )
+    return min(candidates, key=lambda candidate: candidate[0])
+
+
+def _sites_within_radius(sites: list[dict], radius_m: int) -> list[dict] | None:
+    """Validate an adapter result and apply the public circular contract."""
+    filtered = []
+    for site in sites:
+        if not isinstance(site, dict):
+            return None
+        try:
+            distance = float(site["distance_m"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not math.isfinite(distance) or distance < 0:
+            return None
+        if distance <= radius_m:
+            filtered.append(site)
+    return filtered
+
+
 def _vic_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict] | None:
     """Query VIC EPA Priority Sites Register via WFS."""
-    deg = radius_m / 111_000
-    bbox = f"{lng - deg},{lat - deg},{lng + deg},{lat + deg},EPSG:4326"
+    west, south, east, north = _search_envelope(lat, lng, radius_m)
+    bbox = f"{west},{south},{east},{north},EPSG:4326"
     try:
         resp = requests.get(
             "https://opendata.maps.vic.gov.au/geoserver/wfs",
@@ -97,23 +187,29 @@ def _vic_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict] |
         if features is None:
             return None
         results = []
-        m_per_deg = 111_320 * math.cos(math.radians(lat))
         for f in features:
-            coords = f.get("geometry", {}).get("coordinates", [])
-            if len(coords) >= 2:
-                dist = math.sqrt(
-                    ((coords[0] - lng) * m_per_deg) ** 2 +
-                    ((coords[1] - lat) * 111320) ** 2
-                )
-                props = f.get("properties", {})
-                results.append({
-                    "name": props.get("address", "Unknown"),
-                    "issue": props.get("issue", ""),
-                    "distance_m": round(dist),
-                    "lng": round(coords[0], 6),
-                    "lat": round(coords[1], 6),
-                    "source": "VIC EPA PSR",
-                })
+            if not isinstance(f, dict):
+                return None
+            geom, props = f.get("geometry"), f.get("properties")
+            if not isinstance(geom, dict) or not isinstance(props, dict):
+                return None
+            coords = geom.get("coordinates")
+            if not isinstance(coords, (list, tuple)) or len(coords) < 2:
+                return None
+            flng, flat = float(coords[0]), float(coords[1])
+            if not math.isfinite(flng) or not math.isfinite(flat):
+                return None
+            dist = _distance_m(lat, lng, flat, flng)
+            if dist > radius_m:
+                continue
+            results.append({
+                "name": props.get("address", "Unknown"),
+                "issue": props.get("issue", ""),
+                "distance_m": round(dist),
+                "lng": round(flng, 6),
+                "lat": round(flat, 6),
+                "source": "VIC EPA PSR",
+            })
         return sorted(results, key=lambda x: x["distance_m"])
     except (requests.RequestException, ValueError, KeyError):
         return None  # error must stay distinguishable from a clean register
@@ -125,11 +221,10 @@ def _nsw_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict] |
         "https://mapprod2.environment.nsw.gov.au/arcgis/rest/services"
         "/EPA/Contaminated_land_notified_sites/MapServer/0/query"
     )
-    m_per_deg = 111_320 * math.cos(math.radians(lat))
-    deg = radius_m / 111_000
+    west, south, east, north = _search_envelope(lat, lng, radius_m)
     try:
         resp = requests.get(url, params={
-            "geometry": f"{lng - deg},{lat - deg},{lng + deg},{lat + deg}",
+            "geometry": f"{west},{south},{east},{north}",
             "geometryType": "esriGeometryEnvelope",
             "inSR": "4326",
             "outSR": "4326",
@@ -145,22 +240,27 @@ def _nsw_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict] |
             return None
         results = []
         for feat in features:
-            a = feat.get("attributes", {})
+            if not isinstance(feat, dict) or not isinstance(feat.get("attributes"), dict):
+                return None
+            a = feat["attributes"]
             flng = a.get("Longitude")
             flat = a.get("Latitude")
-            if flng and flat:
-                dist = math.sqrt(
-                    ((flng - lng) * m_per_deg) ** 2 +
-                    ((flat - lat) * 111320) ** 2
-                )
-                results.append({
-                    "name": a.get("SiteName", "Unknown"),
-                    "issue": a.get("ContaminationActivityType", ""),
-                    "distance_m": round(dist),
-                    "lng": round(flng, 6),
-                    "lat": round(flat, 6),
-                    "source": "NSW EPA CLR",
-                })
+            if flng is None or flat is None:
+                return None
+            flng, flat = float(flng), float(flat)
+            if not math.isfinite(flng) or not math.isfinite(flat):
+                return None
+            dist = _distance_m(lat, lng, flat, flng)
+            if dist > radius_m:
+                continue
+            results.append({
+                "name": a.get("SiteName", "Unknown"),
+                "issue": a.get("ContaminationActivityType", ""),
+                "distance_m": round(dist),
+                "lng": round(flng, 6),
+                "lat": round(flat, 6),
+                "source": "NSW EPA CLR",
+            })
         return sorted(results, key=lambda x: x["distance_m"])
     except (requests.RequestException, ValueError, KeyError):
         return None  # error must stay distinguishable from a clean register
@@ -197,45 +297,45 @@ def _wa_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict] | 
         features = _features_or_none(resp.json())
         if features is None:
             return None
-        m_per_deg = 111_320 * math.cos(math.radians(lat))
-
-        def _inside(rings):
-            # ray cast against the outer ring: inside the register polygon
-            # means distance 0 (standing ON the contaminated site)
-            ring = rings[0]
-            n, hit = len(ring), False
-            j = n - 1
-            for i in range(n):
-                xi, yi = ring[i][0], ring[i][1]
-                xj, yj = ring[j][0], ring[j][1]
-                if (yi > lat) != (yj > lat) and                         lng < (xj - xi) * (lat - yi) / (yj - yi + 1e-12) + xi:
-                    hit = not hit
-                j = i
-            return hit
-
         results = []
         for feat in features:
+            if not isinstance(feat, dict):
+                return None
+            if not isinstance(feat.get("attributes"), dict):
+                return None
             a = {str(k).lower(): v for k, v in feat.get("attributes", {}).items()}
             geom = feat.get("geometry", {})
+            if not isinstance(geom, dict):
+                return None
             rings = geom.get("rings") or []
             flng = geom.get("x")
             flat_ = geom.get("y")
             if rings:
-                if _inside(rings):
+                if not all(isinstance(ring, list) and len(ring) >= 2 for ring in rings):
+                    return None
+                try:
+                    valid_coords = all(
+                        len(point) >= 2
+                        and math.isfinite(float(point[0]))
+                        and math.isfinite(float(point[1]))
+                        for ring in rings for point in ring
+                    )
+                except (TypeError, ValueError):
+                    return None
+                if not valid_coords:
+                    return None
+                if _inside_polygon_rings(lat, lng, rings):
                     dist = 0.0
+                    flng, flat_ = lng, lat
                 else:
-                    dist = min(
-                        math.sqrt(((vx - lng) * m_per_deg) ** 2
-                                  + ((vy - lat) * 111320) ** 2)
-                        for vx, vy in rings[0])
-                cx = sum(v[0] for v in rings[0]) / len(rings[0])
-                cy = sum(v[1] for v in rings[0]) / len(rings[0])
-                flng, flat_ = cx, cy
+                    dist, flng, flat_ = _nearest_polygon_boundary(lat, lng, rings)
             elif flng is not None and flat_ is not None:
-                dist = math.sqrt(((flng - lng) * m_per_deg) ** 2
-                                 + ((flat_ - lat) * 111320) ** 2)
+                flng, flat_ = float(flng), float(flat_)
+                if not math.isfinite(flng) or not math.isfinite(flat_):
+                    return None
+                dist = _distance_m(lat, lng, flat_, flng)
             else:
-                dist = radius_m
+                return None
             name = (a.get("sitename") or a.get("site_name")
                     or a.get("plan_lot_number") or a.get("reg_no") or "Registered site")
             results.append({
@@ -520,6 +620,14 @@ def contamination_score(lat: float, lng: float) -> dict:
     epa_failed = epa_sites is None
     if epa_failed:
         epa_sites = []
+    else:
+        # Final contract guard shared by all register adapters. Each upstream
+        # has different spatial-query semantics; none may leak wider context
+        # into the public 2 km count or score even if its own prefilter does.
+        epa_sites = _sites_within_radius(epa_sites, _EPA_RADIUS_M)
+        if epa_sites is None:
+            epa_failed = True
+            epa_sites = []
     epa_score = (_epa_to_score(epa_sites)
                  if not epa_failed and (epa_sites or state in ("VIC", "NSW", "WA"))
                  else None)
@@ -544,6 +652,7 @@ def contamination_score(lat: float, lng: float) -> dict:
         "state": state,
         "epa_sites_count": len(epa_sites),
         "epa_sites": epa_sites[:10],
+        "epa_sites_returned": min(len(epa_sites), 10),
         "industrial": industrial,
     }
     result["epa_status"] = epa_status

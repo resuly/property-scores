@@ -5,6 +5,8 @@ outage both produced a 95 "Very Clean" that was then cached for an hour. A
 failed lookup is not a clean register, and the public label must not sound
 reassuring when the evidence was never retrieved.
 """
+import math
+
 import pytest
 import requests
 
@@ -54,6 +56,151 @@ def test_epa_exception_returns_none(monkeypatch, func):
 def test_epa_empty_register_returns_empty_list(monkeypatch, func):
     monkeypatch.setattr(cs.requests, "get", lambda *a, **k: _Resp(True, {"features": []}))
     assert func(-37.8, 144.96) == []
+
+
+def test_search_envelope_covers_full_east_west_radius_at_melbourne_latitude():
+    west, south, east, north = cs._search_envelope(-37.81, 144.99, 2000)
+    assert cs._distance_m(-37.81, 144.99, -37.81, east) >= 1999
+    assert cs._distance_m(-37.81, 144.99, -37.81, west) >= 1999
+    assert east - 144.99 > north - (-37.81)
+
+
+@pytest.mark.parametrize("lat", [-90, 90])
+def test_search_envelope_rejects_poles_outside_its_australian_contract(lat):
+    with pytest.raises(ValueError):
+        cs._search_envelope(lat, 145, 2000)
+
+
+def test_vic_query_filters_square_corner_outside_circular_radius(monkeypatch):
+    lat, lng = -37.810763, 144.993306
+    inside_lng = lng + 1900 / (111_320 * math.cos(math.radians(lat)))
+    corner_lat = lat + 1800 / 111_320
+    corner_lng = lng + 1800 / (111_320 * math.cos(math.radians(lat)))
+    payload = {"features": [
+        {"geometry": {"coordinates": [inside_lng, lat]},
+         "properties": {"address": "inside east", "issue": "test"}},
+        {"geometry": {"coordinates": [corner_lng, corner_lat]},
+         "properties": {"address": "outside corner", "issue": "test"}},
+    ]}
+    captured = {}
+
+    def _get(*args, **kwargs):
+        captured.update(kwargs["params"])
+        return _Resp(True, payload)
+
+    monkeypatch.setattr(cs.requests, "get", _get)
+    sites = cs._vic_epa_sites(lat, lng, radius_m=2000)
+    assert [site["name"] for site in sites] == ["inside east"]
+    assert sites[0]["distance_m"] == pytest.approx(1900, abs=2)
+    west, south, east, north, _ = captured["bbox"].split(",")
+    assert float(east) > inside_lng
+
+
+def test_nsw_query_filters_records_beyond_radius_and_accepts_string_coordinates(
+    monkeypatch,
+):
+    lat, lng = -33.9080, 151.1950
+    payload = {"features": [
+        {"attributes": {"Longitude": str(lng), "Latitude": str(lat + 1500 / 111_320),
+                        "SiteName": "inside", "ContaminationActivityType": "test"}},
+        {"attributes": {"Longitude": str(lng), "Latitude": str(lat + 2100 / 111_320),
+                        "SiteName": "outside", "ContaminationActivityType": "test"}},
+    ]}
+    monkeypatch.setattr(cs.requests, "get", lambda *a, **k: _Resp(True, payload))
+    sites = cs._nsw_epa_sites(lat, lng, radius_m=2000)
+    assert [site["name"] for site in sites] == ["inside"]
+    assert sites[0]["distance_m"] == pytest.approx(1498, abs=2)
+
+
+@pytest.mark.parametrize("func", EPA_FUNCS)
+def test_epa_malformed_feature_fails_closed(monkeypatch, func):
+    monkeypatch.setattr(cs.requests, "get", lambda *a, **k: _Resp(True, {"features": [None]}))
+    assert func(-37.8, 144.96) is None
+
+
+@pytest.mark.parametrize("geometry", [{}, {"rings": []}])
+def test_wa_feature_without_usable_geometry_fails_closed(monkeypatch, geometry):
+    payload = {"features": [{
+        "attributes": {"reg_no": "missing-geometry"},
+        "geometry": geometry,
+    }]}
+    monkeypatch.setattr(cs.requests, "get", lambda *a, **k: _Resp(True, payload))
+    assert cs._wa_epa_sites(-31.95, 115.86) is None
+
+
+def test_wa_polygon_uses_nearest_edge_not_nearest_vertex(monkeypatch):
+    lat, lng = -31.95, 115.86
+    dlat = 1000 / 111_320
+    dlng = 3000 / (111_320 * math.cos(math.radians(lat)))
+    ring = [[lng - dlng, lat + dlat], [lng + dlng, lat + dlat],
+            [lng + dlng, lat + 2 * dlat], [lng - dlng, lat + 2 * dlat],
+            [lng - dlng, lat + dlat]]
+    payload = {"features": [{
+        "attributes": {"sitename": "long edge"},
+        "geometry": {"rings": [ring]},
+    }]}
+    monkeypatch.setattr(cs.requests, "get", lambda *a, **k: _Resp(True, payload))
+    sites = cs._wa_epa_sites(lat, lng, radius_m=2000)
+    assert len(sites) == 1
+    assert sites[0]["distance_m"] == pytest.approx(1000, abs=2)
+    assert sites[0]["lng"] == pytest.approx(lng, abs=0.00001)
+    assert sites[0]["lat"] == pytest.approx(lat + dlat, abs=0.00001)
+
+
+def test_wa_polygon_hole_is_not_treated_as_contaminated_interior(monkeypatch):
+    lat, lng = -31.95, 115.86
+    dlat = 500 / 111_320
+    dlng = 500 / (111_320 * math.cos(math.radians(lat)))
+    outer = [[lng - 4 * dlng, lat - 4 * dlat], [lng + 4 * dlng, lat - 4 * dlat],
+             [lng + 4 * dlng, lat + 4 * dlat], [lng - 4 * dlng, lat + 4 * dlat],
+             [lng - 4 * dlng, lat - 4 * dlat]]
+    hole = [[lng - dlng, lat - dlat], [lng - dlng, lat + dlat],
+            [lng + dlng, lat + dlat], [lng + dlng, lat - dlat],
+            [lng - dlng, lat - dlat]]
+    payload = {"features": [{
+        "attributes": {"sitename": "donut"},
+        "geometry": {"rings": [outer, hole]},
+    }]}
+    monkeypatch.setattr(cs.requests, "get", lambda *a, **k: _Resp(True, payload))
+    site = cs._wa_epa_sites(lat, lng, radius_m=2000)[0]
+    assert site["distance_m"] == pytest.approx(500, abs=2)
+    assert cs._distance_m(lat, lng, site["lat"], site["lng"]) == pytest.approx(500, abs=2)
+
+
+def test_wa_multipart_second_exterior_contains_query_and_pins_query(monkeypatch):
+    lat, lng = -31.95, 115.86
+    delta = 0.002
+    far = [[lng + 0.05, lat], [lng + 0.06, lat], [lng + 0.06, lat + 0.01],
+           [lng + 0.05, lat + 0.01], [lng + 0.05, lat]]
+    around = [[lng - delta, lat - delta], [lng + delta, lat - delta],
+              [lng + delta, lat + delta], [lng - delta, lat + delta],
+              [lng - delta, lat - delta]]
+    payload = {"features": [{
+        "attributes": {"sitename": "multipart"},
+        "geometry": {"rings": [far, around]},
+    }]}
+    monkeypatch.setattr(cs.requests, "get", lambda *a, **k: _Resp(True, payload))
+    site = cs._wa_epa_sites(lat, lng, radius_m=2000)[0]
+    assert site["distance_m"] == 0
+    assert site["lng"] == pytest.approx(lng)
+    assert site["lat"] == pytest.approx(lat)
+
+
+def test_wa_concave_polygon_marker_is_nearest_boundary_not_vertex_average(monkeypatch):
+    lat, lng = -31.95, 115.86
+    ring = [[lng + 0.01, lat - 0.01], [lng + 0.03, lat - 0.01],
+            [lng + 0.03, lat + 0.01], [lng + 0.02, lat],
+            [lng + 0.01, lat + 0.01], [lng + 0.01, lat - 0.01]]
+    payload = {"features": [{
+        "attributes": {"sitename": "concave"},
+        "geometry": {"rings": [ring]},
+    }]}
+    monkeypatch.setattr(cs.requests, "get", lambda *a, **k: _Resp(True, payload))
+    site = cs._wa_epa_sites(lat, lng, radius_m=2000)[0]
+    assert site["distance_m"] > 0
+    assert cs._distance_m(lat, lng, site["lat"], site["lng"]) == pytest.approx(
+        site["distance_m"], abs=2
+    )
 
 
 # ArcGIS REST and GeoServer WFS report a failed query with HTTP 200 plus an
@@ -211,6 +358,30 @@ def test_happy_path_still_very_clean(monkeypatch):
     assert r["epa_status"] == "ok"
     assert r["industrial_status"] == "ok"
     assert "note" not in r
+
+
+def test_public_count_and_score_drop_any_adapter_record_beyond_two_km(monkeypatch):
+    monkeypatch.setattr(cs, "_vic_epa_sites", lambda *a, **k: [
+        {"name": "inside", "distance_m": 1900, "lng": 144.98, "lat": -37.8},
+        {"name": "outside", "distance_m": 2100, "lng": 144.99, "lat": -37.8},
+    ])
+    _patch_industrial(monkeypatch, ok=True)
+    r = cs.contamination_score(*MELB)
+    assert r["epa_sites_count"] == 1
+    assert [site["name"] for site in r["epa_sites"]] == ["inside"]
+    assert all(site["distance_m"] <= 2000 for site in r["epa_sites"])
+
+
+@pytest.mark.parametrize("bad_distance", ["unknown", float("nan"), float("inf"), -1])
+def test_public_adapter_guard_fails_closed_on_invalid_distance(monkeypatch, bad_distance):
+    monkeypatch.setattr(cs, "_vic_epa_sites", lambda *a, **k: [
+        {"name": "bad", "distance_m": bad_distance, "lng": 144.98, "lat": -37.8},
+    ])
+    _patch_industrial(monkeypatch, ok=True)
+    r = cs.contamination_score(*MELB)
+    assert r["epa_status"] == "error"
+    assert r["epa_sites_count"] == 0
+    assert r["label"] == cs.LABEL_INCOMPLETE
 
 
 @pytest.mark.parametrize("mode", ["http_error", "exception"])

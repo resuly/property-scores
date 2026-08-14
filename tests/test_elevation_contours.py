@@ -187,3 +187,79 @@ def test_endpoint_wires_404_and_503(tmp_path, monkeypatch):
     body = r.json()
     assert body["feature_count"] > 0
     assert body["grid_m"] == 5
+
+
+# ---------------------------------------------------------------------------
+# review probes adopted 2026-08-15: saddle direction and absolute placement.
+# Both survived every earlier test as mutations (branch-inverted saddles still
+# produce simple non-crossing lines; a half-cell shift cancels out of
+# centroid-based radius assertions), so each needs its own dedicated pin.
+# ---------------------------------------------------------------------------
+
+def _isolated_corner_values(features, level, z):
+    """For a single-cell raster, which corner values do the contour segments
+    at `level` isolate? Each segment's midpoint sits nearer the corner it cuts
+    off; classify by nearest corner and return that corner's elevation."""
+    nr, nc = z.shape
+    west = LNG0 - nc / 2 * PX
+    north = LAT0 + nr / 2 * PX
+    corners = {(r, c): z[r, c] for r in (0, nr - 1) for c in (0, nc - 1)}
+    out = []
+    for f in features:
+        xs = [p[0] for p in f["geometry"]["coordinates"]]
+        ys = [p[1] for p in f["geometry"]["coordinates"]]
+        mx, my = sum(xs) / len(xs), sum(ys) / len(ys)
+        best = min(corners, key=lambda rc: math.hypot(
+            (west + (rc[1] + 0.5) * PX) - mx,
+            (north - (rc[0] + 0.5) * PX) - my))
+        out.append(corners[best])
+    return sorted(out)
+
+
+def test_saddle_cell_isolates_the_correct_corners(tmp_path):
+    """Marching squares cases 5/10: the centre-mean rule decides which
+    diagonal pair the two segments cut off. Inverting the branch isolates the
+    wrong corners while still drawing simple, non-crossing lines, which is
+    exactly why no crossing-based assertion can catch it."""
+    z = np.array([[45.0, 55.0],
+                  [55.0, 45.0]])
+    path = _write(tmp_path, z)
+    # Level 49: centre mean is 50 (above), so the two segments must isolate
+    # the BELOW corners, the 45s.
+    out = ec.contours(LAT0, LNG0, radius_m=20, interval_m=1, path=path)
+    assert out is not None
+    lines_49 = [f for f in out["features"]
+                if abs(f["properties"]["elevation_m"] - 49.0) < 1e-9]
+    assert len(lines_49) == 2, "a saddle cell must produce two segments"
+    assert _isolated_corner_values(lines_49, 49.0, z) == [45.0, 45.0], (
+        "saddle disambiguation isolated the wrong diagonal at a level below "
+        "the centre mean")
+    lines_51 = [f for f in out["features"]
+                if abs(f["properties"]["elevation_m"] - 51.0) < 1e-9]
+    assert len(lines_51) == 2
+    assert _isolated_corner_values(lines_51, 51.0, z) == [55.0, 55.0], (
+        "saddle disambiguation isolated the wrong diagonal at a level above "
+        "the centre mean")
+
+
+def test_contour_falls_at_the_absolute_slope_position(tmp_path):
+    """An east-facing linear ramp has one analytic answer for where each
+    contour lies. A half-cell indexing shift moves every vertex by ~2.5 m and
+    cancels out of any centroid-radius assertion; only an absolute-position
+    check sees it."""
+    ncols = nrows = 41
+    cc = np.mgrid[0:nrows, 0:ncols][1]
+    z = cc.astype(float)  # 1 m per pixel, rising east
+    path = _write(tmp_path, z)
+    out = ec.contours(LAT0, LNG0, radius_m=80, interval_m=5, path=path)
+    assert out is not None and out["features"], "ramp produced no contours"
+    west = LNG0 - ncols / 2 * PX
+    for f in out["features"]:
+        lvl = f["properties"]["elevation_m"]
+        # z equals the column index at node centres: elevation `lvl` sits at
+        # column `lvl`, whose node longitude is west + (lvl + 0.5) * PX.
+        want_lng = west + (lvl + 0.5) * PX
+        for x, _y in f["geometry"]["coordinates"]:
+            assert abs(x - want_lng) < PX * 0.05, (
+                f"contour {lvl} m sits {abs(x - want_lng) / PX:.2f} px off "
+                "its analytic position: half-cell offset")

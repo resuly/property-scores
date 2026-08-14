@@ -502,9 +502,12 @@ def get_elevation_contours(
     interval_m: float | None = Query(
         None, gt=0, le=200,
         description="Contour spacing in metres. Values below 1 m are raised "
-                    "to 1 m (source vertical accuracy is 0.30 m at 95%); "
-                    "omitted means auto (5 m default, widened over steep "
-                    "windows)."),
+                    "to 1 m: the source surveys were captured to a "
+                    "specification requiring vertical accuracy of at least "
+                    "0.30 m (95% confidence), which bounds the finest "
+                    "defensible interval but is not a per-location accuracy "
+                    "guarantee for the resampled 5 m grid; omitted means auto "
+                    "(5 m default, widened over steep windows)."),
 ):
     """Contour LineStrings from the baked GA 5 m LiDAR DEM, for the licensed
     property API's contour surface (single registered source; see
@@ -514,7 +517,8 @@ def get_elevation_contours(
     a real coverage boundary, and no substitute DEM is served in its place.
     503 means the baked VRT itself is missing on this node (an outage).
     """
-    from property_scores.common.elevation_contours import contours, lidar_available
+    from property_scores.common.elevation_contours import (
+        SourceReadError, contours, lidar_available)
     if not lidar_available():
         logger.error("elevation contours: au_lidar_5m.vrt missing on this node")
         return JSONResponse({"error": "lidar dem unavailable"}, status_code=503)
@@ -524,6 +528,13 @@ def get_elevation_contours(
         if out is None:
             return JSONResponse({"error": "no lidar coverage"}, status_code=404)
         return out
+    except SourceReadError as e:
+        # Fault, not fact: the raster exists but would not open or read
+        # (corrupt VRT, truncated COG, I/O error). 404 would be cached
+        # downstream as "this address has no coverage" for seven days; 503
+        # is transient and retried.
+        logger.error("elevation contours: source read fault: %s", e)
+        return JSONResponse({"error": "lidar dem unreadable"}, status_code=503)
     except Exception as e:
         logger.exception("elevation contours failed")
         return JSONResponse({"error": str(e)}, status_code=500)

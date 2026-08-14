@@ -87,6 +87,15 @@ def _deg_per_m(lat: float) -> tuple[float, float]:
             1.0 / (111_320.0 * max(math.cos(math.radians(lat)), 0.1)))
 
 
+class SourceReadError(RuntimeError):
+    """The registered raster exists but could not be opened or read.
+
+    Deliberately NOT the same outcome as None (outside the footprint): the
+    caller maps None to 404 no_coverage, which the delivery side caches as an
+    address fact, while this maps to 503 so the customer retries instead of
+    being served a pinned lie about coverage."""
+
+
 def _read_window(path: str, lat: float, lng: float, radius_m: int):
     """Read the DEM window around the point.
 
@@ -96,9 +105,22 @@ def _read_window(path: str, lat: float, lng: float, radius_m: int):
     (pixel centres).
     """
     import rasterio.windows
+    import rasterio.errors
 
     src = _rs._src(path)
     if src is None:
+        if os.path.exists(path):
+            # The file is there but did not open: that is a FAULT, not a
+            # coverage fact, and the two must not wear the same answer. A
+            # corrupt VRT answered 404 no_coverage here, and the delivery
+            # side caches no_coverage for seven days (it is an address
+            # property); a read fault must surface as 503 so it is retried,
+            # not pinned (Bo reproduced this, 2026-08-15). Evict the
+            # thread-local None first: _src caches a failed open per thread
+            # forever, so without this a repaired file kept answering 503
+            # on every thread that saw the outage until a process restart.
+            getattr(_rs._LOCAL, "open", {}).pop(path, None)
+            raise SourceReadError(f"raster exists but failed to open: {path}")
         return None
     dlat_per_m, dlng_per_m = _deg_per_m(lat)
     west = lng - radius_m * dlng_per_m
@@ -114,8 +136,19 @@ def _read_window(path: str, lat: float, lng: float, radius_m: int):
         if win.width < 2 or win.height < 2:
             return None
         raw = src.read(1, window=win)
-    except Exception:
+    except rasterio.errors.WindowError:
+        # A window that cannot be formed against this transform is a
+        # geometry/extent question: no coverage here.
         return None
+    except Exception as exc:
+        # The window was valid and the read still blew up: corrupt tile,
+        # truncated COG, I/O error. Same fault-vs-fact distinction as the
+        # open failure above; the source may answer after a retry, so it
+        # must not be reported (and cached) as a place with no data. Drop
+        # the handle so the next call reopens rather than reusing a
+        # half-broken dataset.
+        getattr(_rs._LOCAL, "open", {}).pop(path, None)
+        raise SourceReadError(f"raster read failed at {lat},{lng}: {exc}")
     t = src.window_transform(win)
     z = raw.astype("float64")
     nod = src.nodata if src.nodata is not None else NODATA

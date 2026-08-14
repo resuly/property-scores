@@ -263,3 +263,80 @@ def test_contour_falls_at_the_absolute_slope_position(tmp_path):
             assert abs(x - want_lng) < PX * 0.05, (
                 f"contour {lvl} m sits {abs(x - want_lng) / PX:.2f} px off "
                 "its analytic position: half-cell offset")
+
+
+# ---------------------------------------------------------------------------
+# fault vs fact (2026-08-15, Bo reproduced): a corrupt raster answered 404
+# no_coverage, which the delivery side caches for seven days as an address
+# property. A read FAULT must be a 503 and must not poison the per-thread
+# source cache against recovery.
+# ---------------------------------------------------------------------------
+
+def _corrupt_file(tmp_path, name="broken.tif") -> str:
+    path = str(tmp_path / name)
+    with open(path, "wb") as f:
+        f.write(b"this is not a geotiff, it only looks like one from afar")
+    return path
+
+
+def test_corrupt_raster_raises_a_read_fault_not_no_coverage(tmp_path):
+    path = _corrupt_file(tmp_path)
+    with pytest.raises(ec.SourceReadError):
+        ec.contours(LAT0, LNG0, radius_m=RADIUS, interval_m=5, path=path)
+
+
+def test_endpoint_maps_a_read_fault_to_503(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from property_scores.api import main as api_main
+    path = _corrupt_file(tmp_path)
+    monkeypatch.setattr(ec, "LIDAR_VRT", path)
+    client = TestClient(api_main.app)
+    r = client.get("/scores/elevation/contours",
+                   params={"lat": LAT0, "lng": LNG0, "radius": 400})
+    assert r.status_code == 503, (
+        f"a corrupt source answered {r.status_code}; 404 becomes a cached "
+        "coverage fact downstream")
+    assert "unreadable" in r.json()["error"]
+
+
+def test_repaired_raster_recovers_on_the_same_thread(tmp_path):
+    """_src caches a failed open per thread forever; the fault path must evict
+    that entry or a repaired file keeps failing until a process restart."""
+    path = str(tmp_path / "dem.tif")
+    with open(path, "wb") as f:
+        f.write(b"garbage")
+    with pytest.raises(ec.SourceReadError):
+        ec.contours(LAT0, LNG0, radius_m=RADIUS, interval_m=5, path=path)
+    import os as _os
+    _os.replace(_write(tmp_path, _hill(), name="good.tif"), path)
+    out = ec.contours(LAT0, LNG0, radius_m=RADIUS, interval_m=20, path=path)
+    assert out is not None and out["features"], (
+        "the thread-local None from the outage was never evicted")
+
+
+def test_outside_extent_is_still_no_coverage_not_a_fault(tmp_path):
+    """The other direction: a genuinely out-of-extent window keeps returning
+    None (404), or every inland address would turn into a retry storm."""
+    path = _write(tmp_path, _hill())
+    out = ec.contours(LAT0 + 5.0, LNG0 + 5.0, radius_m=RADIUS,
+                      interval_m=5, path=path)
+    assert out is None
+
+
+def test_midread_failure_is_a_fault_not_no_coverage(tmp_path, monkeypatch):
+    """Open succeeds, read blows up (truncated COG, I/O error): the second
+    door into the same conflation, and the corrupt-file test cannot reach it
+    because that one fails at open."""
+    path = _write(tmp_path, _hill())
+    real = ec._rs._src(path)
+
+    class _MidReadFailure:
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+        def read(self, *a, **k):
+            raise OSError("simulated truncated tile")
+
+    monkeypatch.setattr(ec._rs, "_src", lambda p: _MidReadFailure())
+    with pytest.raises(ec.SourceReadError):
+        ec.contours(LAT0, LNG0, radius_m=RADIUS, interval_m=5, path=path)

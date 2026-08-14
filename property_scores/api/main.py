@@ -491,6 +491,40 @@ def get_noise_terrain(
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.get("/scores/elevation/contours")
+def get_elevation_contours(
+    lat: float = Query(...), lng: float = Query(...),
+    radius: int = Query(1500),
+    interval_m: float | None = Query(
+        None, gt=0, le=200,
+        description="Contour spacing in metres. Values below 1 m are raised "
+                    "to 1 m (source vertical accuracy is 0.30 m at 95%); "
+                    "omitted means auto (5 m default, widened over steep "
+                    "windows)."),
+):
+    """Contour LineStrings from the baked GA 5 m LiDAR DEM, for the licensed
+    property API's contour surface (single registered source; see
+    common/elevation_contours.py).
+
+    404 means the window is outside the ~245,000 km2 LiDAR footprint: that is
+    a real coverage boundary, and no substitute DEM is served in its place.
+    503 means the baked VRT itself is missing on this node (an outage).
+    """
+    from property_scores.common.elevation_contours import contours, lidar_available
+    if not lidar_available():
+        logger.error("elevation contours: au_lidar_5m.vrt missing on this node")
+        return JSONResponse({"error": "lidar dem unavailable"}, status_code=503)
+    try:
+        out = contours(lat, lng, radius_m=max(200, min(radius, 2000)),
+                       interval_m=interval_m)
+        if out is None:
+            return JSONResponse({"error": "no lidar coverage"}, status_code=404)
+        return out
+    except Exception as e:
+        logger.exception("elevation contours failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.get("/scores/aircraft-noise")
 def get_aircraft_noise(lat: float = Query(...), lng: float = Query(...)):
     """Query airport noise overlay (MAEO/AEO) for a coordinate."""

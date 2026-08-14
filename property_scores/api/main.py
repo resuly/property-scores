@@ -497,7 +497,12 @@ def get_noise_terrain(
 
 @app.get("/scores/elevation/contours")
 def get_elevation_contours(
-    lat: float = Query(...), lng: float = Query(...),
+    # Bounded so that nan/inf (which FastAPI otherwise accepts as floats)
+    # 422 at the door instead of blowing up window arithmetic deeper down,
+    # where the ValueError is indistinguishable from a raster fault and was
+    # reported as 503 "dem unreadable": a client typo must not page anyone.
+    lat: float = Query(..., ge=-90, le=90),
+    lng: float = Query(..., ge=-180, le=180),
     radius: int = Query(1500),
     interval_m: float | None = Query(
         None, gt=0, le=200,

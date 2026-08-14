@@ -340,3 +340,47 @@ def test_midread_failure_is_a_fault_not_no_coverage(tmp_path, monkeypatch):
     monkeypatch.setattr(ec._rs, "_src", lambda p: _MidReadFailure())
     with pytest.raises(ec.SourceReadError):
         ec.contours(LAT0, LNG0, radius_m=RADIUS, interval_m=5, path=path)
+
+
+def test_garbage_coordinates_are_422_not_a_source_fault(tmp_path, monkeypatch):
+    """nan/inf pass FastAPI's bare float parsing and blow up window arithmetic
+    with a ValueError that the fault handler misread as a corrupt raster:
+    a client typo answered 503 dem unreadable and paged the source alarm.
+    Bounded params reject them at the door."""
+    from fastapi.testclient import TestClient
+    from property_scores.api import main as api_main
+    path = _write(tmp_path, _hill())
+    monkeypatch.setattr(ec, "LIDAR_VRT", path)
+    client = TestClient(api_main.app)
+    for bad in ("nan", "inf", "91", "-91"):
+        r = client.get("/scores/elevation/contours",
+                       params={"lat": bad, "lng": LNG0, "radius": 400})
+        assert r.status_code == 422, (
+            f"lat={bad} answered {r.status_code}; garbage input must not "
+            "wear the source-fault banner")
+
+
+def test_midread_eviction_lets_a_swapped_file_recover(tmp_path):
+    """Pins the eviction line on the mid-read path WITHOUT monkeypatching
+    _src (the earlier test replaced _src entirely, so the pop it exercises
+    was reachable but never executed). The failing dataset is planted in the
+    real per-thread cache; the fault must evict it so the next call reopens
+    from disk and sees the good file."""
+    path = _write(tmp_path, _hill(), name="swap.tif")
+    real = ec._rs._src(path)
+
+    class _FailsOnce:
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+        def read(self, *a, **k):
+            raise OSError("simulated dying handle")
+
+    cache = getattr(ec._rs._LOCAL, "open", None)
+    assert cache is not None and path in cache
+    cache[path] = _FailsOnce()
+    with pytest.raises(ec.SourceReadError):
+        ec.contours(LAT0, LNG0, radius_m=RADIUS, interval_m=20, path=path)
+    out = ec.contours(LAT0, LNG0, radius_m=RADIUS, interval_m=20, path=path)
+    assert out is not None and out["features"], (
+        "the dying handle was never evicted; the thread is stuck on it")

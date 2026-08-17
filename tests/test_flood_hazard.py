@@ -35,21 +35,30 @@ def test_hazard_class_normalisation(props, expected):
 # --- _classify: hazard source -> graded severity kind ------------------------
 def test_classify_hazard_source_grades_severity():
     # H1 shallow/slow must not read as hard as an H5 floodway
-    kind1, label1 = lo._classify("nsw_newcastle_flood_hazard", {"hazard_class": "H1"})
-    kind5, label5 = lo._classify("nsw_newcastle_flood_hazard", {"hazard_class": "H5"})
+    kind1, label1 = lo._classify("nsw_open_flood_hazard", {"hazard_class": "H1"})
+    kind5, label5 = lo._classify("nsw_open_flood_hazard", {"hazard_class": "H5"})
     assert kind1 == "moderate" and "H1" in label1
     assert kind5 == "floodway" and "H5" in label5
     # severity rank: floodway is worse (lower number) than moderate
     assert lo._SEVERITY_RANK[kind5] < lo._SEVERITY_RANK[kind1]
 
 
-def test_classify_production_newcastle_source_id():
-    kind, label = lo._classify(
-        "nsw_hazard_flood_newcastle",
-        {"severity": "6", "source": "nsw_flood_newcastle"},
-    )
-    assert kind == "floodway"
-    assert label == lo._HAZARD_CLASS_DESC["H6"]
+@pytest.mark.parametrize("source", [
+    "nsw_hazard_flood_newcastle",
+    "nsw_newcastle_flood_hazard",
+])
+def test_restricted_newcastle_source_does_not_affect_check(monkeypatch, source):
+    class _Rows:
+        def execute(self, *_args, **_kwargs):
+            return self
+
+        def fetchall(self):
+            return [(source, '{"severity":"6","study":"Newcastle"}')]
+
+    monkeypatch.setattr(lo, "_get_conn", lambda: _Rows())
+    result = lo.check("NSW", -32.9, 151.7)
+    assert result == {"worst": None, "hit_zones": [], "trust": "hit_only"}
+    assert "hazard" not in result
 
 
 def test_classify_hazard_source_unclassifiable_does_not_score():

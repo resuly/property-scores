@@ -9,6 +9,11 @@
   `checked_no_hit` 对应的 90 分安全贡献。
 - `official_layer_note` 明确说明风险未知、需要补充洪水证据。已有 General / Coastal
   等严重度层命中时仍按原规则计分。
+## 2026-08-13 — Newcastle 洪水危险图层退出商业评分输入
+
+- Newcastle 的 `nsw_hazard_flood_newcastle` 已从商业 flood score 输入白名单移除。
+  该图层不再改变 Newcastle 地址的评分；评分继续使用其余获准的卫星、地形、水系与州级依据。
+  这是授权边界修正，不删除源数据，也不改变 DA Leads 自有地图的图层展示。
 
 ## 基本信息
 - 分支名: scores-model-stamp-20260806

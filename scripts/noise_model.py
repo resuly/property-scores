@@ -183,8 +183,15 @@ def cmd_activate(a):
     _save(reg)
     print(f"active: {prev} -> {a.id}")
     print("restart property-scores to load it (the RF is a process-level "
-          "singleton), and remember the result cache + precomputed grids are "
-          "keyed on score.NOISE_MODEL_VERSION, not on this id.")
+          "singleton). Since 2026-08-18 score.NOISE_MODEL_VERSION carries the "
+          "resolved model id when NOISE_TRANSFER is on, so after the restart "
+          "every precomputed grid baked by the previous model is refused and "
+          "those regions fall back to live compute until re-baked "
+          "(scripts/precompute_noise.py). That is the intended behaviour, not "
+          "a fault: it is what stops the old model's grids outliving it. The "
+          "sqlite RESULT cache is a separate story: a registry-only swap does "
+          "not change its key, so rows computed by the previous model keep "
+          "being served until they age out of the 24h TTL.")
     return 0
 
 

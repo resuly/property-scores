@@ -24,10 +24,12 @@ Resolution order:
 Rollback is therefore: `NOISE_MODEL_ID=eu-transfer-v1 systemctl restart ...`,
 or edit one field in registry.json. No file shuffling.
 
-NOTE this is deliberately separate from score.NOISE_MODEL_VERSION, which is a
-CACHE KEY (it invalidates precomputed grids). A model swap should usually change
-both, but they answer different questions: this says WHICH ARTEFACT, that says
-IS THE CACHE STILL VALID.
+This is still a different question from score.NOISE_MODEL_VERSION -- this says
+WHICH ARTEFACT, that says IS THE CACHE STILL VALID -- but since 2026-08-18 the
+answer here FEEDS that one: when NOISE_TRANSFER is on, the resolved id is a
+suffix of NOISE_MODEL_VERSION, so activating a different model invalidates the
+precomputed grids baked by the previous one. Before that it did not, and a
+rollback left every grid serving the model it had rolled back from.
 """
 import json
 import logging

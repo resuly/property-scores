@@ -12,6 +12,7 @@ Propagation: CRTN L10 + duty-cycle correction + urban excess attenuation.
 Score 0-100 where 100 = quietest.
 """
 
+import hashlib
 import logging
 import math
 import os
@@ -73,22 +74,6 @@ _RAIL_RECAL_DB = max(0.0, min(_RAIL_RECAL_MAX_DB,
 _RAIL_RECAL_STATES = {"NSW"}
 _RAIL_RECAL_TYPES = ("train", "vline")
 
-# Bump on any scoring change. precompute_noise.py stamps this into every cached
-# grid row and cache.py refuses to serve a cache built by a different version — so
-# a stale precompute fails safe to live-compute instead of silently shadowing the
-# live model (the overlay choropleth reads cached `score`). The AADT / quiet-recal
-# suffixes only appear when their flag is ON, so enabling either invalidates the
-# old cache (forcing regen) while default-OFF keeps the existing prod cache valid.
-# NOT bumped for the 2026-07-25 geodistance fix, deliberately. Every noise call
-# site passes `legacy_distance=True`, so noise output is bit-identical to what
-# these grids were baked with (asserted by scripts/verify_noise_frozen.py).
-# Bumping would invalidate every precomputed grid and force a full re-bake for a
-# change noise does not see. Bump it if legacy_distance is ever removed.
-NOISE_MODEL_VERSION = ("2026-06-09-quincunx"
-                       + ("-aadt" if _AADT_ADJUST_ENABLED else "")
-                       + ("-nswquiet" if _QUIET_RECAL_ENABLED else "")
-                       + ("-nswrail" if _RAIL_RECAL_ENABLED else ""))
-
 # ML residual correction is opt-in (see noise_score). The shipped model was
 # trained on the pre-fix physics and regresses/inverts against the corrected
 # physics, so it stays off until retrained.
@@ -100,16 +85,139 @@ _ML_CORRECTION_ENABLED = os.environ.get("NOISE_ML_CORRECTION", "0") == "1"
 # to physics on any failure or when DEM/landcover coverage is missing.
 _TRANSFER_ENABLED = os.environ.get("NOISE_TRANSFER", "0") == "1"
 
+
+def _transfer_model_token() -> str:
+    """Grid-stamp token for WHICH transfer model this process will load.
+
+    Empty when transfer is off: the physics path never touches the RF, so
+    folding an id there would invalidate physics grids for a change they cannot
+    see (and would break the byte-identical default string built below).
+
+    Registry-resolved rather than read straight off NOISE_MODEL_ID, because
+    `noise_model.py activate` swaps the model by editing registry.json with no
+    env change; an env-only token would miss exactly that. Resolution failure
+    (a typo'd NOISE_MODEL_ID raises here by design) gets its own token instead
+    of an exception: this is a cache key, and a process that cannot resolve its
+    model is about to fall back to physics anyway. It must not share a stamp
+    with a healthy transfer process, which "-mdlerr" ensures.
+    """
+    if not _TRANSFER_ENABLED:
+        return ""
+    try:
+        from property_scores.noise import model_registry
+        model_id = str(model_registry.resolve()["id"])
+    except Exception:
+        logger.warning("noise model id unresolved for the grid stamp",
+                       exc_info=True)
+        return "-mdlerr"
+    # The suffix scheme is dash-delimited, so dashes inside the id have to go;
+    # everything else is kept. Stripping punctuation outright would map
+    # "eu-transfer-v1" and "eutransferv1" onto the same stamp, and the live
+    # production id is the former. The short digest of the RAW id makes the
+    # token injective regardless: two ids can look alike after sanitising, but
+    # they cannot also hash alike.
+    safe = model_id.replace("-", ".")
+    digest = hashlib.blake2s(model_id.encode("utf-8"), digest_size=3).hexdigest()
+    return f"-{safe}.{digest}"
+
+
+# ---------------------------------------------------------------------------
+# PROCESS RULE. Read before changing anything that moves the numbers.
+#
+# Any change to this module's output values must EITHER bump the date token in
+# NOISE_MODEL_VERSION, OR be followed immediately by a full re-bake of every
+# precomputed grid (scripts/precompute_noise.py, per region). There is no third
+# option and no "we will re-bake later": between the change and the re-bake,
+# cache.py keeps serving grid rows that carry the same version string and
+# different numbers, and nothing anywhere reports it.
+#
+# The cost of the rule is real and is the point. 2026-08-04 found the
+# melbourne-inner grid baked on 06-12 still being served after the 07-26 model
+# improvements, because those improvements changed no env and bumped no
+# version: six weeks of the overlay showing scores up to 3 points off the live
+# model, with every health check green.
+#
+# That rule covers CODE. Configuration is handled mechanically below: every env
+# in this module that moves the numbers is folded into the version string
+# itself. (DATA_DIR is not: it relocates the inputs AND the grids together, so
+# a stamp cannot separate them.)
+#
+# The date token lives in _MODEL_DATE, ONE constant shared by the grid stamp
+# and the result-cache signature. Bumping it therefore invalidates both, and
+# "bump one and forget the other" is not expressible. An earlier version of
+# this change had the date written out twice with a comment asking the next
+# person to keep them in step, which is the same kind of promise that produced
+# the 2026-08-04 incident in the first place.
+# ---------------------------------------------------------------------------
+_MODEL_DATE = "2026-06-09-quincunx"
+#
+# Bump on any scoring change. precompute_noise.py stamps this into every cached
+# grid row and cache.py refuses to serve a cache built by a different version — so
+# a stale precompute fails safe to live-compute instead of silently shadowing the
+# live model (the overlay choropleth reads cached `score`).
+#
+# The suffixes carry every env that changes the numbers, so a grid baked under
+# one configuration can never be served by a process running another (the
+# 2026-08-04 shadow had exactly this shape one layer up). Each suffix is empty
+# when its flag is OFF, so the all-default string is byte-identical to the
+# pre-2026-08-18 one and a default-OFF deployment keeps its existing grids
+# valid. A deployment running any of these flags gets its grids invalidated
+# once, at deploy, and fails safe to live-compute until re-baked.
+#
+# Value tunables fold as VALUES, not as a bare on/off token (`-nswrail8`,
+# `-aadt4`): NOISE_RAIL_RECAL_DB=8 and =5 give different scores from the same
+# flag state, so a boolean suffix would let one shadow the other. Same reason
+# _CONFIG_SIG has carried them for the result cache since 2026-08-03.
+#
+# The transfer suffix carries the RESOLVED model id, not just the on/off state
+# (`-transfer-eutransferv2`). Swapping the RF changes every transfer number, and
+# the swap can happen with no env change at all (`noise_model.py activate` edits
+# registry.json), which is the one number-moving change no environment variable
+# can see. Resolving it here means the id is read from the same place the model
+# is loaded from, so a rollback invalidates the grids it invalidates.
+#
+# NOT bumped for the 2026-07-25 geodistance fix, deliberately. Every noise call
+# site passes `legacy_distance=True`, so noise output is bit-identical to what
+# these grids were baked with (asserted by scripts/verify_noise_frozen.py).
+# Bumping would invalidate every precomputed grid and force a full re-bake for a
+# change noise does not see. Bump it if legacy_distance is ever removed.
+NOISE_MODEL_VERSION = (_MODEL_DATE
+                       + (f"-aadt{_AADT_ADJUST_K:g}" if _AADT_ADJUST_ENABLED else "")
+                       + ("-nswquiet" if _QUIET_RECAL_ENABLED else "")
+                       + (f"-nswrail{_RAIL_RECAL_DB:g}" if _RAIL_RECAL_ENABLED else "")
+                       + ("-transfer" if _TRANSFER_ENABLED else "")
+                       + _transfer_model_token()
+                       + ("-ml" if _ML_CORRECTION_ENABLED else ""))
+
+# The version string as it was composed before the 2026-08-18 fold, used ONLY
+# as the first field of _CONFIG_SIG below. Deliberate, and the reason is blast
+# radius: the fold changes NO numbers, it only tightens which grids a process
+# will accept. Feeding the folded string into _CONFIG_SIG would change the
+# result-cache key and, through api/stamp.py, the model stamp DA Leads keys its
+# per-parcel score cache on, flushing both across the estate and forcing a
+# full recompute to arrive at identical values. _CONFIG_SIG loses nothing by
+# using the old composition: it carries the same flags and tunables in its own
+# t/m/r/k tokens, which is what has actually been guarding the result cache
+# since 2026-08-03. The DATE is shared with the grid stamp via _MODEL_DATE, so
+# a real scoring change flushes the downstream caches with the grids; only the
+# fold's extra suffixes are held back from here.
+_CONFIG_SIG_VERSION = (_MODEL_DATE
+                       + ("-aadt" if _AADT_ADJUST_ENABLED else "")
+                       + ("-nswquiet" if _QUIET_RECAL_ENABLED else "")
+                       + ("-nswrail" if _RAIL_RECAL_ENABLED else ""))
+
 # Everything that changes noise numbers without changing code, baked into the
 # result-cache key so a call under one configuration can never serve a later
 # call under another. 2026-08-03: one env-less CLI probe on the server wrote a
 # physics row into the shared cache; a transfer-configured export then read it
 # back and shipped it, and the probe itself made the export "verify" clean.
-# NOISE_MODEL_VERSION already carries the aadt/quiet/rail flags; the rest are
-# the flags and tunables the version string deliberately does not carry (it
-# gates precomputed grids, where a suffix change forces a full re-bake).
+# The t/m/r/k tokens are what actually guards this key; the first field is the
+# pre-fold version string (see _CONFIG_SIG_VERSION), so this signature is
+# byte-identical to what it was before 2026-08-18 for every configuration.
 # NOISE_MODEL_ID covers the env override only — a registry `activate` with no
-# env change is invisible here and rides out inside the 24h result TTL.
+# env change is invisible here and rides out inside the 24h result TTL. The
+# GRID stamp does resolve the registry (a grid outlives any TTL), which is why
+# only that one carries the model id.
 #
 # The payload-shape tag is not a tunable: it is bumped whenever the cached
 # dict's SHAPE or LABELS change without its numbers changing, which the rest of
@@ -122,7 +230,7 @@ _TRANSFER_ENABLED = os.environ.get("NOISE_TRANSFER", "0") == "1"
 # carried a "vicroads" label. Without the bump every one of those would have
 # kept serving its old label until it aged out.
 _CONFIG_SIG = ":".join((
-    NOISE_MODEL_VERSION,
+    _CONFIG_SIG_VERSION,
     "src2",
     "t1" if _TRANSFER_ENABLED else "t0",
     "m1" if _ML_CORRECTION_ENABLED else "m0",

@@ -1,5 +1,74 @@
 # 本对话改动说明
 
+## 2026-08-18 noise 预计算格的版本串收编所有会改数值的 env
+
+### 规则（新增，写在 score.py 的 NOISE_MODEL_VERSION 上方）
+
+任何会改变 noise 输出数值的模型改动，必须二选一：**要么 bump
+`NOISE_MODEL_VERSION` 里的日期段，要么改完立刻把所有区域的预计算格重烤**
+（`scripts/precompute_noise.py`）。没有第三个选项，也没有“回头再烤”：在改动和
+重烤之间，`cache.py` 会继续吐出版本串相同、数值不同的格点，全链路没有任何地方
+会报警。
+
+依据是 2026-08-04 的实证：melbourne-inner 的格是 06-12 烤的，07-26 的模型改进
+既没动 env 也没 bump 版本，于是六周里地图 overlay 对外发的分数与实时模型最多差
+3 分，而所有健康检查都是绿的。
+
+### 配置这一半改成机制，不再靠人守规则
+
+`NOISE_MODEL_VERSION` 原本只带 aadt / quiet / rail 三个开关的**有无**，盖不住
+`NOISE_TRANSFER`、`NOISE_ML_CORRECTION`、`NOISE_RAIL_RECAL_DB`。也就是说一台
+transfer 配置的服务，可以照单全收一份 physics 配置烤出来的格，两边版本串完全
+相等。现在版本串按顺序拼接：
+
+`2026-06-09-quincunx[-aadt{K}][-nswquiet][-nswrail{dB}][-transfer][-{模型id}][-ml]`
+
+- 数值型 tunable 按**取值**入串（`-nswrail8` / `-aadt4`），不按开关入串：
+  `NOISE_RAIL_RECAL_DB=8` 和 `=5` 是同一个开关下的两组分数，布尔后缀会让它们
+  互相顶替。
+- transfer 打开时还带上**实际解析到的模型 id**（`-eu.transfer.v1.dff726`：id 里的
+  dash 换成点以免撞分隔符，后面接原始 id 的 6 位 blake2s，保证不同 id 不会因为
+  只差标点而映射成同一个戳）。换模型是
+  唯一一个任何 env 都看不见的改数值动作：`scripts/noise_model.py activate` 只改
+  `registry.json` 然后重启，环境变量一个字都没变。所以这个 token 走
+  `model_registry.resolve()`，与真正加载模型的是同一个来源；解析失败（例如
+  `NOISE_MODEL_ID` 打错，registry 按设计直接 raise）落到 `-mdlerr`，不与健康的
+  transfer 进程共用同一个戳。transfer 关闭时该 token 为空（物理路径根本不读 RF）。
+- 每个后缀在对应 flag 关闭时为空串，所以**全默认配置下版本串与改动前逐字节相同**
+  （`2026-06-09-quincunx`），默认配置的部署不会因为这次改动而失效重烤。
+
+### 只收紧格子这一层，不牵动下游缓存
+
+sqlite 结果缓存的 `_CONFIG_SIG` 改用**折叠前**的版本串组合
+（`_CONFIG_SIG_VERSION`），因此**任何配置下 `_CONFIG_SIG` 与改动前逐字节相同**，
+`api/stamp.py` 的 model stamp 也不变，DA Leads 按 stamp 缓存的 per-parcel 分数
+不会被冲掉。理由：这次改动不改任何数值，只是收紧"哪些格子可以被采信"；让它
+去冲结果缓存和下游 parcel 缓存，等于全网重算一遍得到完全相同的数字。
+`_CONFIG_SIG` 本来就用自己的 t/m/r/k token 守着这些 env，不损失任何保护。
+
+日期段本身是**同一个常量 `_MODEL_DATE`**，两个串共同消费：所以"为真实打分改动
+bump 日期"必然同时作废预计算格、结果缓存和下游 model stamp，"只 bump 一半"在
+代码里无法表达。第一版把日期写了两遍并在注释里请求后人保持同步，那种口头约定
+正是 08-04 事故的成因，已被复审打掉。
+
+### 部署影响（部署前必读）
+
+生产 `property-scores.service` 带 `NOISE_TRANSFER=1 NOISE_QUIET_RECAL=1
+NOISE_RAIL_RECAL=1`，版本串因此从
+`2026-06-09-quincunx-nswquiet-nswrail` 变成
+`2026-06-09-quincunx-nswquiet-nswrail8-transfer-eu.transfer.v1.dff726`
+（本机对着生产同款 registry 实测得到的串）。
+
+- **所有现存 `noise_cache_*.parquet` 在部署后一律判失效**，`cache.py` 跳过，
+  overlay 每格退回实时计算（结果正确，只是慢：transfer 密集区 1.7-2.2s/点，
+  原缓存 0.0015s/cell）。这正是这次改动要暴露的那批格。
+- 除 transfer 外，只跑 `NOISE_AADT_ADJUST=1` 或 `NOISE_RAIL_RECAL=1` 的部署也会
+  失效一次，因为这两个后缀由布尔改成了带取值（`-aadt`→`-aadt4`，
+  `-nswrail`→`-nswrail8`）。只跑 `NOISE_QUIET_RECAL=1` 或全默认的不受影响。
+- 因此部署必须与重烤配对，挑无重活窗口：先 `precompute_noise.py`（**带 service
+  同款 env**，否则新烤的格照样对不上）再 restart，或接受一段实时计算期。
+- 结果缓存与下游 parcel 缓存不受影响（见上一节）。
+
 ## 2026-08-13 — PlanSA Flooding Evidence Required 不再当作安全证据
 
 - 将 PlanSA `Hazards (Flooding Evidence Required)` layer 403 纳入 SA 官方

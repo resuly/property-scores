@@ -638,10 +638,11 @@ RMIT, for use in a university coursework project.
 - Grid spacing: {spacing_m:.0f} m
 - Points: {result['count']}
 - Model version: {NOISE_MODEL_VERSION}
-  (an internal build identifier that concatenates the names of the model
-  components switched on. Some of them are state-specific and their names do
-  not always match the state they apply to, so read it as a build number and
-  ask us if you need to know exactly what produced a given figure.)
+  (an internal build identifier that concatenates the model components switched
+  on, some with their settings or the trained model's own id. Some component
+  names are state-specific and do not always match the state they apply to, so
+  read it as a build number and ask us if you need to know exactly what produced
+  a given figure.)
 - Quiet score range in this file: {min(scores)} to {max(scores)}
 - Lden range in this file: {min(ldens):.1f} to {max(ldens):.1f} dB
 

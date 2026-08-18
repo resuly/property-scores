@@ -29,6 +29,16 @@ def _load_caches():
             # would shadow the live model in the overlay (and disagree with the
             # panel). Skip it; the API then live-computes (correct, just slower).
             # Regenerate with scripts/precompute_noise.py to restore the speedup.
+            #
+            # "A different model version" covers CONFIGURATION as well as code:
+            # since 2026-08-18 NOISE_MODEL_VERSION carries NOISE_TRANSFER /
+            # NOISE_ML_CORRECTION / NOISE_RAIL_RECAL(_DB) / NOISE_AADT_ADJUST(_K)
+            # and the resolved transfer model id in its suffixes, so a grid
+            # baked without transfer (or on the previous RF) is refused by this
+            # process instead of shadowing it. What the guard still cannot see
+            # is a code change that moved the numbers without bumping the date
+            # token; that is a process rule, stated at NOISE_MODEL_VERSION in
+            # score.py.
             if "model_version" not in df.columns or \
                     not (df["model_version"] == NOISE_MODEL_VERSION).all():
                 continue

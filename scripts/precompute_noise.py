@@ -3,6 +3,32 @@
 Usage:
   python scripts/precompute_noise.py --region melbourne-inner  # ~30 min
   python scripts/precompute_noise.py --region melbourne        # ~5 hours
+
+Run this with the SAME environment AND the same active model as the serving
+process. Every row is stamped with NOISE_MODEL_VERSION, and cache.py refuses any
+grid whose stamp does not match the reader's own. Since 2026-08-18 that stamp
+encodes, besides the model date:
+
+    NOISE_TRANSFER            on/off
+    NOISE_ML_CORRECTION       on/off
+    NOISE_QUIET_RECAL         on/off
+    NOISE_RAIL_RECAL          on/off, plus NOISE_RAIL_RECAL_DB as a VALUE
+    NOISE_AADT_ADJUST         on/off, plus NOISE_AADT_ADJUST_K as a VALUE
+    the resolved transfer model id, from NOISE_MODEL_ID or, failing that, the
+      `active` entry in data/models/noise/registry.json (so DATA_DIR has to
+      point at the same registry the service reads, not just at a data dir)
+
+A grid baked under a different one of these is not "slightly different" to the
+serving API, it is invisible to it, and the region silently loses its precompute
+speed-up. Production today runs
+`DATA_DIR=... NOISE_TRANSFER=1 NOISE_QUIET_RECAL=1 NOISE_RAIL_RECAL=1`; check the
+systemd unit rather than trusting this line, and confirm by comparing the printed
+stamp below with the service's own.
+
+Process rule this script is the other half of: any change that moves the numbers
+must bump the date token in NOISE_MODEL_VERSION or be followed immediately by a
+re-bake here. See the block at NOISE_MODEL_VERSION in property_scores/noise/
+score.py for why (2026-08-04: six weeks of a stale melbourne-inner grid).
 """
 
 import argparse
@@ -45,6 +71,9 @@ def main():
     lngs = np.arange(cfg["lng_min"], cfg["lng_max"], cfg["step"])
     cell_m = cfg["step"] * 111_320  # grid step in metres → quincunx span
     total = len(lats) * len(lngs)
+    # Printed so the operator can compare it with the running service's stamp
+    # (GET /version) BEFORE spending hours on a grid the service will refuse.
+    print(f"Model version stamped into every row: {NOISE_MODEL_VERSION}")
     print(f"Region: {args.region}")
     print(f"Grid: {len(lats)} x {len(lngs)} = {total} points (step={cfg['step']}, cell~{cell_m:.0f}m)")
     print(f"Estimated time: {total * 0.8 * 5 / 60:.0f} minutes (quincunx = 5x per cell)")

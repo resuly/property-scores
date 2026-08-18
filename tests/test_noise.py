@@ -498,9 +498,12 @@ def test_debug_rail_source_screening_matches_score_formula(monkeypatch):
 def test_result_cache_key_carries_model_config():
     """Cache guard for the 2026-08-03 incident: an env-less CLI probe wrote a
     physics row into the shared result cache and a NOISE_TRANSFER=1 export read
-    it back. The key must differ across every env that changes noise numbers
-    but is deliberately kept out of NOISE_MODEL_VERSION (which gates the
-    precomputed grids, where a suffix change forces a full re-bake)."""
+    it back. The key must differ across every env that changes noise numbers.
+
+    Since 2026-08-18 NOISE_MODEL_VERSION carries those envs too (it gates the
+    precomputed grids, and used not to), so this signature and that string now
+    overlap. This test still owns the result-cache half: it asserts the key
+    reaches _ck, which the version string alone does not."""
     import os
     import subprocess
     import sys as _sys
@@ -532,3 +535,280 @@ def test_result_cache_key_carries_model_config():
     src = inspect.getsource(_s.noise_score)
     assert "_CONFIG_SIG" in src.split("_cache_get")[0], \
         "config signature must be part of _ck before the cache lookup"
+
+
+# --- Grid-cache configuration guard (2026-08-18) -----------------------------
+# The result cache has carried the noise envs in _CONFIG_SIG since 2026-08-03
+# (test_result_cache_key_carries_model_config above). The PRECOMPUTED GRIDS did
+# not: NOISE_MODEL_VERSION carried only the aadt/quiet/rail on-off state, so a
+# grid baked under one configuration was served unchallenged by a process
+# running another. These tests pin the fold.
+
+def _model_version(env_pairs):
+    """NOISE_MODEL_VERSION as computed by a fresh process under env_pairs.
+
+    Subprocess because the module reads os.environ once at import. NOISE_* is
+    stripped from the inherited environment so a runner that already exports a
+    flag cannot make base == variant.
+    """
+    import os
+    import subprocess
+    import sys as _sys
+
+    sets = "".join(f"os.environ['{k}']='{v}'; " for k, v in env_pairs)
+    code = ("import os; " + sets +
+            "from property_scores.noise.score import NOISE_MODEL_VERSION; "
+            "print(NOISE_MODEL_VERSION)")
+    clean = {k: v for k, v in os.environ.items() if not k.startswith("NOISE_")}
+    out = subprocess.run([_sys.executable, "-c", code], capture_output=True,
+                         text=True, timeout=180, env=clean)
+    assert out.returncode == 0, out.stderr
+    return out.stdout.strip()
+
+
+def test_every_number_moving_env_changes_the_grid_version():
+    """Each env that changes the scores must change the grid stamp.
+
+    Without this, cache.py's version guard compares equal across two
+    configurations that produce different numbers, which is precisely how the
+    melbourne-inner grid shadowed the live model for six weeks (2026-08-04).
+    """
+    base = _model_version([])
+    variants = {
+        "transfer": [("NOISE_TRANSFER", "1")],
+        "ml_correction": [("NOISE_ML_CORRECTION", "1")],
+        "rail_recal": [("NOISE_RAIL_RECAL", "1")],
+        "aadt_adjust": [("NOISE_AADT_ADJUST", "1")],
+        "quiet_recal": [("NOISE_QUIET_RECAL", "1")],
+    }
+    for name, pairs in variants.items():
+        assert _model_version(pairs) != base, f"{name} does not move the version"
+
+    # Combinations must not collide with each other either: two different
+    # configurations sharing a stamp is the same failure as a config sharing a
+    # stamp with the default.
+    combos = [[], [("NOISE_TRANSFER", "1")], [("NOISE_ML_CORRECTION", "1")],
+              [("NOISE_TRANSFER", "1"), ("NOISE_ML_CORRECTION", "1")]]
+    seen = [_model_version(c) for c in combos]
+    assert len(set(seen)) == len(seen), seen
+
+
+def test_value_tunables_are_folded_as_values_not_as_flags():
+    """NOISE_RAIL_RECAL_DB=8 and =5 are different scores from the same flag.
+
+    A boolean suffix would let a grid baked at 8 dB be served by a process
+    running 5 dB. Same for the AADT adjustment strength K.
+    """
+    rail_8 = _model_version([("NOISE_RAIL_RECAL", "1"),
+                             ("NOISE_RAIL_RECAL_DB", "8.0")])
+    rail_5 = _model_version([("NOISE_RAIL_RECAL", "1"),
+                             ("NOISE_RAIL_RECAL_DB", "5.0")])
+    assert rail_8 != rail_5, (rail_8, rail_5)
+
+    k4 = _model_version([("NOISE_AADT_ADJUST", "1"),
+                         ("NOISE_AADT_ADJUST_K", "4.0")])
+    k2 = _model_version([("NOISE_AADT_ADJUST", "1"),
+                         ("NOISE_AADT_ADJUST_K", "2.0")])
+    assert k4 != k2, (k4, k2)
+
+
+def test_default_off_version_is_unchanged_so_existing_grids_stay_valid():
+    """Every suffix is empty when its flag is off.
+
+    The fold must not invalidate the grids of a deployment whose configuration
+    did not change. A deliberate bump of the DATE TOKEN is expected to update
+    this literal (that is the sanctioned half of the process rule, and it comes
+    with a re-bake). A new SUFFIX turning up here is not: it means some default
+    is now leaking into the string, and every default-configured region silently
+    loses its grid.
+    """
+    assert _model_version([]) == "2026-06-09-quincunx"
+
+
+def test_grid_baked_under_another_config_is_refused_by_the_reader(tmp_path,
+                                                                 monkeypatch):
+    """End to end through cache.lookup: the stamp actually gates the serving.
+
+    A version string that differs is worthless if the loader still hands the
+    rows out, so this drives the real loader over a real parquet rather than
+    comparing strings.
+    """
+    import pandas as pd
+    from property_scores.noise import cache as noise_cache
+    from property_scores.noise.score import NOISE_MODEL_VERSION
+
+    # The loader memoises into module globals, so restore them: leaving
+    # _loaded=True with an empty _cache would make every later test in the
+    # session see no grids at all, which is a silence that looks like a pass.
+    monkeypatch.setattr(noise_cache, "_cache", dict(noise_cache._cache))
+    monkeypatch.setattr(noise_cache, "_loaded", noise_cache._loaded)
+
+    def bake(version):
+        df = pd.DataFrame([{
+            "lat": -37.8100, "lng": 144.9600, "score": 42,
+            "estimated_db": 61.0, "road_db": 60.0, "rail_db": 40.0,
+            "label": "moderate", "dominant_source": "main road",
+            "model_version": version,
+        }])
+        path = tmp_path / "noise_cache_testregion.parquet"
+        df.to_parquet(path, index=False)
+        monkeypatch.setattr(noise_cache, "DATA_DIR", tmp_path)
+        noise_cache._cache = {}
+        noise_cache._loaded = False
+        return noise_cache.lookup(-37.8100, 144.9600)
+
+    # Same stamp as this process: served.
+    hit = bake(NOISE_MODEL_VERSION)
+    assert hit is not None and hit["score"] == 42, hit
+
+    # Baked by a transfer-configured process, read by this (default) one. The
+    # 2026-08-04 shape of the bug, and the reason the env has to be in here.
+    assert bake(NOISE_MODEL_VERSION + "-transfer") is None
+    # And the value-tunable shape of it.
+    assert bake(NOISE_MODEL_VERSION + "-nswrail5") is None
+    # A grid with no stamp at all (pre-versioning) is refused too.
+    assert bake(None) is None
+
+
+def _fake_model_dir(tmp_path, ids, active):
+    """Minimal on-disk model registry: the loader only checks these two files."""
+    import json
+
+    root = tmp_path / "models" / "noise"
+    for mid in ids:
+        d = root / mid
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "rf.pkl").write_bytes(b"not a real model")
+        (d / "calibration.json").write_text("{}")
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "registry.json").write_text(json.dumps(
+        {"active": active, "versions": {m: {"status": "active"} for m in ids}}))
+    return root
+
+
+def test_swapping_the_transfer_model_changes_the_grid_version(tmp_path):
+    """The model swap is the number-moving change NO env variable can see.
+
+    `noise_model.py activate` edits registry.json and restarts; nothing in the
+    environment differs afterwards. Before 2026-08-18 the grids baked by the
+    model that was just rolled back FROM kept being served by the process
+    running the model rolled back TO.
+    """
+    _fake_model_dir(tmp_path, ["mdl-a", "mdl-b"], active="mdl-a")
+    data_dir = [("DATA_DIR", str(tmp_path))]
+
+    # (a) explicit rollback via the env var
+    by_env_a = _model_version(data_dir + [("NOISE_TRANSFER", "1"),
+                                          ("NOISE_MODEL_ID", "mdl-a")])
+    by_env_b = _model_version(data_dir + [("NOISE_TRANSFER", "1"),
+                                          ("NOISE_MODEL_ID", "mdl-b")])
+    assert by_env_a != by_env_b, (by_env_a, by_env_b)
+
+    # (b) swap via the registry, with the environment held IDENTICAL. This is
+    # the case an env-only token cannot catch.
+    from_registry_a = _model_version(data_dir + [("NOISE_TRANSFER", "1")])
+    assert from_registry_a == by_env_a, "registry and env must resolve alike"
+    _fake_model_dir(tmp_path, ["mdl-a", "mdl-b"], active="mdl-b")
+    from_registry_b = _model_version(data_dir + [("NOISE_TRANSFER", "1")])
+    assert from_registry_b != from_registry_a, (from_registry_a, from_registry_b)
+
+
+def test_unresolvable_model_does_not_share_a_stamp_with_a_healthy_one(tmp_path):
+    """A typo'd NOISE_MODEL_ID makes model_registry raise, and the process then
+    serves physics. It must not stamp its grids like a working transfer box."""
+    _fake_model_dir(tmp_path, ["mdl-a"], active="mdl-a")
+    healthy = _model_version([("DATA_DIR", str(tmp_path)),
+                              ("NOISE_TRANSFER", "1")])
+    broken = _model_version([("DATA_DIR", str(tmp_path)),
+                             ("NOISE_TRANSFER", "1"),
+                             ("NOISE_MODEL_ID", "typo-not-a-model")])
+    assert broken != healthy, (broken, healthy)
+    assert "mdlerr" in broken, broken
+
+
+def test_model_id_does_not_touch_the_version_on_the_physics_path(tmp_path):
+    """Transfer off means the RF is never loaded, so which model is 'active' has
+    no effect on the numbers. Folding it in anyway would invalidate every
+    physics grid on a model swap those grids cannot see."""
+    _fake_model_dir(tmp_path, ["mdl-a", "mdl-b"], active="mdl-b")
+    plain = _model_version([("DATA_DIR", str(tmp_path))])
+    with_id = _model_version([("DATA_DIR", str(tmp_path)),
+                              ("NOISE_MODEL_ID", "mdl-a")])
+    from property_scores.noise.score import _MODEL_DATE
+    assert plain == with_id == _MODEL_DATE, (plain, with_id)
+
+
+def test_the_fold_does_not_flush_the_result_cache_or_the_model_stamp():
+    """The grid stamp tightened on 2026-08-18; the result-cache key must not.
+
+    The fold changes no numbers. If it reached _CONFIG_SIG it would change the
+    sqlite result-cache key AND, through api/stamp.py, the model stamp DA Leads
+    keys its per-parcel score cache on, flushing both estate-wide to recompute
+    identical values.
+
+    The expectation is the PRE-FOLD RECIPE (date + boolean flags), rebuilt from
+    _MODEL_DATE rather than frozen as a literal. A frozen literal here would
+    make the sanctioned action -- bumping the date for a real scoring change,
+    which must flush these caches -- look like a regression, and the previous
+    version of this test did exactly that.
+    """
+    import os
+    import subprocess
+    import sys as _sys
+
+    def probe(env_pairs):
+        sets = "".join(f"os.environ['{k}']='{v}'; " for k, v in env_pairs)
+        code = ("import os; " + sets +
+                "from property_scores.noise import score as s; "
+                "print(s._CONFIG_SIG); print(s._MODEL_DATE)")
+        clean = {k: v for k, v in os.environ.items()
+                 if not k.startswith("NOISE_")}
+        out = subprocess.run([_sys.executable, "-c", code], capture_output=True,
+                             text=True, timeout=180, env=clean)
+        assert out.returncode == 0, out.stderr
+        sig, date = out.stdout.strip().splitlines()
+        return sig, date
+
+    def expected_first_field(date, aadt=False, quiet=False, rail=False):
+        return (date + ("-aadt" if aadt else "") + ("-nswquiet" if quiet else "")
+                + ("-nswrail" if rail else ""))
+
+    sig, date = probe([])
+    assert sig.split(":")[0] == expected_first_field(date)
+    assert sig == f"{date}:src2:t0:m0:r-:k-:"
+
+    # Production's configuration. The flags must still show in the t/m/r tokens
+    # (that is the 2026-08-03 guard) while the first field stays on the pre-fold
+    # recipe: no rail dB value, no -transfer, no model id.
+    sig, date = probe([("NOISE_TRANSFER", "1"), ("NOISE_QUIET_RECAL", "1"),
+                       ("NOISE_RAIL_RECAL", "1")])
+    assert sig.split(":")[0] == expected_first_field(date, quiet=True, rail=True)
+    assert sig == f"{date}-nswquiet-nswrail:src2:t1:m0:r8:k-:"
+
+    # And the date really is shared, so a bump cannot reach one string only.
+    from property_scores.noise.score import _MODEL_DATE, NOISE_MODEL_VERSION
+    from property_scores.noise.score import _CONFIG_SIG_VERSION
+    assert NOISE_MODEL_VERSION.startswith(_MODEL_DATE)
+    assert _CONFIG_SIG_VERSION.startswith(_MODEL_DATE)
+    import inspect
+    from property_scores.noise import score as _s
+    src = inspect.getsource(_s)
+    assert src.count(f'"{_MODEL_DATE}"') == 1, \
+        "the date must exist once, as _MODEL_DATE; a second copy can drift"
+
+
+def test_two_model_ids_that_differ_only_in_punctuation_get_different_stamps(
+        tmp_path):
+    """The suffix scheme is dash-delimited, so the id has to be sanitised, and
+    a naive sanitiser collapses "eu-transfer-v1" onto "eutransferv1". The live
+    production id is "eu-transfer-v1", so that collision is one plausible
+    upload away from letting one model serve the other's grids."""
+    _fake_model_dir(tmp_path, ["eu-transfer-v1", "eutransferv1"],
+                    active="eu-transfer-v1")
+    dashed = _model_version([("DATA_DIR", str(tmp_path)),
+                             ("NOISE_TRANSFER", "1"),
+                             ("NOISE_MODEL_ID", "eu-transfer-v1")])
+    squashed = _model_version([("DATA_DIR", str(tmp_path)),
+                               ("NOISE_TRANSFER", "1"),
+                               ("NOISE_MODEL_ID", "eutransferv1")])
+    assert dashed != squashed, (dashed, squashed)

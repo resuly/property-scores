@@ -173,6 +173,29 @@ def test_a_dry_run_does_not_spend_the_reminder(harness, monkeypatch):
     assert len(sent) == 1, "dry run 之后的正常运行要把欠下的提醒发出来"
 
 
+def test_a_dry_run_writes_no_state_at_all(harness, monkeypatch):
+    """--no-alert 是调试开关, 只看不改。
+
+    它默认指向 cron 那份 ~/.score_truth_probes_state.json, 而运维 SSH 上去用的
+    正是 cron 跑的同一个 ubuntu 账号, 所以文件头自己举的
+    `--domain X --no-alert` 例子动的就是生产状态: 一次调试就能把一个真回归
+    从"今天 error 告警"无声降级成"七天后 warn 摘要"。"""
+    t0 = 1_700_000_000.0
+    harness([_canary()], t0)
+    before = probes.STATE_FILE.read_text()
+    monkeypatch.setattr(sys, "argv", ["probes", "--no-alert"])
+    other = ("flood", "-27.4390,153.0620")
+    _code, sent, _state = harness([_canary(), other], t0 + DAY)
+    assert sent == []
+    assert probes.STATE_FILE.read_text() == before, (
+        "dry run 一个字节都不该改 state")
+    # 回到真实运行: 那条新失败仍然是新的, 照常 error 级报出来。
+    monkeypatch.setattr(sys, "argv", ["probes"])
+    _code, sent, state = harness([_canary(), other], t0 + 2 * DAY)
+    assert len(sent) == 1 and sent[0]["level"] == "error"
+    assert f"{other[0]}|{other[1]}" in state["failing"]
+
+
 def test_a_failed_delivery_does_not_spend_the_reminder(harness):
     """send_alert 送不出去时**返回 False 而不抛异常**, 所以 try/except 看不见它。
     如果照记 reminded, 一次 502 或 token 过期就换来整周沉默——正是这个功能
@@ -299,15 +322,3 @@ def test_the_truncation_notice_points_at_a_path_that_holds_the_log(harness):
     assert probes.LOG_PATH in msg, msg
 
 
-def test_a_dry_run_does_not_hold_out_a_new_failure(harness, monkeypatch):
-    """--no-alert 压根没尝试发送, 所以"送达失败要留着重报"那条不适用:
-    留出来只会让下一次真实运行把它当新的再报一遍, 而它其实早就记过了。
-    这条是把当前取舍钉住 —— 它和"dry run 不消耗 stale 提醒"看着相反, 区别在于
-    stale 那条是**已经报过一次**的重复提醒, 而这条是首报, 首报的记账口径不变。
-    """
-    t0 = 1_700_000_000.0
-    monkeypatch.setattr(sys, "argv", ["probes", "--no-alert"])
-    _code, sent, state = harness([_canary()], t0)
-    assert sent == [], "--no-alert 不发任何消息"
-    assert state["failing"] == [KEY], "首报的记账不受 --no-alert 影响"
-    assert state["since"][KEY] == t0

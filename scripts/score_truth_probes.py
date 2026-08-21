@@ -341,16 +341,27 @@ def main():
     delivered_stale = bool(stale) and not args.no_alert and _send(
         f"真值哨兵: {len(stale)} 项持续失败未处理", "warn", stale)
 
-    # An undelivered NEW failure is held out of the state entirely, so the next
-    # run sees it as new again and retries at error level. Waiting for the
-    # 7-day digest to cover it would leave the most urgent path on the weakest
-    # guarantee -- the same mistake the stale reminder exists to fix.
-    persist = now_failing | untouched
-    if new_failures and not delivered_new and not args.no_alert:
-        persist -= new_failures
-    _write_state(persist, {k: v for k, v in since.items() if k in persist},
-                 {**reminded, **({k: now for k in stale} if delivered_stale else {})},
-                 now)
+    # --no-alert is a debugging switch and reads only. It defaults to the same
+    # ~/.score_truth_probes_state.json the cron writes, and an operator SSHes
+    # in as the same `ubuntu` user cron runs as, so the `--domain X --no-alert`
+    # example in this file's own header used to mutate production state: one
+    # debug run would silently downgrade a real regression from today's error
+    # alert to a warn digest a week later. Nothing is gained by writing --
+    # nobody was told anything this run.
+    if args.no_alert:
+        print("(--no-alert: state left untouched)", file=sys.stderr)
+    else:
+        # An undelivered NEW failure is held out of the state entirely, so the
+        # next run sees it as new again and retries at error level. Waiting for
+        # the 7-day digest would leave the most urgent path on the weakest
+        # guarantee -- the same mistake the stale reminder exists to fix.
+        persist = now_failing | untouched
+        if new_failures and not delivered_new:
+            persist -= new_failures
+        _write_state(persist, {k: v for k, v in since.items() if k in persist},
+                     {**reminded,
+                      **({k: now for k in stale} if delivered_stale else {})},
+                     now)
 
     for k in stale:
         print(f"still failing after {int((now - since[k]) / 86400)}d: {k}"

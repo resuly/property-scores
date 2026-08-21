@@ -15,7 +15,14 @@ KNOWN POSITIVE. This runner closes that class:
    are listed as MANUAL, never silently dropped.
 
 Only NEW failures (vs the state file) alert, so a long-known gap doesn't spam
-while a regression pings Telegram the day it lands.
+while a regression pings Telegram the day it lands. The cost of that, found
+2026-08-21: a failure that never recovers also never speaks again. The QLD
+bushfire canary broke 2026-07-23, alerted once, and sat red for 30 runs
+without a word -- a whole state's upstream was gone for a month and the only
+reason anyone noticed was an unrelated dig through the log. So a still-red
+check is re-reported every STALE_RED_DAYS (7), which is loud enough to
+surface a month-long outage and quiet enough that the dozen known model gaps
+cost one line each per week.
 
 Usage:
   python scripts/score_truth_probes.py                  # full run, alert on new failures
@@ -46,6 +53,33 @@ DOMAIN_ENDPOINT = {
     "solar": "solar", "contamination": "contamination",
 }
 SLEEP_S = float(os.environ.get("TRUTH_PROBE_SLEEP", "2.5"))
+# How long a check may stay red before it is reported again. Days, not runs,
+# so a few missed crons cannot silence it.
+STALE_RED_DAYS = float(os.environ.get("TRUTH_PROBE_STALE_RED_DAYS", "7"))
+# Where the cron wrapper puts this run's output, quoted in the truncation
+# notice. Absolute on purpose: cron does `cd /var/www/property-scores`, which
+# HAS a logs/ directory that does not contain this file, so a relative path
+# sends the reader somewhere real and empty -- reading as "the log is gone".
+LOG_PATH = os.environ.get("TRUTH_PROBE_LOG_PATH",
+                          "/var/www/daleads.com.au/logs/truth_probes.log")
+
+
+def _write_state(failing, since, reminded, ts):
+    """Atomic, because this file now carries the staleness clocks too.
+
+    A torn write used to cost one day of "new failure" noise; it would now
+    also reset every since/reminded, i.e. re-arm the month-long silence this
+    whole mechanism exists to prevent. The read path swallows every
+    exception, so a truncated file fails silently rather than loudly.
+    """
+    # pid in the name: cron_with_alert.sh takes no flock, so two overlapping
+    # runs would otherwise write the same tmp and one could rename a file the
+    # other was mid-write -- and the read path swallows the resulting garbage,
+    # zeroing every clock silently.
+    tmp = STATE_FILE.with_suffix(f"{STATE_FILE.suffix}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps({"failing": sorted(failing), "since": since,
+                               "reminded": reminded, "ts": ts}))
+    os.replace(tmp, STATE_FILE)
 
 
 def _get(url: str, timeout: int = 120, headers: dict | None = None,
@@ -222,29 +256,105 @@ def main():
     print(f"\n{len(passes)} pass, {len(fails)} fail, {len(manual)} manual "
           f"of {len(results)}")
 
-    prev = set()
+    prev, since, reminded = set(), {}, {}
     if STATE_FILE.exists():
         try:
-            prev = set(json.loads(STATE_FILE.read_text()).get("failing", []))
+            state = json.loads(STATE_FILE.read_text())
+            prev = set(state.get("failing", []))
+            since = dict(state.get("since", {}))
+            reminded = dict(state.get("reminded", {}))
         except Exception:
             pass
+    now = time.time()
     now_failing = {f"{r['domain']}|{r['key']}" for r in fails}
+    # A --domain run probes one domain, so everything else is simply unknown
+    # this run, not recovered. Overwriting the whole file with that partial
+    # view already invented "new" failures on the next full run; now it would
+    # also reset their staleness clocks to zero, which is exactly the silence
+    # this reminder exists to break. Scoped runs keep the other domains' rows.
+    # Note untouched keys stay OUT of now_failing: they were not probed, so
+    # they must not be judged stale or reported on this run, only carried.
+    # run_canaries ignores --domain and always runs, so canary rows are
+    # measured on every run and are never untouched -- carrying them would
+    # keep a canary that just recovered marked as failing forever.
+    untouched = ({k for k in prev
+                  if not k.startswith(f"{args.domain}|")
+                  and not k.startswith("canary|")}
+                 if args.domain else set())
     new_failures = now_failing - prev
-    recovered = prev - now_failing
-    STATE_FILE.write_text(json.dumps({"failing": sorted(now_failing),
-                                      "ts": time.time()}))
+    recovered = prev - now_failing - untouched
 
-    if new_failures and not args.no_alert:
-        lines = [r for r in fails if f"{r['domain']}|{r['key']}" in new_failures]
-        body = "\n".join(f"• {r['domain']} {r['key']}: {r['note']}" for r in lines[:12])
+    # A key already red when this bookkeeping shipped has no true start date.
+    # Stamping it now understates its age -- the alternative is inventing one,
+    # and a week's delay on the first reminder is the cheaper error.
+    keep = now_failing | untouched
+    since = {k: since.get(k, now) for k in keep}
+    reminded = {k: v for k, v in reminded.items() if k in keep}
+    # Half an hour of slack, because the window is measured against a daily
+    # cron: without it a run that starts even a second later than the one
+    # seven days ago misses the threshold and the reminder slips a full day,
+    # every time, until it drifts off the schedule entirely.
+    due = STALE_RED_DAYS * 86400 - 1800
+    stale = sorted(
+        k for k in now_failing - new_failures
+        if now - since[k] >= due and now - reminded.get(k, since[k]) >= due)
+
+    def _send(title, level, keys):
+        """True only if Telegram actually took the message.
+
+        send_alert RETURNS False on a delivery failure and raises nothing, so
+        a try/except here would only ever catch an ImportError. Ignoring the
+        return value is how a 502 or an expired token turns into a week of
+        silence -- the very failure this reminder exists to end.
+        """
+        by_key = {f"{r['domain']}|{r['key']}": r for r in fails}
+        shown = [k for k in keys if k in by_key]
+        lines = [
+            f"• {by_key[k]['domain']} {by_key[k]['key']}: {by_key[k]['note']}"
+            + (f" (已红 {int((now - since[k]) / 86400)} 天)" if k in stale else "")
+            for k in shown[:12]]
+        # Never let the cap read as "that was all of them": there are already
+        # 13 persistently failing checks, so the stale digest hits this on its
+        # very first send.
+        if len(shown) > 12:
+            lines.append(f"…还有 {len(shown) - 12} 项未列出(消息长度上限), "
+                         f"完整清单见 {LOG_PATH}")
         try:
             sys.path.insert(0, str(ROOT / "scripts"))
             from alert_telegram import send_alert
-            send_alert(project="da-leads", level="error",
-                       title=f"真值哨兵: {len(new_failures)} 项新失败",
-                       message=body)
+            return bool(send_alert(project="da-leads", level=level,
+                                   title=title, message="\n".join(lines)))
         except Exception as e:
             print(f"(alert failed: {e})", file=sys.stderr)
+            return False
+
+    # sorted, because `keys` is a set and the [:12] cap would otherwise show a
+    # hash-ordered slice: a lost state file makes all 13 "new" at once, and
+    # which one gets dropped would change with PYTHONHASHSEED.
+    delivered_new = bool(new_failures) and not args.no_alert and _send(
+        f"真值哨兵: {len(new_failures)} 项新失败", "error", sorted(new_failures))
+    # warn, not error: nothing changed today, this is the reminder that
+    # something has been broken for a week or more and nobody acted.
+    # A dry run spends nothing either -- --no-alert sends no message, so
+    # stamping these would buy another week of silence for a failure nobody
+    # was told about.
+    delivered_stale = bool(stale) and not args.no_alert and _send(
+        f"真值哨兵: {len(stale)} 项持续失败未处理", "warn", stale)
+
+    # An undelivered NEW failure is held out of the state entirely, so the next
+    # run sees it as new again and retries at error level. Waiting for the
+    # 7-day digest to cover it would leave the most urgent path on the weakest
+    # guarantee -- the same mistake the stale reminder exists to fix.
+    persist = now_failing | untouched
+    if new_failures and not delivered_new and not args.no_alert:
+        persist -= new_failures
+    _write_state(persist, {k: v for k, v in since.items() if k in persist},
+                 {**reminded, **({k: now for k in stale} if delivered_stale else {})},
+                 now)
+
+    for k in stale:
+        print(f"still failing after {int((now - since[k]) / 86400)}d: {k}"
+              + ("" if delivered_stale else " (提醒未送达, 下次运行重试)"))
     if recovered:
         print(f"recovered since last run: {len(recovered)}")
 

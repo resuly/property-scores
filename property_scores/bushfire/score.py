@@ -97,9 +97,27 @@ ENDPOINTS: dict[str, list[tuple[str, str, str]]] = {
     "QLD": [
         # QFD Bushfire Prone Area public proxy (class attribute carries the
         # tier; vintage July 2017 per the service, named so the UI shows it).
+        # Proxy item id rotated 2026-08-21, after the old 8ac1ba8e... had been
+        # dead for a month. Sentinel log: last PASS 2026-07-22, then 30
+        # consecutive FAILs from 07-23 on "Error generating token" -- HTTP
+        # *200* with an error body, so nothing raises; _query_arcgis drops it at
+        # `return None if "error" in data else data` and _check_layer reports
+        # (None, None, False), i.e. "we don't know", never "officially clear".
+        # QFD published the replacement 3ec80e95... on 2026-08-05, two weeks
+        # AFTER the old one broke, so the rebuild did not cause the outage --
+        # it was the (unannounced) fix. Same owner PublicSafetyQld_Data, same
+        # title, same class/version fields; verified Tamborine count=1 and
+        # Brisbane CBD count=0 on the new id before the swap.
+        #
+        # Two traps for whoever automates this rotation: both items are still
+        # publicly listed AND share a title, so it has to probe for liveness
+        # rather than match on name or take the newest; and the canary sat red
+        # for 30 days unnoticed because the sentinel only alerts on NEW
+        # failures, so it pinged once on 07-23 and then went quiet.
+        # Only reached when the local layer library cannot answer.
         ("Bushfire Prone Area (QLD QFD 2017)",
          "https://utility.arcgis.com/usrsvcs/servers"
-         "/8ac1ba8eccee472fbd0e7a57bf3ad320/rest/services/Hosted/BPA/FeatureServer/0",
+         "/3ec80e95fa084ef9901205df0a7a74ec/rest/services/Hosted/BPA/FeatureServer/0",
          "moderate"),
     ],
 }

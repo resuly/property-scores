@@ -63,9 +63,10 @@
   },
   {
     "name": "QLD bushfire Tamborine known-positive (QFD BPA proxy)",
-    "url": "https://utility.arcgis.com/usrsvcs/servers/8ac1ba8eccee472fbd0e7a57bf3ad320/rest/services/Hosted/BPA/FeatureServer/0/query?geometry=153.20378,-27.97564&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&returnCountOnly=true&f=json",
+    "url": "https://utility.arcgis.com/usrsvcs/servers/3ec80e95fa084ef9901205df0a7a74ec/rest/services/Hosted/BPA/FeatureServer/0/query?geometry=153.20378,-27.97564&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&returnCountOnly=true&f=json",
     "assert": "count>0",
-    "active": true
+    "active": true,
+    "note": "Proxy item id rotated 2026-08-21, after the old 8ac1ba8e... had been dead for a month: last PASS 2026-07-22, then 30 consecutive FAILs from 07-23 on 'Error generating token' (HTTP 200 with an error body, service root included). QFD published the replacement 3ec80e95... on 2026-08-05, two weeks AFTER the break, so the rebuild was the fix and not the cause. Verified on the new id before the swap: Tamborine count=1, Brisbane CBD count=0, class='Very High Potential Bushfire Intensity' version='July 2017'. Two traps for a future resolver: both items are still publicly listed AND share the title 'Bushfire Prone Area (BPA) Dynamic Limited', so it must probe for liveness rather than match on name or pick the newest; and this canary sat red for 30 days unnoticed because the sentinel only alerts on NEW failures, so it pinged once on 07-23 and then went quiet."
   },
   {
     "name": "WA contamination Bellevue known-positive (DWER register)",

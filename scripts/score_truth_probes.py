@@ -48,16 +48,30 @@ DOMAIN_ENDPOINT = {
 SLEEP_S = float(os.environ.get("TRUTH_PROBE_SLEEP", "2.5"))
 
 
-def _get(url: str, timeout: int = 120, headers: dict | None = None) -> dict | None:
-    try:
-        h = {"User-Agent": "truth-probe"}
-        if headers:
-            h.update(headers)
-        req = urllib.request.Request(url, headers=h)
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.load(r)
-    except Exception:
-        return None
+def _get(url: str, timeout: int = 120, headers: dict | None = None,
+         attempts: int = 2, retry_wait: float = 5.0) -> dict | None:
+    """One retry before calling an endpoint unreachable.
+
+    A single timeout is not evidence of a dead endpoint and it costs a false
+    "new failure", which is the one thing this sentinel alerts on. Measured
+    2026-08-21: "endpoint unreachable" has fired on 11 separate days since
+    2026-06-13. The anchor behind it that morning (bushfire
+    -37.7416,145.2269) and the two Brisbane flood points that hit it the day
+    before all answered in under 0.2s when re-probed by hand the same day. A
+    genuinely dead endpoint fails both attempts and still reports.
+    """
+    h = {"User-Agent": "truth-probe"}
+    if headers:
+        h.update(headers)
+    for attempt in range(1, attempts + 1):
+        try:
+            req = urllib.request.Request(url, headers=h)
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.load(r)
+        except Exception:
+            if attempt < attempts:
+                time.sleep(retry_wait)
+    return None
 
 
 def _flatten(d: dict) -> dict:

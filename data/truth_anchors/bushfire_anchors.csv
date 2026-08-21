@@ -22,3 +22,4 @@ lat,lng,expected,why
 -33.8860,151.2110,not_bpl_control,"Surry Hills NSW inner city: BPL=None (verified), fuel 0.307, score 76 Low"
 -33.7510,150.6940,not_bpl_control,"Penrith CBD NSW: BPL=None (verified), fuel 0.112, score 89 Very Low"
 -37.8001,144.9674,vic_urban_control,"Carlton VIC: no BMO (verified), fuel 0.132, slope 1.0 (VIC contours work), score 88 Very Low"
+-27.97564,153.20378,official_bushfire_prone,"Tamborine Mtn QLD known-positive. Both existing QLD rows evaluate MANUAL, so before this row nothing automated asserted QLD bushfire at all while BUSHFIRE_TRUST[qld]=full would let a vanished duckdb layer return a confident 'outside'. Verified 2026-08-21 against the QFD BPA proxy (count=1, class 'Very High Potential Bushfire Intensity') and production (in_zone, score 15, overlay_basis=local_library)"

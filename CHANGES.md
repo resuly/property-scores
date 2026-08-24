@@ -1,6 +1,47 @@
 # 本对话改动说明
 
-## 2026-08-18 noise 预计算格的版本串收编所有会改数值的 env
+## 2026-08-25 API 服务进程管理从 uvicorn multiprocess 换成 gunicorn+UvicornWorker
+
+### 问题（生产实证，2026-08-25 调研闭环）
+
+uvicorn 0.30+ 的 multiprocess supervisor 每 0.5s 对 worker 做 pipe ping，
+`timeout_worker_healthcheck` 默认 5s 收不到 pong 就对 worker `process.kill()`
+（SIGKILL）。生产上从 8-19 起 worker 每 ~7.4h 被静默击杀一次（journal 只有
+"Child process died"，无 traceback、无 core、无内核记录），三次死亡前 90 秒
+journal 全是 noise 密集请求。机制：noise 冷请求单次 ~7.6s 重计算 + cgroup 骑上
+memory.high(3200M) 后分配路径被内核 direct-reclaim 限速（拿着 GIL 卡顿），
+pong 线程被饿死超过 5s。被杀瞬间在手的请求直接断连，重启后首个 noise 请求
+又要 7.6s 冷加载，正好都落在请求高峰。另一半问题是 worker RSS 无限增长
+（实测 +130MB/天，uvicorn 无回收机制），是 cgroup 爬上 memory.high 的根因。
+
+### 改法
+
+- `gunicorn_conf.py`（新增）：2 workers、`uvicorn_worker.UvicornWorker`、
+  `max_requests 500 + jitter(0..100)`（gunicorn jitter 只加不减，实际
+  500-600 请求即约 16.7-20h graceful 回收一次，两 worker 相位错开）、
+  `accesslog "-"`（gunicorn 默认丢弃请求行，而 journal 请求行正是本次
+  破案的证据链）、`timeout 60`（超时 arbiter 报 `WORKER TIMEOUT` + SIGABRT，
+  有定性与 pid，但 worker 信号被重置为 SIG_DFL，不产生 Python traceback；
+  要现场可后续加 post_worker_init + faulthandler，已入队）、不 preload
+  （rf.pkl 是懒加载，preload 共享不到）。参数依据全部写在该文件注释里。
+- `pyproject.toml`：`[api]` extra 加 `gunicorn>=23`、`uvicorn-worker>=0.2`。
+  实测组合：本地 gunicorn 26.2.0 + uvicorn-worker 0.4.0 + uvicorn 0.45.0；
+  生产机隔离端口 uvicorn 0.47.0（回收行为在两个版本上都验证过）。
+- 更简单的替代方案存在且被权衡过：uvicorn 0.45+ 自带
+  `--timeout-worker-healthcheck`（一个 flag 消灭 5s 误杀）+ systemd
+  `RuntimeMaxSec` 低峰整体重启管内存。gunicorn 方案的真实增量是：回收无
+  listen 空窗（worker 逐个换）、僵死有 `WORKER TIMEOUT` 定性日志、避免
+  整体 restart 后两个 worker 同时 7.6s 冷载。按此取舍选了 gunicorn。
+
+### 部署影响（部署前必读）
+
+- 生产 unit `ExecStart` 需改为
+  `/var/www/property-scores/.venv/bin/gunicorn property_scores.api.main:app -c /var/www/property-scores/gunicorn_conf.py`（conf 用绝对路径，不依赖 WorkingDirectory）
+  （unit 不入库；改前备份已存在 `~/property-scores.service.bak-20260825`）。
+- 服务器 venv 需 `pip install gunicorn uvicorn-worker`。
+- 输出数值零变化：不动模型、不动 env、不动版本串，restart 后 model_stamp 只随
+  code hash 变（本改动不改 python 评分代码，code hash 不变）。
+- 回滚：unit 恢复备份 + restart 即回到 uvicorn。
 
 ### 规则（新增，写在 score.py 的 NOISE_MODEL_VERSION 上方）
 

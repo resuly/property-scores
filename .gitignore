@@ -26,3 +26,4 @@ venv/
 
 .DS_Store
 node_modules/
+data/contam_cache/

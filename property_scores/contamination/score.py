@@ -209,6 +209,7 @@ def _vic_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict] |
                 "lng": round(flng, 6),
                 "lat": round(flat, 6),
                 "source": "VIC EPA PSR",
+                "geom": "point",
             })
         return sorted(results, key=lambda x: x["distance_m"])
     except (requests.RequestException, ValueError, KeyError):
@@ -260,6 +261,7 @@ def _nsw_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict] |
                 "lng": round(flng, 6),
                 "lat": round(flat, 6),
                 "source": "NSW EPA CLR",
+                "geom": "point",
             })
         return sorted(results, key=lambda x: x["distance_m"])
     except (requests.RequestException, ValueError, KeyError):
@@ -329,11 +331,13 @@ def _wa_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict] | 
                     flng, flat_ = lng, lat
                 else:
                     dist, flng, flat_ = _nearest_polygon_boundary(lat, lng, rings)
+                geom = "polygon"
             elif flng is not None and flat_ is not None:
                 flng, flat_ = float(flng), float(flat_)
                 if not math.isfinite(flng) or not math.isfinite(flat_):
                     return None
                 dist = _distance_m(lat, lng, flat_, flng)
+                geom = "point"
             else:
                 return None
             name = (a.get("sitename") or a.get("site_name")
@@ -346,6 +350,7 @@ def _wa_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict] | 
                 "lat": round(float(flat_), 6) if flat_ is not None else None,
                 "report_url": a.get("report_url"),
                 "source": "WA DWER",
+                "geom": geom,
             })
         return sorted(results, key=lambda x: x["distance_m"])
     except (requests.RequestException, ValueError, KeyError):
@@ -436,73 +441,123 @@ def _industrial_proximity(lat: float, lng: float) -> dict:
 # Scoring
 # ---------------------------------------------------------------------------
 
-_REMEDIATED_HINTS = ("remediated", "no longer", "removed from register", "former")
+# "former" was removed from these hints on 2026-08-27: VIC PSR writes issues
+# like "Former petroleum storage site. Requires assessment and/or clean up",
+# where "former" describes the historical land use while the notice is ACTIVE.
+# Treating it as remediated sent an active clean-up site to a "Clean" band
+# (review finding, hit on live VIC data).
+_REMEDIATED_HINTS = ("remediated", "no longer", "removed from register")
+# Explicit active-notice wording beats any remediated hint.
+_ACTIVE_OVERRIDES = ("requires assessment", "requires clean", "requires remediation",
+                     "clean up notice", "cleanup notice")
+
+
+def _entry_is_active(st: dict) -> bool:
+    """One definition for both the score and the on_site block: the two used
+    to carry private copies, which is how a classification fix would have
+    landed in one and not the other."""
+    issue = str(st.get("issue", "")).lower()
+    if any(k in issue for k in _ACTIVE_OVERRIDES):
+        return True
+    return not any(h in issue for h in _REMEDIATED_HINTS)
+
+
+def _entry_is_on_site(st: dict) -> bool:
+    """Polygon geometries carry a TRUE boundary distance, so anything not
+    inside (dist > 0) is a different parcel however close the fence is; only
+    point geometries need the jitter radius. A 40m neighbouring polygon must
+    never be reported as "this address is on the register" (review finding)."""
+    if st.get("geom") == "polygon":
+        return st["distance_m"] <= 0
+    return st["distance_m"] <= _ON_SITE_M
+
+
+# A register geometry within this distance is treated as evidence about the
+# site itself rather than its neighbourhood: it absorbs geocode jitter and
+# point-for-parcel registrations. Beyond it, a register entry describes a
+# DIFFERENT site, and contamination does not walk across a boundary on its
+# own — it stays with the land it was made on unless groundwater carries it
+# (2026-08-26, Hesperia development-manager review: "most contam is related
+# to past uses on the site. And unless it's in groundwater, it doesn't
+# migrate"). We hold no groundwater-plume data, so the disclaimer owns that
+# gap; nearby entries are kept as screening context only.
+_ON_SITE_M = 75
 
 
 def _epa_to_score(sites: list[dict]) -> int:
     """Convert EPA sites to a score component.
 
+    On-site evidence dominates; proximity is context. The pre-2026-08-26
+    version scored pure distance decay (10/25/45/65 out to 1 km), which
+    rated a clean lot at 10 because its neighbour 80 m away is on the
+    register — the exact failure a developer reviewer called out.
+
     Severity-aware: a site whose classification says it has been REMEDIATED
     must not score like an active "remediation required" one (Killara was
     rated 30 off a remediated servo 301m away, same mechanism as genuinely
-    active Botany, 2026-06-11 audit). Remediated-only neighbourhoods are
-    capped at moderate concern.
+    active Botany, 2026-06-11 audit).
     """
     if not sites:
         return 95
 
-    def _active(st):
-        issue = str(st.get("issue", "")).lower()
-        return not any(h in issue for h in _REMEDIATED_HINTS)
+    on_site = [st for st in sites if _entry_is_on_site(st)]
+    if any(_entry_is_active(st) for st in on_site):
+        # The address itself carries an active register entry.
+        return 10
+    if on_site:
+        # The address itself was on the register and is recorded remediated:
+        # a real history, materially different from an active notice.
+        return 55
 
-    active_sites = [st for st in sites if _active(st)]
+    active_sites = [st for st in sites if _entry_is_active(st)]
     if not active_sites:
         # only remediated/historical records nearby
         nearest_r = sites[0]["distance_m"]
-        return 70 if nearest_r < 250 else 85
+        return 85 if nearest_r < 250 else 90
 
-    sites = active_sites
-    nearest = sites[0]["distance_m"]
-    count = len(sites)
-
-    if nearest < 100:
-        return 10
-    if nearest < 250:
-        return 25
-    if nearest < 500 and count > 2:
-        return 30
-    if nearest < 500:
-        return 45
-    if nearest < 1000 and count > 3:
-        return 50
-    if nearest < 1000:
-        return 65
-    if nearest < 2000:
-        return 80
-
-    return 90
+    # Nearby active entries. The two geometries mean different things:
+    # a polygon distance is a TRUE gap to another parcel's boundary, so it is
+    # neighbourhood context; a point 75-250m out may still be the register
+    # pin of THIS parcel (large industrial lots pin far from any given query
+    # point), so points inside 250m stay a caution band, not "Low Risk"
+    # (review finding: the pre-fix 60 under-warned exactly the big-lot case).
+    score = 95
+    for st in active_sites:
+        d = st["distance_m"]
+        if st.get("geom") == "polygon":
+            band = 70 if d < 250 else (80 if d < 1000 else 85)
+        else:
+            band = 45 if d < 250 else (75 if d < 1000 else 85)
+        score = min(score, band)
+    return score
 
 
 def _industrial_to_score(ind: dict) -> int:
-    """Convert industrial proximity to a score component."""
+    """Convert industrial proximity to a score component.
+
+    Same on-site-first logic as the register component: a fuel station or
+    factory operating AT the address is a land-use signal about this site;
+    the same business three blocks over is somebody else's site. Density
+    still moves the score a little — an address inside a working industrial
+    precinct is more likely to have carried such uses itself — but it can
+    no longer drag a lot to 30-45 on neighbours alone.
+    """
     count = ind["count_500m"]
     nearest = ind["nearest_m"]
 
     if count == 0:
         return 95
 
-    if nearest is not None and nearest < 100 and count > 3:
-        return 30
-    if nearest is not None and nearest < 100:
-        return 45
-    if count > 5:
+    if nearest is not None and nearest <= _ON_SITE_M:
+        # An industrial generator on the address itself (current use).
         return 40
-    if count > 3:
-        return 55
-    if count > 1:
+    if count > 5:
+        # Dense working precinct around the address.
         return 70
+    if count > 1:
+        return 80
 
-    return 80
+    return 85
 
 
 # ---------------------------------------------------------------------------
@@ -551,6 +606,139 @@ def _contamination_label(score: int | None, epa_status: str, ind_failed: bool) -
     if epa_status == "not_integrated":
         return LABEL_REGISTER_NOT_CHECKED
     return label
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-27 signals: historical land use / landfills / groundwater zones
+# (ICP-driven: "most contam is related to past uses on the site"). Sources
+# package is imported lazily inside each builder: sources._common reuses this
+# module's helpers, so a module-level import here would be circular.
+# Each builder returns {"status": ok|error|not_integrated, "score", entries};
+# status "error" must degrade the label exactly like an EPA outage, or a
+# failed history check turns into a "Very Clean" lie (same class of bug as
+# Keele St, 2026-06-11).
+# ---------------------------------------------------------------------------
+
+# Historical directory geocoding wobbles more than modern registers; tighter
+# than this misses the shopfront itself, looser starts scoring the neighbours
+# (the exact failure the on-site rework removed).
+_SANDS_ONSITE_M = 30
+# Density gate, measured 2026-08-27: Melbourne CBD has 1,684 deduped rows and
+# 15 tier-A trades within 20m because directory geocoding clusters whole block
+# faces onto near-identical points; Malvern (residential) has 26 rows at the
+# same radius. Radius alone cannot say "this parcel" in a dense precinct, so
+# above this row count the tier-A hit becomes evidence-only until parcel
+# matching (cadastre) provides real attribution. Malvern 30m=36 in, Footscray
+# 30m=55 in, CBD 30m=1,685 out.
+_SANDS_DENSE_ROWS = 120
+
+
+def _historical_use_signal(lat: float, lng: float, state: str | None) -> dict:
+    """Sands directory trades at this address, whitelist-classified.
+
+    Tier A (service station / dry cleaner / tannery ...) scores as a SIGNAL
+    band, never the register band: a directory listing says what operated
+    here, not that contamination was found (official disclaimer wording).
+    Tier B is evidence-only.
+    """
+    if state != "VIC":
+        return {"status": "not_integrated", "score": None, "entries": [],
+                "dense_precinct": False, "unattributed_a": False}
+    from property_scores.contamination.sources import vic_wfs
+    from property_scores.contamination.sources.sands_whitelist import classify
+    rows = vic_wfs.sands_near(lat, lng, radius_m=_SANDS_ONSITE_M)
+    if rows is None:
+        return {"status": "error", "score": None, "entries": [],
+                "dense_precinct": False, "unattributed_a": False}
+    entries = []
+    a_hits = 0
+    for row in rows:
+        hit = classify(row.get("business_type"))
+        if hit is None:
+            continue
+        tier, activity = hit
+        years = row.get("directories") or []
+        entries.append({
+            "business_type": row.get("business_type"),
+            "activity_class": activity,
+            "tier": tier,
+            "first_year": years[0] if years else None,
+            "last_year": years[-1] if years else None,
+            "distance_m": row.get("distance_m"),
+        })
+        if tier == "A":
+            a_hits += 1
+    dense = len(rows) > _SANDS_DENSE_ROWS
+    if dense:
+        # A whole block face geocoded onto this point: proximity no longer
+        # implies identity, so no score until parcel matching lands.
+        score = None
+    else:
+        score = 45 if a_hits >= 2 else (50 if a_hits == 1 else None)
+    # A tier-A trade metres away that we CANNOT attribute must not coexist
+    # with a reassuring label ("Very Clean next to an unattributed service
+    # station", review P1-3): the caller blocks reassuring labels on this.
+    return {"status": "ok", "score": score,
+            "dense_precinct": dense,
+            "unattributed_a": dense and a_hits > 0,
+            "entries": entries[:10]}
+
+
+def _landfill_signal(lat: float, lng: float, state: str | None) -> dict:
+    """Legacy and operating landfills. Landfills are the exception to the
+    stays-with-the-site rule: gas and leachate do move, so nearby carries a
+    real (bounded) component rather than evidence-only."""
+    from property_scores.contamination.sources import ga_waste, vic_wfs
+    entries = []
+    failed = False
+    if state == "VIC":
+        vlr = vic_wfs.landfills_near(lat, lng, radius_m=1000)
+        if vlr is None:
+            failed = True
+        else:
+            entries += [{**r, "source": "VIC VLR"} for r in vlr]
+    ga = ga_waste.landfills_near(lat, lng, radius_m=1000)
+    if ga is None:
+        failed = True
+    else:
+        entries += [{**r, "source": "GA WMF"} for r in ga]
+    if failed and not entries:
+        return {"status": "error", "score": None, "entries": []}
+    entries.sort(key=lambda e: e.get("distance_m") or 0)
+    score = None
+    if entries:
+        nearest = entries[0].get("distance_m") or 0
+        if nearest <= _ON_SITE_M:
+            score = 45
+        elif nearest < 250:
+            score = 70
+        else:
+            score = 85
+    return {"status": "partial" if failed else "ok",
+            "score": score, "entries": entries[:10]}
+
+
+def _groundwater_signal(lat: float, lng: float, state: str | None) -> dict:
+    """Official groundwater restricted/prohibition zones (VIC GQRUZ, SA GPA):
+    the regulator's own statement that groundwater HERE carries historical
+    industrial contamination. Inside a zone is the one case where the
+    "doesn't migrate" discount must give ground."""
+    if state == "VIC":
+        from property_scores.contamination.sources import vic_wfs
+        zones = vic_wfs.gqruz_near(lat, lng, radius_m=500)
+        source = "VIC EPA GQRUZ"
+    elif state == "SA":
+        from property_scores.contamination.sources import sa_gpa
+        zones = sa_gpa.areas_near(lat, lng, radius_m=500)
+        source = "SA EPA GPA"
+    else:
+        return {"status": "not_integrated", "score": None, "entries": []}
+    if zones is None:
+        return {"status": "error", "score": None, "entries": []}
+    inside = [z for z in zones if z.get("inside")]
+    score = 55 if inside else None
+    entries = [{**z, "source": source} for z in zones]
+    return {"status": "ok", "score": score, "entries": entries[:5]}
 
 
 # ---------------------------------------------------------------------------
@@ -609,9 +797,12 @@ def contamination_score(lat: float, lng: float) -> dict:
             return _wa_epa_sites(lat, lng)
         return []
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    with ThreadPoolExecutor(max_workers=5) as pool:
         f_epa = pool.submit(_fetch_epa)
         f_ind = pool.submit(_industrial_proximity, lat, lng)
+        f_hist = pool.submit(_historical_use_signal, lat, lng, state)
+        f_lf = pool.submit(_landfill_signal, lat, lng, state)
+        f_gw = pool.submit(_groundwater_signal, lat, lng, state)
 
     epa_sites = f_epa.result()
     # None = the register query FAILED; [] = queried fine, nothing nearby.
@@ -636,24 +827,76 @@ def contamination_score(lat: float, lng: float) -> dict:
     ind_failed = industrial.get("industrial_status") == "error"
     ind_score = None if ind_failed else _industrial_to_score(industrial)
 
+    historical = f_hist.result()
+    landfill = f_lf.result()
+    groundwater = f_gw.result()
+    # A failed OR partial history/landfill/groundwater check is a partial
+    # check, same as an EPA outage: the score may stand but a reassuring
+    # label may not, and the result must not be cached (review P0-1: VIC
+    # legacy landfills live in VLR alone, so VLR-down + GA-ok = "partial"
+    # WAS producing a cached Very Clean, the Keele St failure shape again).
+    aux_failed = any(sig["status"] in ("error", "partial")
+                     for sig in (historical, landfill, groundwater))
+    # Dense-precinct tier-A evidence that cannot be attributed to this parcel
+    # blocks reassuring labels too, but is cacheable (it is stable data, not
+    # an outage).
+    unattributed = bool(historical.get("unattributed_a"))
+
     # --- Combine ---
-    components = [s for s in (epa_score, ind_score) if s is not None]
+    components = [s for s in (epa_score, ind_score, historical["score"],
+                              landfill["score"], groundwater["score"])
+                  if s is not None]
     score = max(0, min(100, min(components))) if components else None
 
     epa_status = ("error" if epa_failed
                   else "ok" if state in ("VIC", "NSW", "WA")
                   else "not_integrated")
-    label = _contamination_label(score, epa_status=epa_status, ind_failed=ind_failed)
+    label = _contamination_label(score, epa_status=epa_status,
+                                 ind_failed=ind_failed or aux_failed
+                                 or unattributed)
+
+    # On-site summary, so consumers can show "this address" separately from
+    # "the neighbourhood" instead of implying a nearby entry is site risk.
+    epa_on_site = [s for s in epa_sites if _entry_is_on_site(s)]
+    ind_nearest = industrial.get("nearest_m")
+    lf_entries = landfill.get("entries") or []
+    on_site = {
+        "epa_active": any(_entry_is_active(s) for s in epa_on_site),
+        "epa_remediated": bool(epa_on_site) and not any(_entry_is_active(s) for s in epa_on_site),
+        "industrial": (not ind_failed and ind_nearest is not None
+                       and ind_nearest <= _ON_SITE_M),
+        # 2026-08-27 signals (review P1-5: a 45 driven by a 7m Sands hit must
+        # not render as "nothing at this address"):
+        # attributed tier-A directory trade at this address
+        "historical_use": historical.get("score") is not None,
+        "landfill": bool(lf_entries) and (
+            (lf_entries[0].get("distance_m") or 10**9) <= _ON_SITE_M),
+        # inside an official restricted-groundwater zone
+        "groundwater": any(z.get("inside") for z in (groundwater.get("entries") or [])),
+        "radius_m": _ON_SITE_M,
+    }
 
     result: dict = {
         "score": score,
         "label": label,
-        "disclaimer": "Estimate based on EPA registers and POI proximity. Not a substitute for site contamination assessment.",
+        "disclaimer": ("Score reflects register entries and industrial land "
+                       "use at the address itself; nearby entries are shown "
+                       "as context only, since contamination stays with the "
+                       "site that produced it unless groundwater carries it. "
+                       "No groundwater-plume data is included. Most "
+                       "contamination stems from past on-site uses that no "
+                       "register captures, so a clean screen is not a clean "
+                       "site. Not a substitute for site contamination "
+                       "assessment."),
         "state": state,
+        "on_site": on_site,
         "epa_sites_count": len(epa_sites),
         "epa_sites": epa_sites[:10],
         "epa_sites_returned": min(len(epa_sites), 10),
         "industrial": industrial,
+        "historical_use": historical,
+        "landfill": landfill,
+        "groundwater": groundwater,
     }
     result["epa_status"] = epa_status
     result["industrial_status"] = industrial.get("industrial_status", "ok")
@@ -679,9 +922,13 @@ def contamination_score(lat: float, lng: float) -> dict:
     # A degraded result must not be pinned for an hour. `not epa_failed` has
     # been here since the 2026-06-11 dropped-connection fix; `not ind_failed`
     # is the new half, because before it an Overture outage cached a 95
-    # "Very Clean" for every later caller on the same grid cell. A
-    # not_integrated state is a stable fact, not an outage, so it still caches.
-    if not epa_failed and not ind_failed:
+    # "Very Clean" for every later caller on the same grid cell.
+    # `not aux_failed` (2026-08-27 review P1-2) extends the same rule to the
+    # historical/landfill/groundwater signals: their outage pinned an
+    # OPTIMISTIC score (a down groundwater check simply never contributed its
+    # 55). A not_integrated state, and unattributed dense-precinct evidence,
+    # are stable facts, not outages, so they still cache.
+    if not epa_failed and not ind_failed and not aux_failed:
         _contam_cache[key] = (result, _time.time())
         if len(_contam_cache) > _CONTAM_CACHE_MAX:
             _contam_cache.popitem(last=False)

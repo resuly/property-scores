@@ -13,6 +13,20 @@ import requests
 from property_scores.contamination import score as cs
 
 
+_NEUTRAL_SIGNAL = {"status": "not_integrated", "score": None, "entries": []}
+
+
+@pytest.fixture(autouse=True)
+def _neutral_new_signals(monkeypatch):
+    """Keep the 2026-08-27 signals (historical use / landfill / groundwater)
+    out of legacy tests: they hit live endpoints and would make every
+    contamination_score() call network-dependent. Signal-specific behaviour
+    is tested with its own stubs in tests/test_contam_signals.py."""
+    for name in ("_historical_use_signal", "_landfill_signal",
+                 "_groundwater_signal"):
+        monkeypatch.setattr(cs, name, lambda *a, **k: dict(_NEUTRAL_SIGNAL))
+
+
 class _Resp:
     def __init__(self, ok, payload=None):
         self.ok = ok
@@ -510,3 +524,118 @@ def test_probe_still_evaluates_real_scores():
     assert probes.evaluate("score<=40", {"score": 10})[0] == "PASS"
     assert probes.evaluate("score<=40", {"score": 95})[0] == "FAIL"
     assert probes.evaluate("score>=80", {"score": 95})[0] == "PASS"
+
+
+# ---------------------------------------------------------------------------
+# On-site vs proximity semantics (2026-08-26 rework)
+# The pre-rework scorer was pure distance decay, so a clean lot scored 10
+# because its NEIGHBOUR 80m away is on the register. Contamination stays with
+# the land that produced it unless groundwater carries it; these tests pin
+# the on-site-first contract so a silent return to distance decay goes red.
+# ---------------------------------------------------------------------------
+
+def _site(dist, issue="clean up notice"):
+    return {"name": f"site@{dist}", "distance_m": dist, "issue": issue,
+            "lng": 144.98, "lat": -37.8}
+
+
+def test_active_on_site_register_entry_scores_10():
+    assert cs._epa_to_score([_site(30)]) == 10
+
+
+def test_remediated_on_site_entry_is_history_not_active_risk():
+    s = cs._epa_to_score([_site(30, issue="remediated")])
+    assert s == 55
+
+
+def test_active_neighbour_90m_is_context_not_site_risk():
+    # THE reviewer scenario: a register entry near a POINT geometry must not
+    # drag this lot to 10. But a point 90m out may still be THIS parcel's
+    # register pin (big industrial lots), so it stays a caution band (45),
+    # never the on-site band and never "Low Risk" reassurance.
+    s = cs._epa_to_score([_site(90)])
+    assert 30 <= s < 50
+
+
+def test_active_polygon_neighbour_is_pure_context():
+    # WA gives true boundary distances: 40m to a NEIGHBOURING polygon is a
+    # different parcel, full stop. Context band only.
+    s = cs._epa_to_score([_site(40) | {"geom": "polygon"}])
+    assert s >= 70
+
+
+def test_inside_wa_polygon_is_on_site():
+    s = cs._epa_to_score([_site(0) | {"geom": "polygon"}])
+    assert s == 10
+
+
+def test_nearby_active_entries_never_beat_on_site_floor():
+    # Any pile of nearby-only active entries stays above the on-site band.
+    s = cs._epa_to_score([_site(90), _site(150), _site(200), _site(400)])
+    assert s > 10 and s >= 40
+
+
+def test_nearby_remediated_only_is_nearly_clean():
+    assert cs._epa_to_score([_site(200, issue="remediated")]) >= 85
+
+
+def test_on_site_active_beats_surrounding_remediated():
+    s = cs._epa_to_score([_site(200, issue="remediated"), _site(40)])
+    assert s == 10
+
+
+def test_industrial_on_site_outweighs_neighbourhood():
+    on_site = cs._industrial_to_score({"count_500m": 1, "nearest_m": 30})
+    neighbours = cs._industrial_to_score({"count_500m": 6, "nearest_m": 200})
+    assert on_site < neighbours
+    assert neighbours >= 60  # a working precinct next door is not High Risk
+
+
+def test_result_carries_on_site_block(monkeypatch):
+    monkeypatch.setattr(cs, "_vic_epa_sites", lambda *a, **k: [_site(30)])
+    _patch_industrial(monkeypatch, ok=True)
+    cs._contam_cache.clear()
+    r = cs.contamination_score(*MELB)
+    assert r["on_site"]["epa_active"] is True
+    assert r["on_site"]["epa_remediated"] is False
+    assert r["on_site"]["industrial"] is False
+    assert r["score"] == 10
+
+
+def test_result_on_site_false_for_neighbour_only(monkeypatch):
+    monkeypatch.setattr(cs, "_vic_epa_sites", lambda *a, **k: [_site(90)])
+    _patch_industrial(monkeypatch, ok=True)
+    cs._contam_cache.clear()
+    r = cs.contamination_score(*MELB)
+    assert r["on_site"]["epa_active"] is False
+    assert r["score"] >= 40
+
+
+def test_former_with_active_notice_is_active():
+    # Live VIC PSR wording: "former" describes the historical land use while
+    # the notice itself is ACTIVE. Misreading it as remediated sent an active
+    # clean-up site to a Clean band (review finding, hit on real data).
+    live_issue = "Former petroleum storage site. Requires assessment and/or clean up"
+    assert cs._epa_to_score([_site(30, issue=live_issue)]) == 10
+    assert cs._epa_to_score([_site(200, issue=live_issue)]) < 50
+
+
+def test_polygon_neighbour_never_reported_as_on_site(monkeypatch):
+    # A neighbouring WA polygon 40m away must not produce
+    # on_site.epa_active/epa_remediated True for THIS address.
+    monkeypatch.setattr(cs, "_vic_epa_sites",
+                        lambda *a, **k: [_site(40) | {"geom": "polygon"}])
+    _patch_industrial(monkeypatch, ok=True)
+    cs._contam_cache.clear()
+    r = cs.contamination_score(*MELB)
+    assert r["on_site"]["epa_active"] is False
+    assert r["on_site"]["epa_remediated"] is False
+
+
+def test_disclaimer_owns_the_groundwater_gap(monkeypatch):
+    monkeypatch.setattr(cs, "_vic_epa_sites", lambda *a, **k: [])
+    _patch_industrial(monkeypatch, ok=True)
+    cs._contam_cache.clear()
+    r = cs.contamination_score(*MELB)
+    assert "groundwater" in r["disclaimer"]
+    assert "clean screen is not a clean site" in r["disclaimer"]

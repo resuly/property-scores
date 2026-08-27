@@ -18,8 +18,11 @@ import pytest
 from property_scores.contamination.sources import (
     _common,
     ga_waste,
+    nsw_groundwater,
     nsw_sites,
+    qld_ea,
     sa_gpa,
+    sa_licensed,
     vic_wfs,
 )
 
@@ -65,9 +68,66 @@ def _isolate(monkeypatch):
     monkeypatch.setattr(_common.requests, "get", _forbidden)
     nsw_sites.clear_cache()
     sa_gpa.clear_cache()
+    sa_licensed.clear_cache()
     yield
     nsw_sites.clear_cache()
     sa_gpa.clear_cache()
+    sa_licensed.clear_cache()
+
+
+def test_second_batch_adapters_are_evidence_only_and_privacy_slim(monkeypatch):
+    sa_payload = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [138.57, -34.98]},
+            "properties": {
+                "EPALICENCE": 20,
+                "ACTIVITY": "Hydrocarbon and Chemical",
+                "LICENCE_NAME": "Jane Citizen",
+                "PR_LINK": "https://example.test/20",
+            },
+        }],
+    }
+    calls = install_responses(monkeypatch, [FakeResponse(sa_payload)])
+    rows = sa_licensed.activities_near(-34.98, 138.57, 30)
+    assert rows and rows[0]["activity"] == "Hydrocarbon and Chemical"
+    assert "Citizen" not in json.dumps(rows)
+    assert calls[0]["url"] == sa_licensed.GEOJSON_URL
+
+    qld_payload = {"features": [{
+        "attributes": {
+            "permit_ref_no": "EA1",
+            "era": "ERA 57 - Regulated Waste Transport",
+            "primary_holder": "John Citizen",
+            "site": "1/RP1",
+        },
+    }]}
+    install_responses(monkeypatch, [FakeResponse(qld_payload)])
+    rows = qld_ea.activities_at(-27.5, 153.0)
+    assert rows and rows[0]["inside"] is True
+    assert "Citizen" not in json.dumps(rows)
+
+    nsw_payload = {"features": [{
+        "attributes": {
+            "EPI_NAME": "Forbes Local Environmental Plan 2013",
+            "LGA_NAME": "FORBES",
+            "LAY_CLASS": "Groundwater Vulnerable",
+            "EPI_TYPE": "LEP",
+        },
+    }]}
+    install_responses(monkeypatch, [FakeResponse(nsw_payload)])
+    rows = nsw_groundwater.vulnerability_at(-33.63, 148.32)
+    assert rows and rows[0]["inside"] is True
+    assert rows[0]["layer_class"] == "Groundwater Vulnerable"
+
+
+def test_sa_licensed_refresh_failure_does_not_serve_stale_as_ok(monkeypatch):
+    sa_licensed._cache = ([
+        {"licence_number": 20, "activity": "old", "lat": -34.9, "lng": 138.6}
+    ], 0)
+    monkeypatch.setattr(sa_licensed, "fetch_json", lambda *a, **k: None)
+    assert sa_licensed.all_activities(force_refresh=True) is None
 
 
 def install_responses(monkeypatch, responses):

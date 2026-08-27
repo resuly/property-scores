@@ -145,6 +145,28 @@ def test_historical_not_integrated_outside_vic():
     assert cs._historical_use_signal(-33.9, 151.2, "NSW")["status"] == "not_integrated"
 
 
+def test_sa_and_qld_licensed_activities_are_on_site_evidence_only(monkeypatch):
+    from property_scores.contamination.sources import qld_ea, sa_licensed
+    monkeypatch.setattr(
+        sa_licensed, "activities_near",
+        lambda *a, **k: [{"licence_number": 20, "activity": "Hydrocarbon"}],
+    )
+    sa = cs._historical_use_signal(-34.98, 138.57, "SA")
+    assert sa["status"] == "ok"
+    assert sa["score"] is None
+    assert sa["on_site"] is True
+    assert sa["entries"][0]["evidence_only"] is True
+
+    monkeypatch.setattr(
+        qld_ea, "activities_at",
+        lambda *a, **k: [{"permit_reference": "EA1", "activity": "Waste"}],
+    )
+    qld = cs._historical_use_signal(-27.5, 153.0, "QLD")
+    assert qld["status"] == "ok"
+    assert qld["score"] is None
+    assert qld["on_site"] is True
+
+
 def test_landfill_bands(monkeypatch):
     from property_scores.contamination.sources import ga_waste, vic_wfs
     monkeypatch.setattr(vic_wfs, "landfills_near", lambda *a, **k: [])
@@ -194,6 +216,41 @@ def test_groundwater_sa_route(monkeypatch):
     sig = cs._groundwater_signal(-34.98, 138.57, "SA")
     assert sig["score"] == 55
     assert sig["entries"][0]["source"] == "SA EPA GPA"
+
+
+def test_groundwater_nsw_vulnerability_is_evidence_only(monkeypatch):
+    from property_scores.contamination.sources import nsw_groundwater
+    monkeypatch.setattr(
+        nsw_groundwater, "vulnerability_at",
+        lambda *a, **k: [{
+            "inside": True,
+            "layer_class": "Groundwater Vulnerable",
+            "distance_m": 0,
+        }],
+    )
+    sig = cs._groundwater_signal(-33.63, 148.32, "NSW")
+    assert sig["status"] == "ok"
+    assert sig["score"] is None
+    assert sig["entries"][0]["inside"] is True
+    assert sig["entries"][0]["source"] \
+        == "NSW DPHI EPI Groundwater Vulnerability"
+
+
+def test_evidence_only_context_blocks_very_clean_without_inventing_score(
+        monkeypatch):
+    _stub_signals(
+        monkeypatch,
+        gw={
+            "status": "ok",
+            "score": None,
+            "entries": [{"inside": True, "layer_class": "Groundwater Vulnerable"}],
+        },
+    )
+    monkeypatch.setattr(cs, "_detect_state", lambda *a: "NSW")
+    monkeypatch.setattr(cs, "_nsw_epa_sites", lambda *a, **k: [])
+    result = cs.contamination_score(-33.63, 148.32)
+    assert result["score"] == 95
+    assert result["label"] == cs.LABEL_MAPPED_CONTEXT
 
 
 # ---- 第1轮 review 修复的锚定(P0-1/P1-2/P1-3/P1-5) ----

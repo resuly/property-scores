@@ -338,6 +338,7 @@ def test_no_reassuring_label_reachable_while_degraded():
 
 MELB = (-37.8136, 144.9631)   # VIC, register integrated
 BRIS = (-27.4698, 153.0251)   # QLD, no register integrated
+PERTH = (-31.9505, 115.8605)  # WA, DWER licence pending
 
 
 def _patch_epa(monkeypatch, mode):
@@ -445,6 +446,18 @@ def test_not_integrated_state_keeps_score_but_not_clean_label(monkeypatch):
     assert "No QLD EPA register is integrated" in r["note"]
     # a missing register is a stable fact, not an outage: still cacheable
     assert len(cs._contam_cache) == 1
+
+
+def test_wa_register_is_not_queried_before_dwer_permission(monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("DWER-059 must remain disabled pending permission")
+
+    monkeypatch.setattr(cs, "_wa_epa_sites", forbidden)
+    _patch_industrial(monkeypatch, ok=True)
+    result = cs.contamination_score(*PERTH)
+    assert result["state"] == "WA"
+    assert result["epa_status"] == "not_integrated"
+    assert result["label"] == cs.LABEL_REGISTER_NOT_CHECKED
 
 
 def test_industrial_outage_note_names_the_source(monkeypatch):

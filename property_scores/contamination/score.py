@@ -571,6 +571,7 @@ _REASSURING_LABELS = {"Very Clean", "Clean"}
 LABEL_CHECK_UNAVAILABLE = "Check Unavailable"
 LABEL_INCOMPLETE = "Incomplete Check"
 LABEL_REGISTER_NOT_CHECKED = "No Mapped Red Flag (Register Not Checked)"
+LABEL_MAPPED_CONTEXT = "Mapped Context - Review"
 
 
 def _score_band_label(score: int) -> str:
@@ -587,7 +588,8 @@ def _score_band_label(score: int) -> str:
     return "Very High Risk"
 
 
-def _contamination_label(score: int | None, epa_status: str, ind_failed: bool) -> str:
+def _contamination_label(score: int | None, epa_status: str, ind_failed: bool,
+                         context_flagged: bool = False) -> str:
     """Pick the public label, refusing to sound reassuring off a partial check.
 
     A score computed while a core signal was down (or while the state has no
@@ -605,6 +607,8 @@ def _contamination_label(score: int | None, epa_status: str, ind_failed: bool) -
         return LABEL_INCOMPLETE
     if epa_status == "not_integrated":
         return LABEL_REGISTER_NOT_CHECKED
+    if context_flagged:
+        return LABEL_MAPPED_CONTEXT
     return label
 
 
@@ -670,9 +674,37 @@ def _historical_use_signal(lat: float, lng: float, state: str | None) -> dict:
     here, not that contamination was found (official disclaimer wording).
     Tier B is evidence-only.
     """
+    if state in ("SA", "QLD"):
+        from property_scores.contamination.sources import _common
+        try:
+            with _common.budget(_SIGNAL_BUDGET_S):
+                if state == "SA":
+                    from property_scores.contamination.sources import sa_licensed
+                    rows = sa_licensed.activities_near(
+                        lat, lng, radius_m=_SANDS_ONSITE_M)
+                    source = "SA EPA Licensed Activities"
+                else:
+                    from property_scores.contamination.sources import qld_ea
+                    rows = qld_ea.activities_at(lat, lng)
+                    source = "QLD Environmental Authority"
+        except _common.BudgetExceeded:
+            rows = None
+        if rows is None:
+            return {"status": "error", "score": None, "entries": [],
+                    "dense_precinct": False, "unattributed_a": False,
+                    "on_site": False}
+        # Evidence-only until each jurisdiction's activity vocabulary has its
+        # own reviewed contamination mapping. A licence proves an activity was
+        # approved here; it does not prove contamination or a severity band.
+        entries = [{**row, "source": source, "evidence_only": True}
+                   for row in rows]
+        return {"status": "ok", "score": None, "entries": entries[:10],
+                "dense_precinct": False, "unattributed_a": False,
+                "on_site": bool(entries)}
     if state != "VIC":
         return {"status": "not_integrated", "score": None, "entries": [],
-                "dense_precinct": False, "unattributed_a": False}
+                "dense_precinct": False, "unattributed_a": False,
+                "on_site": False}
     from property_scores.contamination.sources import _common, vic_wfs
     from property_scores.contamination.sources.sands_whitelist import classify
     try:
@@ -682,7 +714,8 @@ def _historical_use_signal(lat: float, lng: float, state: str | None) -> dict:
         rows = None  # out of time == not read (see _SIGNAL_BUDGET_S)
     if rows is None:
         return {"status": "error", "score": None, "entries": [],
-                "dense_precinct": False, "unattributed_a": False}
+                "dense_precinct": False, "unattributed_a": False,
+                "on_site": False}
     entries = []
     a_hits = 0
     for row in rows:
@@ -714,6 +747,7 @@ def _historical_use_signal(lat: float, lng: float, state: str | None) -> dict:
     return {"status": "ok", "score": score,
             "dense_precinct": dense,
             "unattributed_a": dense and a_hits > 0,
+            "on_site": score is not None,
             "entries": entries[:10]}
 
 
@@ -761,7 +795,7 @@ def _landfill_signal(lat: float, lng: float, state: str | None) -> dict:
 
 
 def _groundwater_signal(lat: float, lng: float, state: str | None) -> dict:
-    """Official groundwater restricted/prohibition zones (VIC GQRUZ, SA GPA):
+    """Official groundwater context (VIC GQRUZ, SA GPA, NSW vulnerability):
     the regulator's own statement that groundwater HERE carries historical
     industrial contamination. Inside a zone is the one case where the
     "doesn't migrate" discount must give ground."""
@@ -772,18 +806,27 @@ def _groundwater_signal(lat: float, lng: float, state: str | None) -> dict:
     elif state == "SA":
         from property_scores.contamination.sources import sa_gpa
         source = "SA EPA GPA"
+    elif state == "NSW":
+        from property_scores.contamination.sources import nsw_groundwater
+        source = "NSW DPHI EPI Groundwater Vulnerability"
     else:
         return {"status": "not_integrated", "score": None, "entries": []}
     try:
         with _common.budget(_SIGNAL_BUDGET_S):
-            zones = (vic_wfs.gqruz_near(lat, lng, radius_m=500) if state == "VIC"
-                     else sa_gpa.areas_near(lat, lng, radius_m=500))
+            if state == "VIC":
+                zones = vic_wfs.gqruz_near(lat, lng, radius_m=500)
+            elif state == "SA":
+                zones = sa_gpa.areas_near(lat, lng, radius_m=500)
+            else:
+                zones = nsw_groundwater.vulnerability_at(lat, lng)
     except _common.BudgetExceeded:
         zones = None  # out of time == not read (see _SIGNAL_BUDGET_S)
     if zones is None:
         return {"status": "error", "score": None, "entries": []}
     inside = [z for z in zones if z.get("inside")]
-    score = 55 if inside else None
+    # Only statutory restriction/prohibition zones carry a score. NSW is a
+    # planning sensitivity overlay and remains evidence-only.
+    score = 55 if inside and state in ("VIC", "SA") else None
     entries = [{**z, "source": source} for z in zones]
     return {"status": "ok", "score": score, "entries": entries[:5]}
 
@@ -840,8 +883,10 @@ def contamination_score(lat: float, lng: float) -> dict:
             return _vic_epa_sites(lat, lng)
         elif state == "NSW":
             return _nsw_epa_sites(lat, lng)
-        elif state == "WA":
-            return _wa_epa_sites(lat, lng)
+        # WA DWER-059 is technically queryable, but its Custom Active
+        # Acceptance licence requires written permission for external derived
+        # products. Keep the adapter tested below, but do not call it from the
+        # public score until DWER grants that permission.
         return []
 
     with ThreadPoolExecutor(max_workers=5) as pool:
@@ -867,7 +912,7 @@ def contamination_score(lat: float, lng: float) -> dict:
             epa_failed = True
             epa_sites = []
     epa_score = (_epa_to_score(epa_sites)
-                 if not epa_failed and (epa_sites or state in ("VIC", "NSW", "WA"))
+                 if not epa_failed and (epa_sites or state in ("VIC", "NSW"))
                  else None)
 
     industrial = f_ind.result()
@@ -896,11 +941,18 @@ def contamination_score(lat: float, lng: float) -> dict:
     score = max(0, min(100, min(components))) if components else None
 
     epa_status = ("error" if epa_failed
-                  else "ok" if state in ("VIC", "NSW", "WA")
+                  else "ok" if state in ("VIC", "NSW")
                   else "not_integrated")
-    label = _contamination_label(score, epa_status=epa_status,
-                                 ind_failed=ind_failed or aux_failed
-                                 or unattributed)
+    context_flagged = bool(
+        historical.get("entries")
+        or (state == "NSW" and groundwater.get("entries"))
+    )
+    label = _contamination_label(
+        score,
+        epa_status=epa_status,
+        ind_failed=ind_failed or aux_failed or unattributed,
+        context_flagged=context_flagged,
+    )
 
     # On-site summary, so consumers can show "this address" separately from
     # "the neighbourhood" instead of implying a nearby entry is site risk.
@@ -915,7 +967,8 @@ def contamination_score(lat: float, lng: float) -> dict:
         # 2026-08-27 signals (review P1-5: a 45 driven by a 7m Sands hit must
         # not render as "nothing at this address"):
         # attributed tier-A directory trade at this address
-        "historical_use": historical.get("score") is not None,
+        "historical_use": historical.get(
+            "on_site", historical.get("score") is not None),
         "landfill": bool(lf_entries) and (
             (lf_entries[0].get("distance_m") or 10**9) <= _ON_SITE_M),
         # inside an official restricted-groundwater zone

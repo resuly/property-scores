@@ -24,9 +24,15 @@ being confirmed for paid API redistribution.
 
 from property_scores.contamination.sources import (  # noqa: F401
     ga_waste,
+    nsw_groundwater,
     nsw_sites,
+    qld_ea,
     sa_gpa,
+    sa_licensed,
     vic_wfs,
 )
 
-__all__ = ["nsw_sites", "vic_wfs", "sa_gpa", "ga_waste"]
+__all__ = [
+    "nsw_sites", "nsw_groundwater", "vic_wfs", "sa_gpa", "sa_licensed",
+    "qld_ea", "ga_waste",
+]

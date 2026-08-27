@@ -14,7 +14,8 @@ import json
 import logging
 import math
 import os
-from threading import Lock
+import time
+from threading import Event, Lock, Thread, Timer
 
 logger = logging.getLogger(__name__)
 
@@ -24,27 +25,89 @@ _TARGET_SNAP_M = 25.0
 _conn = None
 _conn_ino: int | None = None
 _query_lock = Lock()
+_refresh_lock = Lock()
+_refreshing_ino: int | None = None
+
+
+def _open_base():
+    stat = os.stat(PARCELS_DB)
+    import duckdb
+
+    base = duckdb.connect(PARCELS_DB, read_only=True)
+    base.execute("LOAD spatial")
+    return base, stat.st_ino
+
+
+def _refresh_worker(expected_ino: int) -> None:
+    """Open a replacement off-request, then atomically install it."""
+    global _conn, _conn_ino, _refreshing_ino
+    replacement = None
+    try:
+        replacement, opened_ino = _open_base()
+        if opened_ino != expected_ino or os.stat(PARCELS_DB).st_ino != opened_ino:
+            replacement.close()
+            replacement = None
+            return
+        with _query_lock:
+            old = _conn
+            _conn, _conn_ino = replacement, opened_ino
+            replacement = None
+            if old is not None:
+                old.close()
+    except Exception:
+        logger.warning("parcel database background warmup failed", exc_info=True)
+    finally:
+        if replacement is not None:
+            replacement.close()
+        with _refresh_lock:
+            if _refreshing_ino == expected_ino:
+                _refreshing_ino = None
+
+
+def _schedule_refresh(ino: int) -> None:
+    global _refreshing_ino
+    with _refresh_lock:
+        if _refreshing_ino == ino:
+            return
+        _refreshing_ino = ino
+    worker = Thread(target=_refresh_worker, args=(ino,), daemon=True,
+                    name="parcel-db-warmup")
+    worker.start()
+
+
+def warmup() -> bool:
+    """Synchronously open the cadastre before the service accepts requests."""
+    global _conn, _conn_ino
+    replacement = None
+    try:
+        replacement, ino = _open_base()
+        with _query_lock:
+            old = _conn
+            _conn, _conn_ino = replacement, ino
+            replacement = None
+            if old is not None:
+                old.close()
+        return True
+    except Exception:
+        logger.warning("parcel database startup warmup unavailable", exc_info=True)
+        return False
+    finally:
+        if replacement is not None:
+            replacement.close()
 
 
 def _get_conn():
-    """Return a cursor, reopening when an atomic DB replacement changes inode.
+    """Return a warm cursor; schedule DB generations to open off-request.
 
-    The caller holds ``_query_lock`` for the cursor lifetime. That makes it
-    safe to close an old base handle when a refresh swaps the 19 GB database.
+    The caller holds ``_query_lock``. Cold-opening the 19 GB DB here would be
+    uncancellable, so startup prewarms the first generation and inode changes
+    trigger one background replacement. Requests use radius fallback until
+    that replacement is ready instead of waiting past their signal deadline.
     """
-    global _conn, _conn_ino
     stat = os.stat(PARCELS_DB)
     if _conn is None or stat.st_ino != _conn_ino:
-        if _conn is not None:
-            try:
-                _conn.close()
-            except Exception:
-                pass
-        import duckdb
-
-        base = duckdb.connect(PARCELS_DB, read_only=True)
-        base.execute("LOAD spatial")
-        _conn, _conn_ino = base, stat.st_ino
+        _schedule_refresh(stat.st_ino)
+        raise RuntimeError("parcel database generation is warming")
     return _conn.cursor()
 
 
@@ -74,6 +137,7 @@ def same_parcel_flags(
     address_lat: float,
     address_lng: float,
     evidence_points: list[tuple[float, float]],
+    timeout_s: float | None = None,
 ) -> list[bool] | None:
     """Return whether each evidence point is strictly inside the target lot.
 
@@ -82,6 +146,13 @@ def same_parcel_flags(
     every geometry slice in one small envelope; multiple slices with the same
     PFI are treated as one parcel.
     """
+    if timeout_s is not None:
+        if (not isinstance(timeout_s, (int, float))
+                or not math.isfinite(timeout_s) or timeout_s <= 0):
+            return None
+        deadline = time.monotonic() + timeout_s
+    else:
+        deadline = None
     if not evidence_points:
         return []
     values = [address_lat, address_lng,
@@ -106,18 +177,58 @@ def same_parcel_flags(
     south = min([address_lat - lat_delta, *(lat for lat, _ in evidence_points)])
     north = max([address_lat + lat_delta, *(lat for lat, _ in evidence_points)])
 
+    timeout_fired = Event()
+    acquired = False
     try:
-        with _query_lock:
+        if deadline is None:
+            _query_lock.acquire()
+            acquired = True
+        else:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            acquired = _query_lock.acquire(timeout=remaining)
+            if not acquired:
+                return None
+        try:
             conn = _get_conn()
-            rows = conn.execute(
-                """
-                SELECT pfi, ST_AsGeoJSON(geom)
-                FROM parcels
-                WHERE state = ?
-                  AND ST_Intersects(geom, ST_MakeEnvelope(?, ?, ?, ?))
-                """,
-                [state.lower().strip(), west, south, east, north],
-            ).fetchall()
+            timer = None
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                interrupt = getattr(conn, "interrupt", None)
+                if not callable(interrupt):
+                    # A timeout contract without a cancellation primitive is
+                    # not a timeout. Fall back rather than start unbounded I/O.
+                    return None
+
+                def _interrupt() -> None:
+                    timeout_fired.set()
+                    interrupt()
+
+                timer = Timer(remaining, _interrupt)
+                timer.daemon = True
+                timer.start()
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT pfi, ST_AsGeoJSON(geom)
+                    FROM parcels
+                    WHERE state = ?
+                      AND ST_Intersects(geom, ST_MakeEnvelope(?, ?, ?, ?))
+                    """,
+                    [state.lower().strip(), west, south, east, north],
+                ).fetchall()
+            finally:
+                if timer is not None:
+                    timer.cancel()
+                    timer.join()
+            if timeout_fired.is_set():
+                return None
+        finally:
+            if acquired:
+                _query_lock.release()
         if not rows:
             return None
 
@@ -154,6 +265,10 @@ def same_parcel_flags(
             for lat, lng in evidence_points
         ]
     except Exception:
+        if timeout_fired.is_set():
+            logger.info("parcel attribution exceeded its signal budget; "
+                        "using radius fallback")
+            return None
         logger.warning("parcel attribution unavailable; using radius fallback",
                        exc_info=True)
         return None

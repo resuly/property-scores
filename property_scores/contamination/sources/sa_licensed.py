@@ -57,7 +57,13 @@ def all_activities(force_refresh: bool = False) -> list[dict] | None:
     return rows
 
 
-def activities_near(lat: float, lng: float, radius_m: int = 30) -> list[dict] | None:
+def activities_near(lat: float, lng: float, radius_m: int = 30,
+                    include_coordinates: bool = False) -> list[dict] | None:
+    """Return licensed activity points inside ``radius_m``.
+
+    Coordinates are internal-only and opt-in for parcel attribution. The
+    default adapter contract continues to withhold them from score evidence.
+    """
     rows = all_activities()
     if rows is None:
         return None
@@ -66,8 +72,9 @@ def activities_near(lat: float, lng: float, radius_m: int = 30) -> list[dict] | 
         distance = _distance_m(lat, lng, row["lat"], row["lng"])
         if distance <= radius_m:
             hit = dict(row)
-            hit.pop("lat", None)
-            hit.pop("lng", None)
+            if not include_coordinates:
+                hit.pop("lat", None)
+                hit.pop("lng", None)
             hit["distance_m"] = round(distance)
             hits.append(hit)
     return sorted(hits, key=lambda row: row["distance_m"])

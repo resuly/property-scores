@@ -161,6 +161,20 @@ def _check_bushfire_data():
         logger.exception("STARTUP: bushfire land-cover readiness check failed")
 
 
+@app.on_event("startup")
+def _warm_contamination_cadastre():
+    """Move the shared 19 GB parcel DB cold-open out of request budgets."""
+    try:
+        from property_scores.contamination import parcel_attribution
+        if parcel_attribution.warmup():
+            logger.info("STARTUP: contamination cadastre ready")
+        else:
+            logger.warning("STARTUP: contamination cadastre unavailable; "
+                           "parcel attribution will use radius fallback")
+    except Exception:
+        logger.exception("STARTUP: contamination cadastre warmup failed")
+
+
 @app.get("/api/config")
 def get_config():
     return {"mapbox_token": os.getenv("MAPBOX_TOKEN", "")}

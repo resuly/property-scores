@@ -1,6 +1,7 @@
 import json
 import math
-import sys
+import time
+from threading import Event
 from types import SimpleNamespace
 
 from property_scores.contamination import parcel_attribution as pa
@@ -97,32 +98,70 @@ def test_database_error_falls_back(monkeypatch):
     ) is None
 
 
-def test_inode_change_reopens_read_only_database(monkeypatch):
-    class _Base:
-        def __init__(self):
-            self.closed = False
-            self.loaded = False
-
-        def close(self):
-            self.closed = True
-
-        def execute(self, sql):
-            assert sql == "LOAD spatial"
-            self.loaded = True
-
-        def cursor(self):
-            return "cursor"
-
-    old, new = _Base(), _Base()
-    pa._conn, pa._conn_ino = old, 1
+def test_inode_change_schedules_off_request_refresh(monkeypatch):
+    pa._conn, pa._conn_ino = object(), 1
+    scheduled = []
     monkeypatch.setattr(pa.os, "stat", lambda path: SimpleNamespace(st_ino=2))
-    monkeypatch.setitem(sys.modules, "duckdb", SimpleNamespace(
-        connect=lambda path, read_only: new,
-    ))
+    monkeypatch.setattr(pa, "_schedule_refresh", scheduled.append)
 
-    assert pa._get_conn() == "cursor"
-    assert old.closed is True
-    assert new.loaded is True
-    assert pa._conn_ino == 2
+    try:
+        pa._get_conn()
+    except RuntimeError as exc:
+        assert "warming" in str(exc)
+    else:  # pragma: no cover - explicit failure message
+        raise AssertionError("stale parcel generation was served")
+    assert scheduled == [2]
 
     pa._conn, pa._conn_ino = None, None
+
+
+def test_expired_budget_does_not_open_database(monkeypatch):
+    def should_not_open():
+        raise AssertionError("expired budget opened DuckDB")
+
+    monkeypatch.setattr(pa, "_get_conn", should_not_open)
+    assert pa.same_parcel_flags(
+        "VIC", -37.81, 144.96, [(-37.8101, 144.9601)], timeout_s=0
+    ) is None
+
+
+def test_running_query_is_interrupted_at_budget(monkeypatch):
+    released = Event()
+
+    class _BlockingCursor:
+        def __init__(self):
+            self.interrupted = False
+
+        def interrupt(self):
+            self.interrupted = True
+            released.set()
+
+        def execute(self, sql, params):
+            released.wait(1)
+            raise RuntimeError("interrupted")
+
+    cursor = _BlockingCursor()
+    monkeypatch.setattr(pa, "_get_conn", lambda: cursor)
+    started = time.monotonic()
+
+    result = pa.same_parcel_flags(
+        "VIC", -37.81, 144.96, [(-37.8101, 144.9601)], timeout_s=0.03)
+
+    assert result is None
+    assert cursor.interrupted is True
+    assert time.monotonic() - started < 0.3
+
+
+def test_lock_wait_respects_budget(monkeypatch):
+    acquired = pa._query_lock.acquire(timeout=0.1)
+    assert acquired
+    started = time.monotonic()
+    try:
+        result = pa.same_parcel_flags(
+            "VIC", -37.81, 144.96,
+            [(-37.8101, 144.9601)], timeout_s=0.03)
+    finally:
+        pa._query_lock.release()
+
+    assert result is None
+    assert time.monotonic() - started < 0.15

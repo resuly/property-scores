@@ -170,6 +170,7 @@ def test_historical_parcel_unavailable_keeps_density_fallback(monkeypatch):
     sig = cs._historical_use_signal(*MELB, "VIC")
 
     assert sig["parcel_attributed"] is False
+    assert sig["status"] == "partial"
     assert sig["score"] is None
     assert sig["unattributed_a"] is True
 
@@ -201,16 +202,22 @@ def test_historical_not_integrated_outside_vic():
 
 
 def test_sa_and_qld_licensed_activities_are_on_site_evidence_only(monkeypatch):
+    from property_scores.contamination import parcel_attribution
     from property_scores.contamination.sources import qld_ea, sa_licensed
     monkeypatch.setattr(
         sa_licensed, "activities_near",
-        lambda *a, **k: [{"licence_number": 20, "activity": "Hydrocarbon"}],
+        lambda *a, **k: [{"licence_number": 20, "activity": "Hydrocarbon",
+                           "lat": -34.98, "lng": 138.57}],
     )
+    monkeypatch.setattr(parcel_attribution, "same_parcel_flags",
+                        lambda *a, **k: None)
     sa = cs._historical_use_signal(-34.98, 138.57, "SA")
-    assert sa["status"] == "ok"
     assert sa["score"] is None
     assert sa["on_site"] is True
     assert sa["entries"][0]["evidence_only"] is True
+    assert sa["parcel_attributed"] is False
+    assert sa["status"] == "partial"
+    assert "lat" not in sa["entries"][0] and "lng" not in sa["entries"][0]
 
     monkeypatch.setattr(
         qld_ea, "activities_at",
@@ -220,6 +227,71 @@ def test_sa_and_qld_licensed_activities_are_on_site_evidence_only(monkeypatch):
     assert qld["status"] == "ok"
     assert qld["score"] is None
     assert qld["on_site"] is True
+
+
+def test_sa_licensed_same_parcel_filter_is_evidence_only(monkeypatch):
+    from property_scores.contamination import parcel_attribution
+    from property_scores.contamination.sources import sa_licensed
+    rows = [
+        {"licence_number": 20, "activity": "Hydrocarbon",
+         "lat": -34.9800, "lng": 138.5700, "distance_m": 4},
+        {"licence_number": 21, "activity": "Waste",
+         "lat": -34.9801, "lng": 138.5701, "distance_m": 13},
+    ]
+    monkeypatch.setattr(sa_licensed, "activities_near",
+                        lambda *a, **k: rows)
+    seen = {}
+
+    def same_parcel(*args, **kwargs):
+        seen.update(kwargs)
+        return [True, False]
+
+    monkeypatch.setattr(parcel_attribution, "same_parcel_flags", same_parcel)
+
+    sig = cs._historical_use_signal(-34.98, 138.57, "SA")
+
+    assert sig["status"] == "ok"
+    assert sig["score"] is None
+    assert sig["parcel_attributed"] is True
+    assert sig["on_site"] is True
+    assert [row["licence_number"] for row in sig["entries"]] == [20]
+    assert sig["entries"][0]["evidence_only"] is True
+    assert 0 < seen["timeout_s"] <= cs._SIGNAL_BUDGET_S
+
+
+def test_sa_licensed_neighbour_only_is_not_on_site(monkeypatch):
+    from property_scores.contamination import parcel_attribution
+    from property_scores.contamination.sources import sa_licensed
+    monkeypatch.setattr(sa_licensed, "activities_near", lambda *a, **k: [{
+        "licence_number": 21, "activity": "Waste",
+        "lat": -34.9801, "lng": 138.5701, "distance_m": 13,
+    }])
+    monkeypatch.setattr(parcel_attribution, "same_parcel_flags",
+                        lambda *a, **k: [False])
+
+    sig = cs._historical_use_signal(-34.98, 138.57, "SA")
+
+    assert sig["parcel_attributed"] is True
+    assert sig["entries"] == []
+    assert sig["on_site"] is False
+    assert sig["score"] is None
+
+
+def test_sa_licensed_malformed_parcel_result_uses_radius_fallback(monkeypatch):
+    from property_scores.contamination import parcel_attribution
+    from property_scores.contamination.sources import sa_licensed
+    monkeypatch.setattr(sa_licensed, "activities_near", lambda *a, **k: [{
+        "licence_number": 20, "activity": "Hydrocarbon",
+        "lat": -34.98, "lng": 138.57, "distance_m": 4,
+    }])
+    monkeypatch.setattr(parcel_attribution, "same_parcel_flags",
+                        lambda *a, **k: [])
+
+    sig = cs._historical_use_signal(-34.98, 138.57, "SA")
+
+    assert sig["parcel_attributed"] is False
+    assert sig["status"] == "partial"
+    assert [row["licence_number"] for row in sig["entries"]] == [20]
 
 
 def test_landfill_bands(monkeypatch):

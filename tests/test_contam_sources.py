@@ -92,8 +92,15 @@ def test_second_batch_adapters_are_evidence_only_and_privacy_slim(monkeypatch):
     calls = install_responses(monkeypatch, [FakeResponse(sa_payload)])
     rows = sa_licensed.activities_near(-34.98, 138.57, 30)
     assert rows and rows[0]["activity"] == "Hydrocarbon and Chemical"
+    assert "lat" not in rows[0] and "lng" not in rows[0]
     assert "Citizen" not in json.dumps(rows)
     assert calls[0]["url"] == sa_licensed.GEOJSON_URL
+
+    internal_rows = sa_licensed.activities_near(
+        -34.98, 138.57, 30, include_coordinates=True)
+    assert internal_rows[0]["lat"] == -34.98
+    assert internal_rows[0]["lng"] == 138.57
+    assert "Citizen" not in json.dumps(internal_rows)
 
     qld_payload = {"features": [{
         "attributes": {

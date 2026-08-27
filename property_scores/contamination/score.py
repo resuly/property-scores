@@ -676,13 +676,23 @@ def _historical_use_signal(lat: float, lng: float, state: str | None) -> dict:
     """
     if state in ("SA", "QLD"):
         from property_scores.contamination.sources import _common
+        parcel_flags = None
         try:
             with _common.budget(_SIGNAL_BUDGET_S):
                 if state == "SA":
                     from property_scores.contamination.sources import sa_licensed
                     rows = sa_licensed.activities_near(
-                        lat, lng, radius_m=_SANDS_ONSITE_M)
+                        lat, lng, radius_m=_SANDS_ONSITE_M,
+                        include_coordinates=True)
                     source = "SA EPA Licensed Activities"
+                    if rows:
+                        from property_scores.contamination import parcel_attribution
+                        remaining = _common.remaining_budget()
+                        parcel_flags = parcel_attribution.same_parcel_flags(
+                            "SA", lat, lng,
+                            [(row["lat"], row["lng"]) for row in rows],
+                            timeout_s=remaining,
+                        )
                 else:
                     from property_scores.contamination.sources import qld_ea
                     rows = qld_ea.activities_at(lat, lng)
@@ -696,20 +706,57 @@ def _historical_use_signal(lat: float, lng: float, state: str | None) -> dict:
         # Evidence-only until each jurisdiction's activity vocabulary has its
         # own reviewed contamination mapping. A licence proves an activity was
         # approved here; it does not prove contamination or a severity band.
-        entries = [{**row, "source": source, "evidence_only": True}
-                   for row in rows]
-        return {"status": "ok", "score": None, "entries": entries[:10],
+        parcel_attributed = (state == "SA" and parcel_flags is not None
+                             and len(parcel_flags) == len(rows))
+        cadastre_partial = (state == "SA" and bool(rows)
+                            and not parcel_attributed)
+        if parcel_attributed:
+            rows = [row for row, same_parcel in zip(rows, parcel_flags)
+                    if same_parcel]
+        entries = []
+        for row in rows:
+            public_row = {key: value for key, value in row.items()
+                          if key not in ("lat", "lng")}
+            entries.append({**public_row, "source": source,
+                            "evidence_only": True})
+        result = {"status": "partial" if cadastre_partial else "ok",
+                  "score": None, "entries": entries[:10],
                 "dense_precinct": False, "unattributed_a": False,
                 "on_site": bool(entries)}
+        if state == "SA":
+            result["parcel_attributed"] = parcel_attributed
+        return result
     if state != "VIC":
         return {"status": "not_integrated", "score": None, "entries": [],
                 "dense_precinct": False, "unattributed_a": False,
                 "on_site": False}
     from property_scores.contamination.sources import _common, vic_wfs
     from property_scores.contamination.sources.sands_whitelist import classify
+    classified_rows = []
+    flags = None
     try:
         with _common.budget(_SIGNAL_BUDGET_S):
             rows = vic_wfs.sands_near(lat, lng, radius_m=_SANDS_ONSITE_M)
+            if rows is not None:
+                for row in rows:
+                    hit = classify(row.get("business_type"))
+                    if hit is None:
+                        continue
+                    tier, activity = hit
+                    classified_rows.append((row, tier, activity))
+
+                evidence_points = [(row.get("lat"), row.get("lng"))
+                                   for row, _, _ in classified_rows]
+                can_attribute = bool(evidence_points) and all(
+                    isinstance(point_lat, (int, float))
+                    and isinstance(point_lng, (int, float))
+                    for point_lat, point_lng in evidence_points
+                )
+                if can_attribute:
+                    from property_scores.contamination import parcel_attribution
+                    flags = parcel_attribution.same_parcel_flags(
+                        "VIC", lat, lng, evidence_points,
+                        timeout_s=_common.remaining_budget())
     except _common.BudgetExceeded:
         rows = None  # out of time == not read (see _SIGNAL_BUDGET_S)
     if rows is None:
@@ -717,29 +764,13 @@ def _historical_use_signal(lat: float, lng: float, state: str | None) -> dict:
                 "dense_precinct": False, "unattributed_a": False,
                 "on_site": False}
     entries = []
-    classified_rows = []
-    for row in rows:
-        hit = classify(row.get("business_type"))
-        if hit is None:
-            continue
-        tier, activity = hit
-        classified_rows.append((row, tier, activity))
-
     # Radius is the safe fallback, but where the shared cadastre is available
     # it can answer the question the directory geocoder cannot: whether the
     # historical point falls inside THIS lot.  Address points may be snapped
     # from the kerb; evidence points are strict containment only.
-    from property_scores.contamination import parcel_attribution
-    evidence_points = [(row.get("lat"), row.get("lng"))
-                       for row, _, _ in classified_rows]
-    can_attribute = bool(evidence_points) and all(
-        isinstance(point_lat, (int, float)) and isinstance(point_lng, (int, float))
-        for point_lat, point_lng in evidence_points
-    )
-    flags = (parcel_attribution.same_parcel_flags(
-        "VIC", lat, lng, evidence_points) if can_attribute else None)
-    parcel_attributed = flags is not None
-    if flags is None:
+    parcel_attributed = (flags is not None
+                         and len(flags) == len(classified_rows))
+    if not parcel_attributed:
         flags = [True] * len(classified_rows)
 
     a_hits = 0
@@ -767,7 +798,9 @@ def _historical_use_signal(lat: float, lng: float, state: str | None) -> dict:
     # A tier-A trade metres away that we CANNOT attribute must not coexist
     # with a reassuring label ("Very Clean next to an unattributed service
     # station", review P1-3): the caller blocks reassuring labels on this.
-    return {"status": "ok", "score": score,
+    return {"status": ("partial" if classified_rows
+                        and not parcel_attributed else "ok"),
+            "score": score,
             "dense_precinct": dense,
             "parcel_attributed": parcel_attributed,
             "unattributed_a": dense and not parcel_attributed and a_hits > 0,

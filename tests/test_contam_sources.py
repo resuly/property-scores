@@ -535,6 +535,18 @@ def test_sands_paging_sends_sortby_and_startindex(monkeypatch):
     assert calls[1]["params"]["startIndex"] == 2
 
 
+def test_sands_empty_intermediate_page_fails_closed(monkeypatch):
+    features = _sands_yearly_clones([1896, 1930])
+    page1 = _sands_payload(features)
+    page1["numberMatched"] = 4
+    page2 = _sands_payload([])
+    page2["numberMatched"] = 4
+    monkeypatch.setattr(vic_wfs, "_SANDS_PAGE", 2)
+    install_responses(monkeypatch, [FakeResponse(page1), FakeResponse(page2)])
+    base = features[0]["geometry"]["coordinates"]
+    assert vic_wfs.sands_near(base[1], base[0], 200) is None
+
+
 # ---------------------------------------------------------------------------
 # VIC WFS: Landfill Register and GQRUZ
 # ---------------------------------------------------------------------------
@@ -694,6 +706,7 @@ def test_ga_parses_landfills(monkeypatch):
     assert set(sites[0]) >= {"name", "type", "status", "distance_m"}
     assert all("LANDFILL" in s["type"].upper() for s in sites)
     assert sites[0]["status"] == "OPERATIONAL"
+    assert all("owner" not in site for site in sites)
 
 
 def test_ga_where_clause_uses_like_not_exact_match(monkeypatch):
@@ -706,6 +719,7 @@ def test_ga_where_clause_uses_like_not_exact_match(monkeypatch):
     where = calls[0]["params"]["where"]
     assert "LIKE" in where.upper()
     assert "%LANDFILL%" in where
+    assert "facility_owner" not in calls[0]["params"]["outFields"]
     types = [f["attributes"]["facility_infrastructure_type"]
              for f in payload["features"]]
     assert any("–" in t for t in types), "fixture lost the en dash trap"

@@ -44,7 +44,7 @@ QUERY_URL = (
 LANDFILL_WHERE = "facility_infrastructure_type LIKE '%LANDFILL%'"
 
 OUT_FIELDS = (
-    "facility_name,facility_owner,facility_infrastructure_type,"
+    "facility_name,facility_infrastructure_type,"
     "operational_status,address,suburb,state,postcode"
 )
 _MAX_RECORDS = 200
@@ -53,7 +53,7 @@ _MAX_RECORDS = 200
 def landfills_near(lat: float, lng: float, radius_m: int = 2000) -> list[dict] | None:
     """Operating landfills within ``radius_m`` of a point, nearest first.
 
-    Returns ``[{name, type, status, owner, address, suburb, state,
+    Returns ``[{name, type, status, address, suburb, state,
     distance_m, lat, lng}]``, or ``None`` if the service could not be queried.
     ``[]`` means the query succeeded and no landfill is nearby; the two are
     not interchangeable.
@@ -107,7 +107,6 @@ def landfills_near(lat: float, lng: float, radius_m: int = 2000) -> list[dict] |
             "name": str(attrs.get("facility_name") or "").strip() or "Unknown",
             "type": infra,
             "status": str(attrs.get("operational_status") or "").strip(),
-            "owner": str(attrs.get("facility_owner") or "").strip() or None,
             "address": str(attrs.get("address") or "").strip() or None,
             "suburb": str(attrs.get("suburb") or "").strip() or None,
             "state": str(attrs.get("state") or "").strip() or None,

@@ -173,7 +173,10 @@ def _sands_features(lat: float, lng: float, radius_m: int) -> list | None:
         if page_features is None:
             return None
         if not page_features:
-            break  # upstream disagrees with its own numberMatched; stop here
+            # numberMatched promised more rows. An empty intermediate page is
+            # a partial read, not EOF; fail closed so a missing Tier A trade
+            # cannot turn into a cached clean result.
+            return None
         collected.extend(page_features)
     return collected
 

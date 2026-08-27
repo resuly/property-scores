@@ -5,8 +5,10 @@
 """
 
 import pytest
+import requests as _requests
 
 from property_scores.contamination import score as cs
+from property_scores.contamination.sources import _common
 
 MELB = (-37.8136, 144.9631)
 
@@ -250,3 +252,125 @@ def test_on_site_reflects_new_signals(monkeypatch):
     assert r["on_site"]["historical_use"] is True
     assert r["on_site"]["groundwater"] is True
     assert r["on_site"]["landfill"] is False
+
+
+# ---------------------------------------------------------------------------
+# 延迟预算 (2026-08-27 latency review)
+#
+# 背景: 三个 builder 串行发请求, 每个请求 1 次 + 1 次重试 x 10s timeout。
+# _landfill_signal 最坏 60s, Sands 分页最坏更久, 而 /scores 的
+# _BATCH_DEADLINE_S 是 25s。超预算必须 fail-closed 成 status="error"
+# (拦安慰标签 + 不缓存), 而不是把 deadline 撞穿再留下 STRAGGLER 线程。
+#
+# 这些测试用假时钟推进, 不真的 sleep。
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def burning_clock(monkeypatch):
+    """假时钟 + "每个请求烧掉自己整个 timeout 然后失败" 的假 socket。
+
+    返回 (clock, calls)。unbudgeted 时每次请求烧 10s, 所以没有预算的实现
+    会一路把 6 次请求全打完 (clock 走到 60), 有预算的实现必须早停。
+    """
+    clock = [1000.0]
+    calls = []
+    monkeypatch.setattr(_common, "_now", lambda: clock[0])
+    monkeypatch.setattr(_common, "_RETRY_SLEEP_S", 0)
+
+    def _get(url, params=None, timeout=None, headers=None):
+        calls.append((params or {}).get("typeNames") or url)
+        clock[0] += timeout
+        raise _requests.ConnectionError("upstream hung")
+
+    monkeypatch.setattr(_common.requests, "get", _get)
+    return clock, calls
+
+
+def test_landfill_signal_stops_at_its_budget(burning_clock):
+    clock, calls = burning_clock
+    start = clock[0]
+    sig = cs._landfill_signal(*MELB, "VIC")
+    assert sig["status"] == "error"
+    assert sig["entries"] == []
+    # 预算 8s: VLR 两层并发各拿一次 8s timeout, 回来预算已空, 不再重试也不
+    # 再打 GA。没有预算检查时这里是 6 次请求 / 60s。
+    assert len(calls) <= 2, f"budget did not stop the chain: {calls}"
+    assert clock[0] - start <= 2 * cs._SIGNAL_BUDGET_S
+
+
+def test_groundwater_signal_stops_at_its_budget(burning_clock):
+    clock, calls = burning_clock
+    sig = cs._groundwater_signal(*MELB, "VIC")
+    assert sig["status"] == "error"
+    # 一次 8s 请求就把预算烧完, 重试不许再发。无预算时是 2 次。
+    assert len(calls) == 1, f"retried past the budget: {calls}"
+
+
+def test_historical_signal_stops_paging_at_its_budget(monkeypatch):
+    """Sands 分页最坏是几千次 GetFeature: 预算必须在循环里也生效。"""
+    clock = [1000.0]
+    calls = []
+    monkeypatch.setattr(_common, "_now", lambda: clock[0])
+
+    def _get(url, params=None, timeout=None, headers=None):
+        calls.append(params)
+        clock[0] += 1.0  # 每页 1s, 慢但不失败
+        return _FakePage()
+
+    monkeypatch.setattr(_common.requests, "get", _get)
+    sig = cs._historical_use_signal(*MELB, "VIC")
+    assert sig["status"] == "error"
+    # 8s 预算 / 每页 1s = 最多 8 页。没有预算检查时 numberMatched=5000
+    # 会让它一页一页拉到 5000。
+    assert len(calls) <= int(cs._SIGNAL_BUDGET_S) + 1, f"{len(calls)} pages"
+
+
+class _FakePage:
+    """一页 Sands: 一条特征, 但 numberMatched 说还有 5000 条。"""
+    status_code = 200
+    ok = True
+
+    def json(self):
+        return {
+            "type": "FeatureCollection",
+            "numberMatched": 5000,
+            "features": [{
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [144.9631, -37.8136]},
+                "properties": {"business_type": "Grocers", "directory": 1900,
+                               "adopted_street_name": "Collins",
+                               "adopted_locality": "Melbourne", "vdpid": 1},
+            }],
+        }
+
+
+def test_signals_are_unbudgeted_nowhere_else(monkeypatch):
+    """预算是块作用域的: builder 返回后不许把 deadline 留在线程里, 否则
+    同一 worker 上跑的下一个请求会莫名其妙被砍。
+    delta review P3: 旧版走 NT 在进入 budget() 前就返回, 断言恒真什么都没证;
+    现在走 VIC 真路径(gqruz mock 掉), budget 块真的开过再验证已关。"""
+    from property_scores.contamination.sources import vic_wfs
+    monkeypatch.setattr(vic_wfs, "gqruz_near", lambda *a, **k: [])
+    assert _common.remaining_budget() is None
+    sig = cs._groundwater_signal(*MELB, "VIC")
+    assert sig["status"] == "ok"
+    assert _common.remaining_budget() is None
+
+
+def test_landfill_budget_discards_partial_results(monkeypatch):
+    """delta review P1: VLR 已拿到记录、GA 随后撞破预算时, 必须丢弃部分结果
+    返回 error, 不许带着"半读出的没有/有填埋场"落成 partial+score
+    (Keele St 形态)。此前该刻意行为零测试覆盖, 变异保留部分结果 573 全绿。"""
+    from property_scores.contamination.sources import ga_waste, vic_wfs
+    monkeypatch.setattr(vic_wfs, "landfills_near",
+                        lambda *a, **k: [{"name": "old tip", "distance_m": 120}])
+
+    def _ga_busts_budget(*a, **k):
+        raise _common.BudgetExceeded("simulated budget exhaustion")
+
+    monkeypatch.setattr(ga_waste, "landfills_near", _ga_busts_budget)
+    sig = cs._landfill_signal(*MELB, "VIC")
+    assert sig["status"] == "error"
+    assert sig["entries"] == []
+    assert sig["score"] is None

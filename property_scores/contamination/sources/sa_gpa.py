@@ -71,6 +71,9 @@ def _load_raw(cache_path: str, force_refresh: bool):
             with open(cache_path, "rb") as handle:
                 return json.loads(handle.read())
         except (OSError, ValueError) as exc:
+        # 有意不 catch BudgetExceeded(2026-08-27 delta review): 预算耗尽时不走
+        # stale 兜底而让 signal 转 error, 是把"耗尽"当 outage 的 fail-closed
+        # 收窄; error 会拦安慰标签且不缓存, 方向安全。
             logger.warning("SA GPA cache unreadable, refetching: %s", exc)
 
     payload = fetch_bytes(GEOJSON_URL)

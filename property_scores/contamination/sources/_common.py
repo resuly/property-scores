@@ -5,14 +5,28 @@ a failed query returns ``None`` and an empty register returns ``[]``. Every
 helper here that can fail returns ``None`` rather than an empty container, so
 callers keep the two distinguishable all the way up.
 
-Politeness: 10s timeout, one attempt plus one retry per request, browser
-User-Agent. Retries cover transport-level failures only (connection errors,
-non-2xx, undecodable bodies). An HTTP 200 carrying an upstream error document
-is a logical failure, not a flaky socket, so it is not retried.
+Politeness: 10s timeout, one attempt plus one retry per request, 2s backoff
+before the retry, browser User-Agent. Retries cover transport-level failures
+only (connection errors, non-2xx, undecodable bodies). An HTTP 200 carrying an
+upstream error document is a logical failure, not a flaky socket, so it is not
+retried.
+
+Wall-clock budget (2026-08-27, latency review): the politeness budget alone
+bounds a single request, not a signal. ``_landfill_signal`` chains three of
+them and Sands pages up to eight times, so 10s x 2 attempts x N calls put the
+contamination branch over the 25s ``/scores`` batch deadline. A caller can
+therefore wrap a whole signal in :func:`budget`; every request made inside it
+clamps its socket timeout to the time left, shortens the retry backoff to the
+time left, and raises :class:`BudgetExceeded` rather than starting a call that
+cannot finish. Callers turn that into the existing fail-closed ``status:
+"error"`` (no reassuring label, not cached) - a slow register is exactly as
+unread as an unreachable one.
 """
 
+import contextvars
 import logging
 import time as _time
+from contextlib import contextmanager
 
 import requests
 
@@ -36,7 +50,87 @@ UA = (
 )
 HEADERS = {"User-Agent": UA, "Accept": "application/json, */*"}
 
-_RETRY_SLEEP_S = 0.5
+# 2026-08-27: was 0.5s. These are unauthenticated government services and the
+# retry only fires on a transport-level failure, i.e. exactly when the far end
+# is already unhappy; 0.5s is a hammer, not a backoff. Safe to lengthen now
+# that a budget bounds the total wall clock regardless.
+_RETRY_SLEEP_S = 2.0
+
+# Indirection so tests can drive the budget from a fake clock instead of
+# actually sleeping through it.
+_now = _time.monotonic
+
+_deadline: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "contam_fetch_deadline", default=None)
+
+
+class BudgetExceeded(RuntimeError):
+    """The enclosing :func:`budget` ran out before this request could run."""
+
+
+@contextmanager
+def budget(seconds: float):
+    """Bound every fetch made inside this block to ``seconds`` of wall clock.
+
+    Nesting replaces the deadline for the duration of the inner block; the
+    adapters do not nest, and a signal owns exactly one budget.
+
+    The deadline lives in a :class:`~contextvars.ContextVar`, so a thread that
+    did not inherit the context simply runs unbudgeted rather than inheriting a
+    stale deadline. A worker thread that SHOULD share the budget must be
+    submitted through :func:`child_context` (see ``vic_wfs.landfills_near``).
+    """
+    token = _deadline.set(_now() + seconds)
+    try:
+        yield
+    finally:
+        _deadline.reset(token)
+
+
+def remaining_budget() -> float | None:
+    """Seconds left in the enclosing budget, or ``None`` when unbudgeted."""
+    deadline = _deadline.get()
+    return None if deadline is None else deadline - _now()
+
+
+def check_budget() -> None:
+    """Raise :class:`BudgetExceeded` if the enclosing budget is spent."""
+    left = remaining_budget()
+    if left is not None and left <= 0:
+        raise BudgetExceeded("contamination fetch budget exhausted")
+
+
+def child_context() -> contextvars.Context:
+    """A context copy carrying the current deadline into one worker thread.
+
+    ``ThreadPoolExecutor`` does not propagate context, and a single
+    ``Context`` object cannot be entered by two threads at once, so callers
+    take one copy per submitted call.
+    """
+    return contextvars.copy_context()
+
+
+def _effective_timeout(timeout: float) -> float:
+    """Socket timeout clamped to the budget. Raises if the budget is spent.
+
+    Single clock read: with check_budget() and remaining_budget() reading the
+    clock separately, a deadline landing between the two reads produced a
+    zero/negative timeout, and requests raises ValueError on those (caught by
+    neither RequestException nor BudgetExceeded handlers; delta review P2).
+    """
+    left = remaining_budget()
+    if left is not None and left <= 0:
+        raise BudgetExceeded("wall-clock budget exhausted")
+    return timeout if left is None else min(timeout, left)
+
+
+def _backoff() -> None:
+    """Sleep before a retry, never past the budget."""
+    check_budget()
+    left = remaining_budget()
+    delay = _RETRY_SLEEP_S if left is None else min(_RETRY_SLEEP_S, left)
+    if delay > 0:
+        _time.sleep(delay)
 
 
 def fetch_json(url: str, params: dict | None = None, timeout: int = TIMEOUT):
@@ -48,14 +142,18 @@ def fetch_json(url: str, params: dict | None = None, timeout: int = TIMEOUT):
     belongs to the caller, which inspects the decoded body.
 
     One attempt plus one retry, per the politeness budget for these
-    unauthenticated government services.
+    unauthenticated government services. Inside a :func:`budget` block the
+    socket timeout is clamped to the time left and :class:`BudgetExceeded` is
+    raised instead of starting an attempt that cannot finish.
     """
     last_error = None
     for attempt in range(2):
         if attempt:
-            _time.sleep(_RETRY_SLEEP_S)
+            _backoff()
         try:
-            resp = requests.get(url, params=params, timeout=timeout, headers=HEADERS)
+            resp = requests.get(url, params=params,
+                                timeout=_effective_timeout(timeout),
+                                headers=HEADERS)
         except requests.RequestException as exc:
             last_error = exc
             continue
@@ -82,9 +180,10 @@ def fetch_bytes(url: str, timeout: int = TIMEOUT) -> bytes | None:
     last_error = None
     for attempt in range(2):
         if attempt:
-            _time.sleep(_RETRY_SLEEP_S)
+            _backoff()
         try:
-            resp = requests.get(url, timeout=timeout, headers=HEADERS)
+            resp = requests.get(url, timeout=_effective_timeout(timeout),
+                                headers=HEADERS)
         except requests.RequestException as exc:
             last_error = exc
             continue

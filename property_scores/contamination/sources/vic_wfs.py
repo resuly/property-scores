@@ -33,10 +33,12 @@ the licence audit in limon-ops docs/contamination-data-sources-tracker.md.
 """
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 from property_scores.contamination.sources._common import (
     _distance_m,
     _search_envelope,
+    child_context,
     fetch_json,
     geojson_features_or_none,
     point_coords,
@@ -310,20 +312,35 @@ def _vlr_record(props: dict, distance_m: float, geom: str) -> dict:
 def landfills_near(lat: float, lng: float, radius_m: int = 2000) -> list[dict] | None:
     """Victorian Landfill Register entries near a point, nearest first.
 
-    Queries the point and polygon layers and merges them, de-duplicated by
-    ``landfill_register_number`` with the polygon geometry preferred (a
-    polygon gives a real distance to the tip face; the point is a centroid).
+    Queries the point and polygon layers concurrently and merges them,
+    de-duplicated by ``landfill_register_number`` with the polygon geometry
+    preferred (a polygon gives a real distance to the tip face; the point is
+    a centroid).
     Includes closed legacy landfills, which is the whole reason this layer is
     interesting. ``None`` on failure, ``[]`` when nothing is nearby.
     """
     if radius_m <= 0:
         raise ValueError("radius_m must be positive")
 
-    poly_feats = _wfs_features(LAYER_VLR_POLYGON, lat, lng, radius_m, _DEFAULT_COUNT)
-    if poly_feats is None:
-        return None
-    point_feats = _wfs_features(LAYER_VLR_POINT, lat, lng, radius_m, _DEFAULT_COUNT)
-    if point_feats is None:
+    # The two layers are independent reads, so run them side by side: serially
+    # they cost 2 x (10s timeout + retry) = up to 40s on their own, which is
+    # most of the 25s /scores batch deadline by itself (latency review,
+    # 2026-08-27). One combined request was measured first and does not work:
+    # GeoServer reads a comma-separated ``typeNames`` as a JOIN and answers
+    # "Extracted invalid join sub-filter" to the bbox, so two requests it is.
+    #
+    # A local pool of 2, used and closed inside this call. The signals already
+    # run inside a ThreadPoolExecutor, and this deliberately does not add a
+    # third nesting level. ``child_context`` carries the caller's fetch budget
+    # into both workers; without it they would run unbudgeted.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_poly = pool.submit(child_context().run, _wfs_features,
+                             LAYER_VLR_POLYGON, lat, lng, radius_m, _DEFAULT_COUNT)
+        f_point = pool.submit(child_context().run, _wfs_features,
+                              LAYER_VLR_POINT, lat, lng, radius_m, _DEFAULT_COUNT)
+        poly_feats = f_poly.result()
+        point_feats = f_point.result()
+    if poly_feats is None or point_feats is None:
         return None
 
     by_number: dict = {}

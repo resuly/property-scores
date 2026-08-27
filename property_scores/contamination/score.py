@@ -632,6 +632,35 @@ _SANDS_ONSITE_M = 30
 # 30m=55 in, CBD 30m=1,685 out.
 _SANDS_DENSE_ROWS = 120
 
+# Wall-clock budget for ONE signal builder, enforced in sources/_common before
+# every HTTP attempt and every retry backoff.
+#
+# Why it exists (latency review, 2026-08-27). The politeness budget bounds a
+# request, not a signal. Worst case WITHOUT this cap:
+#   _landfill_signal = VLR polygon + VLR point + GA, serial,
+#                      each 2 attempts x 10s timeout          = 60s
+#   _historical_use_signal = up to 8 Sands pages, serial      = 160s
+# The three signals share the /scores ThreadPoolExecutor with the EPA and
+# industrial legs, whose own worst case is one 10s request. So the branch face
+# went from ~10s to ~60s while _BATCH_DEADLINE_S in api/main.py is 25s and the
+# gunicorn timeout is 60s: the deadline fires, the answer is thrown away, and
+# the abandoned thread leaks as a STRAGGLER.
+#
+# Worst case WITH the cap:
+#   each builder             <= 8s  (budget checked before every attempt, and
+#                                    the socket timeout clamped to what is
+#                                    left, so nothing overshoots it)
+#   the three run in parallel -> signal face <= ~8s, not 3 x 8s
+#   VLR polygon + point now also run side by side inside the landfill budget
+#   branch face = max(EPA 10s, industrial, ~8s) = ~10s
+# which is where the branch sat before the signals landed, and leaves the 25s
+# deadline its margin back.
+#
+# Exhausting the budget is fail-closed: status "error", exactly like an
+# unreachable register. A register we ran out of time to read has not been
+# read, so it blocks reassuring labels and the result is not cached.
+_SIGNAL_BUDGET_S = 8.0
+
 
 def _historical_use_signal(lat: float, lng: float, state: str | None) -> dict:
     """Sands directory trades at this address, whitelist-classified.
@@ -644,9 +673,13 @@ def _historical_use_signal(lat: float, lng: float, state: str | None) -> dict:
     if state != "VIC":
         return {"status": "not_integrated", "score": None, "entries": [],
                 "dense_precinct": False, "unattributed_a": False}
-    from property_scores.contamination.sources import vic_wfs
+    from property_scores.contamination.sources import _common, vic_wfs
     from property_scores.contamination.sources.sands_whitelist import classify
-    rows = vic_wfs.sands_near(lat, lng, radius_m=_SANDS_ONSITE_M)
+    try:
+        with _common.budget(_SIGNAL_BUDGET_S):
+            rows = vic_wfs.sands_near(lat, lng, radius_m=_SANDS_ONSITE_M)
+    except _common.BudgetExceeded:
+        rows = None  # out of time == not read (see _SIGNAL_BUDGET_S)
     if rows is None:
         return {"status": "error", "score": None, "entries": [],
                 "dense_precinct": False, "unattributed_a": False}
@@ -688,20 +721,29 @@ def _landfill_signal(lat: float, lng: float, state: str | None) -> dict:
     """Legacy and operating landfills. Landfills are the exception to the
     stays-with-the-site rule: gas and leachate do move, so nearby carries a
     real (bounded) component rather than evidence-only."""
-    from property_scores.contamination.sources import ga_waste, vic_wfs
+    from property_scores.contamination.sources import _common, ga_waste, vic_wfs
     entries = []
     failed = False
-    if state == "VIC":
-        vlr = vic_wfs.landfills_near(lat, lng, radius_m=1000)
-        if vlr is None:
-            failed = True
-        else:
-            entries += [{**r, "source": "VIC VLR"} for r in vlr]
-    ga = ga_waste.landfills_near(lat, lng, radius_m=1000)
-    if ga is None:
-        failed = True
-    else:
-        entries += [{**r, "source": "GA WMF"} for r in ga]
+    try:
+        # One budget for the whole builder, not per source: this is the
+        # longest chain of the three (VLR polygon + VLR point + GA).
+        with _common.budget(_SIGNAL_BUDGET_S):
+            if state == "VIC":
+                vlr = vic_wfs.landfills_near(lat, lng, radius_m=1000)
+                if vlr is None:
+                    failed = True
+                else:
+                    entries += [{**r, "source": "VIC VLR"} for r in vlr]
+            ga = ga_waste.landfills_near(lat, lng, radius_m=1000)
+            if ga is None:
+                failed = True
+            else:
+                entries += [{**r, "source": "GA WMF"} for r in ga]
+    except _common.BudgetExceeded:
+        # Whatever arrived before the clock ran out is dropped on purpose: a
+        # half-read landfill picture that says "nothing within 1km" is the
+        # Keele St failure shape, so the honest answer is "not read".
+        return {"status": "error", "score": None, "entries": []}
     if failed and not entries:
         return {"status": "error", "score": None, "entries": []}
     entries.sort(key=lambda e: e.get("distance_m") or 0)
@@ -723,16 +765,21 @@ def _groundwater_signal(lat: float, lng: float, state: str | None) -> dict:
     the regulator's own statement that groundwater HERE carries historical
     industrial contamination. Inside a zone is the one case where the
     "doesn't migrate" discount must give ground."""
+    from property_scores.contamination.sources import _common
     if state == "VIC":
         from property_scores.contamination.sources import vic_wfs
-        zones = vic_wfs.gqruz_near(lat, lng, radius_m=500)
         source = "VIC EPA GQRUZ"
     elif state == "SA":
         from property_scores.contamination.sources import sa_gpa
-        zones = sa_gpa.areas_near(lat, lng, radius_m=500)
         source = "SA EPA GPA"
     else:
         return {"status": "not_integrated", "score": None, "entries": []}
+    try:
+        with _common.budget(_SIGNAL_BUDGET_S):
+            zones = (vic_wfs.gqruz_near(lat, lng, radius_m=500) if state == "VIC"
+                     else sa_gpa.areas_near(lat, lng, radius_m=500))
+    except _common.BudgetExceeded:
+        zones = None  # out of time == not read (see _SIGNAL_BUDGET_S)
     if zones is None:
         return {"status": "error", "score": None, "entries": []}
     inside = [z for z in zones if z.get("inside")]

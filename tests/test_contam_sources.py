@@ -25,6 +25,11 @@ from property_scores.contamination.sources import (
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "contam_sources")
 
+# Captured at import, i.e. before the autouse _isolate fixture zeroes it for
+# the other tests. This is the shipped backoff, and the backoff test asserts
+# on it rather than on a literal so it cannot drift silently.
+SHIPPED_RETRY_SLEEP_S = _common._RETRY_SLEEP_S
+
 MELBOURNE = (-37.8136, 144.9631)
 BOTANY = (-33.9500, 151.2000)
 EDWARDSTOWN = (-34.9800, 138.5700)
@@ -84,6 +89,33 @@ def install_responses(monkeypatch, responses):
     return calls
 
 
+def install_responses_by_layer(monkeypatch, by_type_name):
+    """Serve a response per WFS ``typeNames``, order-independent.
+
+    ``landfills_near`` queries the VLR polygon and point layers concurrently
+    (latency fix, 2026-08-27), so "the first request gets the first response"
+    is no longer a fact about the adapter. Keying on the layer says what these
+    tests actually mean: THIS layer answers THIS payload.
+    """
+    calls = []
+
+    def _get(url, params=None, timeout=None, headers=None):
+        params = params or {}
+        calls.append({"url": url, "params": params,
+                      "timeout": timeout, "headers": headers or {}})
+        try:
+            item = by_type_name[params.get("typeNames")]
+        except KeyError:  # pragma: no cover - test wiring error
+            raise AssertionError(
+                f"unstubbed layer {params.get('typeNames')!r}") from None
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    monkeypatch.setattr(_common.requests, "get", _get)
+    return calls
+
+
 # ---------------------------------------------------------------------------
 # Shared politeness contract
 # ---------------------------------------------------------------------------
@@ -111,6 +143,107 @@ def test_upstream_error_body_is_not_retried(monkeypatch):
         monkeypatch, [FakeResponse({"error": {"code": 400}})])
     assert _common.fetch_json("https://example.test") == {"error": {"code": 400}}
     assert len(calls) == 1
+
+
+def test_retry_backoff_is_a_real_backoff(monkeypatch):
+    """0.5s was a hammer, not a backoff: the retry only fires on a
+    transport-level failure, i.e. when the far end is already unhappy."""
+    import requests as real_requests
+    slept = []
+    monkeypatch.setattr(_common, "_RETRY_SLEEP_S", SHIPPED_RETRY_SLEEP_S)
+    monkeypatch.setattr(_common._time, "sleep", slept.append)
+    install_responses(monkeypatch, [real_requests.ConnectionError("boom")])
+    assert _common.fetch_json("https://example.test") is None
+    assert slept == [SHIPPED_RETRY_SLEEP_S]
+    assert SHIPPED_RETRY_SLEEP_S >= 2.0
+
+
+# ---------------------------------------------------------------------------
+# Wall-clock budget (2026-08-27 latency review)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def fake_clock(monkeypatch):
+    """A monotonic clock the test advances by hand, so budget tests cost 0s."""
+    now = [1000.0]
+    monkeypatch.setattr(_common, "_now", lambda: now[0])
+    return now
+
+
+def test_unbudgeted_calls_keep_the_full_timeout(monkeypatch):
+    """The budget is opt-in: outside a budget block nothing is clamped."""
+    calls = install_responses(monkeypatch, [FakeResponse({"features": []})])
+    assert _common.remaining_budget() is None
+    _common.fetch_json("https://example.test")
+    assert calls[0]["timeout"] == 10
+
+
+def test_socket_timeout_is_clamped_to_the_remaining_budget(
+        monkeypatch, fake_clock):
+    calls = install_responses(monkeypatch, [FakeResponse({"features": []})])
+    with _common.budget(8.0):
+        fake_clock[0] += 5.0
+        _common.fetch_json("https://example.test")
+    # 3s left, so a 10s socket timeout would overshoot the budget by 7s.
+    assert calls[0]["timeout"] == pytest.approx(3.0)
+
+
+def test_a_spent_budget_refuses_to_start_the_call(monkeypatch, fake_clock):
+    calls = install_responses(monkeypatch, [FakeResponse({"features": []})])
+    with pytest.raises(_common.BudgetExceeded):
+        with _common.budget(8.0):
+            fake_clock[0] += 8.5
+            _common.fetch_json("https://example.test")
+    assert calls == [], "started a request that could not finish in budget"
+
+
+def test_a_spent_budget_stops_the_retry_instead_of_sleeping(
+        monkeypatch, fake_clock):
+    """The retry backoff must not outlive the budget either."""
+    import requests as real_requests
+    monkeypatch.setattr(_common, "_RETRY_SLEEP_S", SHIPPED_RETRY_SLEEP_S)
+    slept = []
+    monkeypatch.setattr(_common._time, "sleep", slept.append)
+
+    def _get(url, params=None, timeout=None, headers=None):
+        fake_clock[0] += timeout  # the request burned its whole timeout
+        raise real_requests.ConnectionError("boom")
+
+    monkeypatch.setattr(_common.requests, "get", _get)
+    with pytest.raises(_common.BudgetExceeded):
+        with _common.budget(8.0):
+            _common.fetch_json("https://example.test")
+    assert slept == [], "slept a 2s backoff with no budget left to use it"
+
+
+def test_budget_is_restored_after_the_block(monkeypatch, fake_clock):
+    with _common.budget(8.0):
+        assert _common.remaining_budget() == pytest.approx(8.0)
+    assert _common.remaining_budget() is None
+    _common.check_budget()  # must not raise once the block is gone
+
+
+def test_child_context_carries_the_budget_into_a_worker_thread(
+        monkeypatch, fake_clock):
+    """vic_wfs runs the two VLR layers on a local pool; unbudgeted workers
+    would put the whole point of the budget back on the floor."""
+    from concurrent.futures import ThreadPoolExecutor
+    with _common.budget(8.0):
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            inherited = pool.submit(
+                _common.child_context().run, _common.remaining_budget).result()
+            plain = pool.submit(_common.remaining_budget).result()
+    assert inherited == pytest.approx(8.0)
+    assert plain is None
+
+
+def test_fetch_bytes_honours_the_budget(monkeypatch, fake_clock):
+    """SA's whole-of-state bundle goes through the other fetcher."""
+    calls = install_responses(monkeypatch, [FakeResponse({})])
+    with _common.budget(8.0):
+        fake_clock[0] += 6.0
+        _common.fetch_bytes("https://example.test")
+    assert calls[0]["timeout"] == pytest.approx(2.0)
 
 
 # ---------------------------------------------------------------------------
@@ -349,7 +482,10 @@ def test_sands_paging_sends_sortby_and_startindex(monkeypatch):
 def test_vlr_parses_points_and_polygons(monkeypatch):
     poly = load_fixture("vic_vlr_polygon_melbourne.json")
     point = load_fixture("vic_vlr_point_melbourne.json")
-    install_responses(monkeypatch, [FakeResponse(poly), FakeResponse(point)])
+    install_responses_by_layer(monkeypatch, {
+        vic_wfs.LAYER_VLR_POLYGON: FakeResponse(poly),
+        vic_wfs.LAYER_VLR_POINT: FakeResponse(point),
+    })
     sites = vic_wfs.landfills_near(*MELBOURNE, 20000)
     assert sites is not None and sites
     assert {s["geom"] for s in sites} == {"polygon", "point"}
@@ -362,8 +498,10 @@ def test_vlr_folds_not_available_sentinel_to_none(monkeypatch):
     point = load_fixture("vic_vlr_point_melbourne.json")
     raw = [f["properties"]["landfill_name"] for f in point["features"]]
     assert "Not available" in raw, "fixture lost the trap"
-    install_responses(monkeypatch, [
-        FakeResponse({"features": []}), FakeResponse(point)])
+    install_responses_by_layer(monkeypatch, {
+        vic_wfs.LAYER_VLR_POLYGON: FakeResponse({"features": []}),
+        vic_wfs.LAYER_VLR_POINT: FakeResponse(point),
+    })
     sites = vic_wfs.landfills_near(*MELBOURNE, 20000)
     assert sites is not None
     assert all(s["address"] != "Not available" for s in sites)

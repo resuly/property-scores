@@ -189,6 +189,11 @@ def _artefact_paths() -> list[tuple[str, Path]]:
         paths.append(("worldcover_vrt", Path(_LC_VRT)))
     except Exception:
         logger.exception("land-cover artefact unavailable for the score stamp")
+    # VIC Sands attribution depends on the shared cadastre snapshot. A parcel
+    # DB swap can move a historical activity onto/off the queried lot without
+    # changing score code, so downstream parcel caches must see a new stamp.
+    paths.append(("parcels_db", Path(os.environ.get(
+        "PARCELS_DB", "/data/parcels/parcels.duckdb"))))
     return paths
 
 

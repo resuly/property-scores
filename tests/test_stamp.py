@@ -60,6 +60,19 @@ def test_components_name_what_they_cover():
     assert all(isinstance(v, str) for v in parts.values())
 
 
+def test_parcel_database_generation_is_stamped(monkeypatch, tmp_path):
+    parcels = tmp_path / "parcels.duckdb"
+    parcels.write_bytes(b"generation-one")
+    monkeypatch.setenv("PARCELS_DB", str(parcels))
+
+    paths = dict(stamp._artefact_paths())
+    assert paths["parcels_db"] == parcels
+    before = stamp._artefact_tokens()["parcels_db"]
+
+    parcels.write_bytes(b"generation-two-is-different")
+    assert stamp._artefact_tokens()["parcels_db"] != before
+
+
 def test_noise_config_signature_is_the_engines_own(monkeypatch):
     """Not a re-derivation. _CONFIG_SIG already encodes every flag and tunable
     that changes noise numbers without changing code; copying that logic here

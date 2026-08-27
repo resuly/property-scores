@@ -717,12 +717,35 @@ def _historical_use_signal(lat: float, lng: float, state: str | None) -> dict:
                 "dense_precinct": False, "unattributed_a": False,
                 "on_site": False}
     entries = []
-    a_hits = 0
+    classified_rows = []
     for row in rows:
         hit = classify(row.get("business_type"))
         if hit is None:
             continue
         tier, activity = hit
+        classified_rows.append((row, tier, activity))
+
+    # Radius is the safe fallback, but where the shared cadastre is available
+    # it can answer the question the directory geocoder cannot: whether the
+    # historical point falls inside THIS lot.  Address points may be snapped
+    # from the kerb; evidence points are strict containment only.
+    from property_scores.contamination import parcel_attribution
+    evidence_points = [(row.get("lat"), row.get("lng"))
+                       for row, _, _ in classified_rows]
+    can_attribute = bool(evidence_points) and all(
+        isinstance(point_lat, (int, float)) and isinstance(point_lng, (int, float))
+        for point_lat, point_lng in evidence_points
+    )
+    flags = (parcel_attribution.same_parcel_flags(
+        "VIC", lat, lng, evidence_points) if can_attribute else None)
+    parcel_attributed = flags is not None
+    if flags is None:
+        flags = [True] * len(classified_rows)
+
+    a_hits = 0
+    for (row, tier, activity), same_parcel in zip(classified_rows, flags):
+        if parcel_attributed and not same_parcel:
+            continue
         years = row.get("directories") or []
         entries.append({
             "business_type": row.get("business_type"),
@@ -735,7 +758,7 @@ def _historical_use_signal(lat: float, lng: float, state: str | None) -> dict:
         if tier == "A":
             a_hits += 1
     dense = len(rows) > _SANDS_DENSE_ROWS
-    if dense:
+    if dense and not parcel_attributed:
         # A whole block face geocoded onto this point: proximity no longer
         # implies identity, so no score until parcel matching lands.
         score = None
@@ -746,7 +769,8 @@ def _historical_use_signal(lat: float, lng: float, state: str | None) -> dict:
     # station", review P1-3): the caller blocks reassuring labels on this.
     return {"status": "ok", "score": score,
             "dense_precinct": dense,
-            "unattributed_a": dense and a_hits > 0,
+            "parcel_attributed": parcel_attributed,
+            "unattributed_a": dense and not parcel_attributed and a_hits > 0,
             "on_site": score is not None,
             "entries": entries[:10]}
 

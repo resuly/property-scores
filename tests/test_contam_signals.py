@@ -119,6 +119,61 @@ def test_historical_density_gate(monkeypatch):
     assert sig["entries"]                 # 但 evidence 保留
 
 
+def test_historical_dense_same_parcel_can_score(monkeypatch):
+    rows = ([{"business_type": "Service Stations", "directories": [1954],
+              "distance_m": 5, "lat": MELB[0], "lng": MELB[1]}]
+            + [{"business_type": "Accountants", "directories": [1930],
+                "distance_m": 10, "lat": MELB[0], "lng": MELB[1]}] * 200)
+    from property_scores.contamination import parcel_attribution
+    from property_scores.contamination.sources import vic_wfs
+    monkeypatch.setattr(vic_wfs, "sands_near", lambda *a, **k: rows)
+    monkeypatch.setattr(parcel_attribution, "same_parcel_flags",
+                        lambda *a, **k: [True])
+
+    sig = cs._historical_use_signal(*MELB, "VIC")
+
+    assert sig["dense_precinct"] is True
+    assert sig["parcel_attributed"] is True
+    assert sig["unattributed_a"] is False
+    assert sig["score"] == 50
+    assert sig["on_site"] is True
+
+
+def test_historical_neighbour_parcel_is_not_on_site(monkeypatch):
+    rows = [{"business_type": "Service Stations", "directories": [1954],
+             "distance_m": 5, "lat": MELB[0], "lng": MELB[1]}]
+    from property_scores.contamination import parcel_attribution
+    from property_scores.contamination.sources import vic_wfs
+    monkeypatch.setattr(vic_wfs, "sands_near", lambda *a, **k: rows)
+    monkeypatch.setattr(parcel_attribution, "same_parcel_flags",
+                        lambda *a, **k: [False])
+
+    sig = cs._historical_use_signal(*MELB, "VIC")
+
+    assert sig["parcel_attributed"] is True
+    assert sig["score"] is None
+    assert sig["on_site"] is False
+    assert sig["entries"] == []
+
+
+def test_historical_parcel_unavailable_keeps_density_fallback(monkeypatch):
+    rows = ([{"business_type": "Service Stations", "directories": [1954],
+              "distance_m": 5, "lat": MELB[0], "lng": MELB[1]}]
+            + [{"business_type": "Accountants", "directories": [1930],
+                "distance_m": 10, "lat": MELB[0], "lng": MELB[1]}] * 200)
+    from property_scores.contamination import parcel_attribution
+    from property_scores.contamination.sources import vic_wfs
+    monkeypatch.setattr(vic_wfs, "sands_near", lambda *a, **k: rows)
+    monkeypatch.setattr(parcel_attribution, "same_parcel_flags",
+                        lambda *a, **k: None)
+
+    sig = cs._historical_use_signal(*MELB, "VIC")
+
+    assert sig["parcel_attributed"] is False
+    assert sig["score"] is None
+    assert sig["unattributed_a"] is True
+
+
 def test_historical_sparse_scores(monkeypatch):
     rows = [{"business_type": "Service Stations", "directories": [1932, 1954],
              "distance_m": 8},

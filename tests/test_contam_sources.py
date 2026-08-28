@@ -23,6 +23,7 @@ from property_scores.contamination.sources import (
     qld_ea,
     sa_gpa,
     sa_licensed,
+    tas_epa,
     vic_wfs,
 )
 
@@ -69,10 +70,81 @@ def _isolate(monkeypatch):
     nsw_sites.clear_cache()
     sa_gpa.clear_cache()
     sa_licensed.clear_cache()
+    tas_epa.clear_cache()
     yield
     nsw_sites.clear_cache()
     sa_gpa.clear_cache()
     sa_licensed.clear_cache()
+    tas_epa.clear_cache()
+
+
+def test_tas_epa_adapters_are_evidence_only_and_privacy_slim(monkeypatch):
+    regulated_payload = {"features": [{
+        "geometry": {"type": "Point", "coordinates": [147.3779101, -41.3006338]},
+        "properties": {
+            "OBJECTID": 1,
+            "SITEID": 6198,
+            "PREMISES_NAME": "Mountain Stream Fishery",
+            "CLIENT_NAME": "Jane Citizen",
+            "COMPANY_OR_BUSINESS_NO": "123456789",
+            "ACTIVITY_CATEGORY": "Food Production",
+            "LIST_GUID": "{50b02e07-0960-4b38-bddb-19f3540698de}",
+        },
+    }]}
+    calls = install_responses(monkeypatch, [
+        FakeResponse({"count": 1}), FakeResponse(regulated_payload)])
+
+    rows = tas_epa.regulated_sites_near(-41.3006338, 147.3779101, 75)
+
+    assert rows == [{
+        "site_id": "6198",
+        "premises_name": "Mountain Stream Fishery",
+        "activity_category": "Food Production",
+        "source_kind": "EPA regulated site",
+        "distance_m": 0,
+    }]
+    assert calls[1]["url"] == tas_epa.REGULATED_QUERY_URL
+    assert "CLIENT_NAME" not in calls[1]["params"]["outFields"]
+    assert "COMPANY_OR_BUSINESS_NO" not in calls[1]["params"]["outFields"]
+    assert "LIST_GUID" not in calls[1]["params"]["outFields"]
+    assert "Citizen" not in json.dumps(rows)
+    assert "50b02e07" not in json.dumps(rows)
+
+    upss_payload = {"features": [{
+        "geometry": {"type": "Point", "coordinates": [147.3418094, -42.8122728]},
+        "properties": {
+            "OBJECTID": 2,
+            "SITE_ID": 348,
+            "STATUS": "Active",
+            "LIST_GUID": "{08bae563-3145-4494-8091-96371b3b6c01}",
+        },
+    }]}
+    install_responses(monkeypatch, [
+        FakeResponse({"count": 1}), FakeResponse(upss_payload)])
+    rows = tas_epa.upss_near(-42.8122728, 147.3418094, 75)
+    assert rows[0]["source_kind"] == "EPA underground petroleum storage system"
+    assert rows[0]["site_id"] == "348"
+    assert rows[0]["status"] == "Active"
+    assert "LIST_GUID" not in json.dumps(rows)
+
+
+def test_tas_epa_malformed_payload_fails_closed(monkeypatch):
+    install_responses(monkeypatch, [
+        FakeResponse({"count": 1}), FakeResponse({"features": [None]})])
+    assert tas_epa.regulated_sites_near(-42.8, 147.3) is None
+
+
+@pytest.mark.parametrize("page", [
+    {"features": []},
+    {"features": [{
+        "geometry": {"type": "Point", "coordinates": [147.3, -42.8]},
+        "properties": {"OBJECTID": 1, "SITEID": None},
+    }]},
+])
+def test_tas_epa_count_or_required_id_mismatch_fails_closed(monkeypatch, page):
+    install_responses(monkeypatch, [
+        FakeResponse({"count": 1}), FakeResponse(page)])
+    assert tas_epa.regulated_sites_near(-42.8, 147.3) is None
 
 
 def test_second_batch_adapters_are_evidence_only_and_privacy_slim(monkeypatch):

@@ -55,7 +55,7 @@
   <div class="sb">
     <a href="/" style="font-size:12px;color:var(--text-3);text-decoration:none">&larr; All Scores</a>
     <div class="sb-title">Contamination Risk</div>
-    <div class="sb-desc">Check EPA contamination records and industrial proximity. Click a site card to see it on the map.</div>
+    <div class="sb-desc">Check EPA contamination records, regulated-activity context and industrial proximity. Click mapped site cards to see them on the map.</div>
     <div class="input-row">
       <input id="lat" type="number" step="any" placeholder="Latitude" value="-37.8136">
       <input id="lng" type="number" step="any" placeholder="Longitude" value="144.9631">
@@ -74,10 +74,11 @@
     <details class="method-toggle">
       <summary>Methodology</summary>
       <div class="method-body">
-        <p>Scores 0&ndash;100 (100 = cleanest) using two layers:</p>
+        <p>Scores 0&ndash;100 (100 = cleanest) using separate finding, signal and context layers:</p>
         <p><strong>1. EPA Registers</strong> &mdash; VIC Priority Sites Register, NSW Contaminated Land, WA DWER database. Official government records of confirmed or suspected contamination.</p>
         <p><strong>2. Industrial Proximity</strong> &mdash; Overture POI data for fuel stations, chemical plants, auto repair, dry cleaners, waste facilities within 500m.</p>
-        <p>QLD, SA, TAS, ACT, NT rely on industrial proximity only (no public EPA API).</p>
+        <p><strong>3. Evidence-only context</strong> &mdash; regulated or licensed activities in SA, Queensland and Tasmania, plus Tasmania underground petroleum storage notifications. These records do not change the score and are not contaminated-land findings.</p>
+        <p>Only VIC and NSW contaminated-land registers are integrated. Other states remain marked register not integrated even when separate context is available.</p>
       </div>
     </details>
   </div>
@@ -105,6 +106,12 @@ function scoreColor(s) {
   if (s >= 40) return '#d97706';
   if (s >= 20) return '#ea580c';
   return '#dc2626';
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[ch]);
 }
 
 async function initMap() {
@@ -232,6 +239,8 @@ async function query() {
     const parts = [];
     if (d.epa_sites_count > 0) parts.push(`${d.epa_sites_count} EPA contamination record${d.epa_sites_count > 1 ? 's' : ''} within 2km`);
     if (d.industrial.count_500m > 0) parts.push(`${d.industrial.count_500m} industrial sites within 500m`);
+    const contextEntries = d.historical_use?.entries || [];
+    if (contextEntries.length > 0) parts.push(`${contextEntries.length} evidence-only activity or storage record${contextEntries.length > 1 ? 's' : ''} within 500m`);
     if (!parts.length && epaOk && indOk && sc >= 80) parts.push('No contamination records or industrial sites nearby');
     const summary = parts.length ? parts.join('. ') + '.' : '';
 
@@ -271,6 +280,25 @@ async function query() {
       html += epaOk
         ? '<div style="font-size:12px;color:var(--safe);padding:4px 0">&#10003; No contamination sites found within 2km</div>'
         : `<div style="font-size:12px;color:var(--warn);padding:4px 0">The ${d.state} EPA register could not be searched for this address. Nothing here means it was not checked.</div>`;
+    }
+
+    // Regulated/licensed activity and UPSS records are nearby context only.
+    // Representative publisher points are never rendered as on-site findings.
+    if (contextEntries.length > 0) {
+      html += '<div class="section-hdr">Evidence-only activity context (500m)</div>';
+      for (const entry of contextEntries) {
+        const source = String(entry.source || entry.source_kind || 'Government activity record');
+        const petroleum = source.toLowerCase().includes('petroleum storage');
+        const kind = petroleum ? 'Petroleum storage notification' : 'Regulated or licensed activity';
+        const name = entry.premises_name || entry.site || entry.activity || entry.site_id || 'Activity record';
+        const detail = [entry.activity_category, entry.status, source].filter(Boolean).join(' · ');
+        html += `<div class="epa-card" style="cursor:default">
+          <div class="epa-name">${escapeHtml(name)}</div>
+          <div class="epa-issue">${escapeHtml(kind)}</div>
+          <div class="epa-meta"><span>${escapeHtml(detail)}</span><span>${escapeHtml(entry.distance_m)}m</span></div>
+        </div>`;
+      }
+      html += '<div style="font-size:11px;color:var(--text-3);padding:2px 0 6px">Nearby representative context only. It does not prove contamination or activity on this parcel.</div>';
     }
 
     // Industrial POIs on map + sidebar

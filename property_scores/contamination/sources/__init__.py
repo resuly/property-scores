@@ -16,10 +16,10 @@ The two must never be conflated. Collapsing an outage into an empty list is
 exactly how a dropped connection once turned a contaminated site into
 "Very Clean" and cached the lie for an hour.
 
-Licensing note (see limon-ops docs/contamination-data-sources-tracker.md):
-all four sources are CC BY 4.0 or equivalent and require attribution on every
-delivery surface that exposes the records. NSW's licence version is still
-being confirmed for paid API redistribution.
+Licensing note: the public-source set is Creative Commons Attribution or
+equivalent and requires attribution on every delivery surface that exposes the
+records. NSW's licence version is still being confirmed for paid API
+redistribution; TAS EPA Regulated Premises and UPSS are CC BY 3.0 AU.
 """
 
 from property_scores.contamination.sources import (  # noqa: F401
@@ -29,10 +29,11 @@ from property_scores.contamination.sources import (  # noqa: F401
     qld_ea,
     sa_gpa,
     sa_licensed,
+    tas_epa,
     vic_wfs,
 )
 
 __all__ = [
     "nsw_sites", "nsw_groundwater", "vic_wfs", "sa_gpa", "sa_licensed",
-    "qld_ea", "ga_waste",
+    "qld_ea", "ga_waste", "tas_epa",
 ]

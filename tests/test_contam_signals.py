@@ -229,6 +229,88 @@ def test_sa_and_qld_licensed_activities_are_on_site_evidence_only(monkeypatch):
     assert qld["on_site"] is True
 
 
+def test_tas_epa_context_is_evidence_only(monkeypatch):
+    from property_scores.contamination.sources import tas_epa
+    monkeypatch.setattr(tas_epa, "regulated_sites_near", lambda *a, **k: [{
+        "site_id": 6198,
+        "premises_name": "Mountain Stream Fishery",
+        "activity_category": "Food Production",
+        "distance_m": 0,
+    }])
+    monkeypatch.setattr(tas_epa, "upss_near", lambda *a, **k: [{
+        "site_id": 348,
+        "source_kind": "EPA underground petroleum storage system",
+        "status": "Active",
+        "distance_m": 13,
+    }])
+
+    sig = cs._historical_use_signal(-42.8, 147.3, "TAS")
+
+    assert sig["status"] == "ok"
+    assert sig["score"] is None
+    assert sig["on_site"] is False
+    assert sig["evidence_radius_m"] == 500
+    assert sig["representative_points_only"] is True
+    assert {row["source"] for row in sig["entries"]} == {
+        "TAS EPA Regulated Sites",
+        "TAS EPA Underground Petroleum Storage Systems",
+    }
+    assert all(row["evidence_only"] is True for row in sig["entries"])
+    assert "CLIENT_NAME" not in str(sig)
+
+
+def test_tas_score_response_carries_exact_source_rights(monkeypatch):
+    from property_scores.contamination.sources import tas_epa
+    monkeypatch.setattr(tas_epa, "regulated_sites_near", lambda *a, **k: [])
+    monkeypatch.setattr(tas_epa, "upss_near", lambda *a, **k: [{
+        "site_id": "348", "status": "Active", "distance_m": 0,
+        "source_kind": "EPA underground petroleum storage system",
+    }])
+    monkeypatch.setattr(cs, "_detect_state", lambda *a: "TAS")
+    monkeypatch.setattr(cs, "_industrial_proximity", lambda *a: {
+        "score": 95, "count_500m": 0, "nearest_m": None, "sites": [],
+        "industrial_status": "ok",
+    })
+    monkeypatch.setattr(cs, "_landfill_signal", lambda *a: {
+        "status": "not_integrated", "score": None, "entries": []})
+    monkeypatch.setattr(cs, "_groundwater_signal", lambda *a: {
+        "status": "not_integrated", "score": None, "entries": []})
+
+    cs._contam_cache.clear()
+    result = cs.contamination_score(-42.8122728, 147.3418094)
+
+    assert result["attribution"] == [{
+        "source": "TAS EPA Underground Petroleum Storage Systems",
+        "attribution": (
+            "EPA Underground Petroleum Storage Systems from theLIST "
+            "© State of Tasmania"
+        ),
+        "licence": "CC BY 3.0 AU",
+        "licence_url": "https://creativecommons.org/licenses/by/3.0/au/",
+    }]
+
+
+def test_tas_partial_context_blocks_reassuring_label(monkeypatch):
+    from property_scores.contamination.sources import tas_epa
+    monkeypatch.setattr(tas_epa, "regulated_sites_near", lambda *a, **k: [{
+        "site_id": 6198,
+        "premises_name": "Mountain Stream Fishery",
+        "activity_category": "Food Production",
+        "distance_m": 0,
+    }])
+    monkeypatch.setattr(tas_epa, "upss_near", lambda *a, **k: None)
+
+    sig = cs._historical_use_signal(-42.8, 147.3, "TAS")
+
+    assert sig["status"] == "partial"
+    assert sig["entries"]
+    _stub_signals(monkeypatch, hist=sig)
+    monkeypatch.setattr(cs, "_detect_state", lambda *a: "TAS")
+    result = cs.contamination_score(-42.8, 147.3)
+    assert result["label"] == cs.LABEL_INCOMPLETE
+    assert result.get("cached") is not True
+
+
 def test_sa_licensed_same_parcel_filter_is_evidence_only(monkeypatch):
     from property_scores.contamination import parcel_attribution
     from property_scores.contamination.sources import sa_licensed

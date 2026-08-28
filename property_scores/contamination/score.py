@@ -605,10 +605,10 @@ def _contamination_label(score: int | None, epa_status: str, ind_failed: bool,
         return label
     if epa_status == "error" or ind_failed:
         return LABEL_INCOMPLETE
-    if epa_status == "not_integrated":
-        return LABEL_REGISTER_NOT_CHECKED
     if context_flagged:
         return LABEL_MAPPED_CONTEXT
+    if epa_status == "not_integrated":
+        return LABEL_REGISTER_NOT_CHECKED
     return label
 
 
@@ -627,6 +627,22 @@ def _contamination_label(score: int | None, epa_status: str, ind_failed: bool,
 # than this misses the shopfront itself, looser starts scoring the neighbours
 # (the exact failure the on-site rework removed).
 _SANDS_ONSITE_M = 30
+_TAS_EVIDENCE_RADIUS_M = 500
+_TAS_SOURCE_RIGHTS = {
+    "TAS EPA Regulated Sites": {
+        "attribution": "EPA Regulated Sites [Documents] from theLIST © State of Tasmania",
+        "licence": "CC BY 3.0 AU",
+        "licence_url": "https://creativecommons.org/licenses/by/3.0/au/",
+    },
+    "TAS EPA Underground Petroleum Storage Systems": {
+        "attribution": (
+            "EPA Underground Petroleum Storage Systems from theLIST "
+            "© State of Tasmania"
+        ),
+        "licence": "CC BY 3.0 AU",
+        "licence_url": "https://creativecommons.org/licenses/by/3.0/au/",
+    },
+}
 # Density gate, measured 2026-08-27: Melbourne CBD has 1,684 deduped rows and
 # 15 tier-A trades within 20m because directory geocoding clusters whole block
 # faces onto near-identical points; Malvern (residential) has 26 rows at the
@@ -674,7 +690,7 @@ def _historical_use_signal(lat: float, lng: float, state: str | None) -> dict:
     here, not that contamination was found (official disclaimer wording).
     Tier B is evidence-only.
     """
-    if state in ("SA", "QLD"):
+    if state in ("SA", "QLD", "TAS"):
         from property_scores.contamination.sources import _common
         parcel_flags = None
         try:
@@ -694,9 +710,28 @@ def _historical_use_signal(lat: float, lng: float, state: str | None) -> dict:
                             timeout_s=remaining,
                         )
                 else:
-                    from property_scores.contamination.sources import qld_ea
-                    rows = qld_ea.activities_at(lat, lng)
-                    source = "QLD Environmental Authority"
+                    if state == "QLD":
+                        from property_scores.contamination.sources import qld_ea
+                        rows = qld_ea.activities_at(lat, lng)
+                        source = "QLD Environmental Authority"
+                    else:
+                        from property_scores.contamination.sources import tas_epa
+                        regulated = tas_epa.regulated_sites_near(
+                            lat, lng, radius_m=_TAS_EVIDENCE_RADIUS_M)
+                        upss = tas_epa.upss_near(
+                            lat, lng, radius_m=_TAS_EVIDENCE_RADIUS_M)
+                        failed = regulated is None or upss is None
+                        rows = None if failed and not (regulated or upss) else [
+                            *[{
+                                **row,
+                                "source": "TAS EPA Regulated Sites",
+                            } for row in (regulated or [])],
+                            *[{
+                                **row,
+                                "source": "TAS EPA Underground Petroleum Storage Systems",
+                            } for row in (upss or [])],
+                        ]
+                        source = "TAS EPA LIST"
         except _common.BudgetExceeded:
             rows = None
         if rows is None:
@@ -717,8 +752,15 @@ def _historical_use_signal(lat: float, lng: float, state: str | None) -> dict:
         for row in rows:
             public_row = {key: value for key, value in row.items()
                           if key not in ("lat", "lng")}
-            entries.append({**public_row, "source": source,
+            entries.append({**public_row, "source": public_row.get("source") or source,
                             "evidence_only": True})
+        if state == "TAS":
+            return {"status": "partial" if failed else "ok",
+                    "score": None, "entries": entries[:10],
+                    "dense_precinct": False, "unattributed_a": False,
+                    "on_site": False,
+                    "evidence_radius_m": _TAS_EVIDENCE_RADIUS_M,
+                    "representative_points_only": True}
         result = {"status": "partial" if cadastre_partial else "ok",
                   "score": None, "entries": entries[:10],
                 "dense_precinct": False, "unattributed_a": False,
@@ -1057,6 +1099,16 @@ def contamination_score(lat: float, lng: float) -> dict:
     }
     result["epa_status"] = epa_status
     result["industrial_status"] = industrial.get("industrial_status", "ok")
+    delivered_tas_sources = {
+        entry.get("source")
+        for entry in historical.get("entries", [])
+        if entry.get("source") in _TAS_SOURCE_RIGHTS
+    }
+    if delivered_tas_sources:
+        result["attribution"] = [
+            {"source": source, **_TAS_SOURCE_RIGHTS[source]}
+            for source in sorted(delivered_tas_sources)
+        ]
 
     notes: list[str] = []
     if epa_failed:

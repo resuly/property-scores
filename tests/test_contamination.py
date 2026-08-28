@@ -310,6 +310,18 @@ def test_reassuring_label_blocked_when_register_not_integrated(score):
     assert "clean" not in label.lower()
 
 
+@pytest.mark.parametrize("score", [70, 80, 95, 100])
+def test_evidence_context_beats_register_not_integrated_label(score):
+    label = cs._contamination_label(
+        score,
+        epa_status="not_integrated",
+        ind_failed=False,
+        context_flagged=True,
+    )
+    assert label == cs.LABEL_MAPPED_CONTEXT
+    assert "clean" not in label.lower()
+
+
 @pytest.mark.parametrize("score", [10, 25, 45, 65])
 def test_risk_labels_survive_degradation(score):
     # a bad band is still useful information, only reassurance is withheld

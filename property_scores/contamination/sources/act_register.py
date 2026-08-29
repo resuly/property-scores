@@ -6,8 +6,8 @@ matches an active ACTGOV Block polygon containing the query point.
 
 ``None`` means either publisher could not be read or the subject block could
 not be resolved. ``[]`` means both sources were checked and the subject block
-has no register row. Failed refreshes may use a last-good in-process register
-snapshot; they never turn into an empty checked-clear result.
+has no register row. Failed refreshes may use a recent last-good in-process
+register snapshot; snapshots older than the bounded grace period fail closed.
 """
 from __future__ import annotations
 
@@ -29,6 +29,7 @@ BLOCK_QUERY_URL = (
     "ACTGOV_BLOCKS/FeatureServer/0/query"
 )
 REGISTER_CACHE_TTL_S = 24 * 3600
+REGISTER_MAX_STALE_S = 7 * 24 * 3600
 _MAX_REGISTER_ROWS = 5_000
 _ACTIVE_LIFECYCLES = {"PROPOSED", "REGISTERED", "APPROVED", "OCCUPIED"}
 _REGISTER_DISTRICTS = {
@@ -134,8 +135,17 @@ def all_rows(force_refresh: bool = False) -> list[dict] | None:
     rows = fetch_all_rows()
     if rows is None:
         if _cache is not None:
-            logger.warning("ACT contaminated-sites refresh failed; serving stale cache")
-            return _cache[0]
+            cached_rows, cached_at = _cache
+            age_s = now - cached_at
+            if age_s <= REGISTER_MAX_STALE_S:
+                logger.warning(
+                    "ACT contaminated-sites refresh failed; serving recent "
+                    "last-good cache age_s=%.0f", age_s)
+                return cached_rows
+            logger.error(
+                "ACT contaminated-sites refresh failed; last-good cache "
+                "expired age_s=%.0f max_stale_s=%s",
+                age_s, REGISTER_MAX_STALE_S)
         return None
     _cache = (rows, now)
     return rows

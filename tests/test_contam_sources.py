@@ -172,6 +172,7 @@ def test_act_register_handles_publisher_optional_fields_and_one_reversed_row():
 
 
 def test_act_register_refresh_failure_serves_last_good(monkeypatch):
+    act_register.clear_cache()
     clock = [1000.0]
     monkeypatch.setattr(act_register._time, "time", lambda: clock[0])
     monkeypatch.setattr(act_register, "fetch_all_rows", lambda: act_register._parse_register_rows(
@@ -180,6 +181,19 @@ def test_act_register_refresh_failure_serves_last_good(monkeypatch):
     clock[0] += act_register.REGISTER_CACHE_TTL_S + 1
     monkeypatch.setattr(act_register, "fetch_all_rows", lambda: None)
     assert act_register.all_rows() == first
+
+
+def test_act_register_refresh_failure_rejects_expired_last_good(monkeypatch):
+    act_register.clear_cache()
+    clock = [1_700_000_000.0]
+    monkeypatch.setattr(act_register._time, "time", lambda: clock[0])
+    monkeypatch.setattr(act_register, "fetch_all_rows", lambda: act_register._parse_register_rows(
+        _act_rows(), 2))
+    assert act_register.all_rows()
+
+    clock[0] += act_register.REGISTER_MAX_STALE_S + 1
+    monkeypatch.setattr(act_register, "fetch_all_rows", lambda: None)
+    assert act_register.all_rows() is None
 
 
 def load_fixture(name: str):

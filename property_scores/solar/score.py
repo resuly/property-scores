@@ -59,6 +59,13 @@ ORIENTATION_FACTOR = {
 }
 
 
+def _finite_metric(value):
+    """Return an upstream numeric metric or None for malformed JSON values."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value if math.isfinite(value) else None
+
+
 def _fetch_solar_data(lat: float, lng: float) -> dict | None:
     key = _cache_key(lat, lng)
     now = _time.time()
@@ -80,13 +87,13 @@ def _fetch_solar_data(lat: float, lng: float) -> dict | None:
                    for row in (annual_block, annual, metadata)):
             return None
         result = {
-            "ghi_kwh_m2": annual.get("GHI"),
-            "dni_kwh_m2": annual.get("DNI"),
-            "pvout_kwh_kwp": annual.get("PVOUT_csi"),
-            "gti_kwh_m2": annual.get("GTI_opta"),
-            "optimal_tilt_deg": annual.get("OPTA"),
-            "temp_avg_c": annual.get("TEMP"),
-            "elevation_m": annual.get("ELE"),
+            "ghi_kwh_m2": _finite_metric(annual.get("GHI")),
+            "dni_kwh_m2": _finite_metric(annual.get("DNI")),
+            "pvout_kwh_kwp": _finite_metric(annual.get("PVOUT_csi")),
+            "gti_kwh_m2": _finite_metric(annual.get("GTI_opta")),
+            "optimal_tilt_deg": _finite_metric(annual.get("OPTA")),
+            "temp_avg_c": _finite_metric(annual.get("TEMP")),
+            "elevation_m": _finite_metric(annual.get("ELE")),
             "source_metadata": {
                 "retrieved_at_ms": metadata.get("ts"),
                 "dataset_version": (metadata.get("version") or {}).get("data"),

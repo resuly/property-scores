@@ -722,7 +722,7 @@ def pois_near_detailed(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
 
 BUS_STOPS_FILE = "au_bus_stops.parquet"
 def water_crossings(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
-                    targets: list[tuple], radius_m: int = 2000) -> set:
+                    targets: list[tuple], radius_m: int = 2000) -> set | None:
     """Which targets require crossing a major water body from (lat, lng).
 
     targets: [(key, t_lng, t_lat), ...]. Returns the set of keys whose
@@ -734,8 +734,10 @@ def water_crossings(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
     """
     water_path = data_path(WATER_FILE)
     import os
-    if not targets or not os.path.exists(str(water_path)):
+    if not targets:
         return set()
+    if not os.path.exists(str(water_path)):
+        return None
     import math
     delta = radius_m / 111_000 * 1.5
     values = ", ".join(
@@ -760,7 +762,10 @@ def water_crossings(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
     try:
         hit = {row[0] for row in db.sql(sql).fetchall()}
     except Exception:
-        return set()
+        # Empty means the query completed and no crossing was found. None is
+        # deliberately different: callers must disclose that the check could
+        # not answer rather than turning an outage into "no water barrier".
+        return None
     return {targets[i][0] for i in hit}
 
 
@@ -831,6 +836,7 @@ def rail_stops_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
             FROM read_parquet('{path}')
             WHERE lat BETWEEN {lat - dlat} AND {lat + dlat}
               AND lng BETWEEN {lng - dlng} AND {lng + dlng}
+              AND lower(stop_name) NOT LIKE '%rail replacement bus%'
         )
         WHERE dist_m < {radius_m}
         ORDER BY dist_m

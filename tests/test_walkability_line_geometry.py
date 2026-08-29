@@ -3,7 +3,8 @@
 import duckdb
 
 from property_scores.common.overture import (pois_near_detailed, road_crossings,
-                                              walking_trails_near)
+                                              walking_trails_near,
+                                              water_crossings)
 
 
 def _roads_parquet(tmp_path):
@@ -73,6 +74,18 @@ def test_road_barrier_query_failure_is_explicit_not_fail_open():
         BrokenDB(), -33.86877, 151.14501,
         [("supermarket", 151.1465, -33.86877)],
         source="roads.parquet",
+    ) is None
+
+
+def test_water_barrier_query_failure_is_explicit_not_fail_open(tmp_path, monkeypatch):
+    path = tmp_path / "water.parquet"
+    path.write_bytes(b"not a parquet file")
+    monkeypatch.setattr(
+        "property_scores.common.overture.data_path", lambda _name: path)
+
+    assert water_crossings(
+        duckdb.connect(), -33.86877, 151.14501,
+        [("supermarket", 151.1465, -33.86877)],
     ) is None
 
 

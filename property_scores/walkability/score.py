@@ -245,7 +245,7 @@ def _elevations(coords: list[tuple[float, float]]) -> list | None:
     return None
 
 
-def _slope_penalty(lat: float, lng: float) -> float:
+def _slope_penalty(lat: float, lng: float, *, return_status: bool = False):
     """Estimate average walking slope from DEM. Returns 0-1 penalty multiplier.
 
     Samples elevation at 500m in 4 cardinal directions. Steep terrain
@@ -256,25 +256,31 @@ def _slope_penalty(lat: float, lng: float) -> float:
               (lat, lng + offset), (lat, lng - offset)]
     elevs = _elevations(coords)
     if not elevs:
-        return 1.0
+        result = (1.0, "unavailable_neutral", None)
+        return result if return_status else result[0]
 
     center = elevs[0]
     if center is None:
-        return 1.0
+        result = (1.0, "unavailable_neutral", None)
+        return result if return_status else result[0]
     diffs = [abs(e - center) for e in elevs[1:] if e is not None]
     if not diffs:
-        return 1.0
+        result = (1.0, "unavailable_neutral", None)
+        return result if return_status else result[0]
 
     avg_rise = sum(diffs) / len(diffs)
     grade_pct = avg_rise / 500 * 100
 
     if grade_pct < 3:
-        return 1.0
-    if grade_pct < 6:
-        return 0.9
-    if grade_pct < 10:
-        return 0.75
-    return 0.6
+        multiplier = 1.0
+    elif grade_pct < 6:
+        multiplier = 0.9
+    elif grade_pct < 10:
+        multiplier = 0.75
+    else:
+        multiplier = 0.6
+    result = (multiplier, "data_returned", round(grade_pct, 2))
+    return result if return_status else result[0]
 
 
 def walkability_score(lat: float, lng: float, radius_m: int = 1500,
@@ -350,11 +356,19 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
     nearest_detail: dict[str, dict] = {}
     top_pois: dict[str, list] = {}
     cat_counts: dict[str, int] = {}
+    unique_facilities: set[tuple] = set()
     items = pois_full if detailed else [(c, d, None, None, None) for c, d in pois]
     seen_names: dict[str, set] = {}
     for poi_cat, dist_m, plng, plat, pname in items:
         matched = _match_category(poi_cat, pname)
         if matched:
+            facility_key = (
+                matched,
+                (pname or poi_cat or "").lower().strip(),
+                round(float(plng), 5) if plng is not None else None,
+                round(float(plat), 5) if plat is not None else None,
+            )
+            unique_facilities.add(facility_key)
             cat_counts[matched] = cat_counts.get(matched, 0) + 1
             if matched not in nearest or dist_m < nearest[matched]:
                 nearest[matched] = dist_m
@@ -392,6 +406,7 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
     # across the Hunter River is not a walkable cafe. One spatial query for
     # all scenario-nearests; crossed scenarios take the barrier penalty.
     water_blocked: set = set()
+    water_barrier_degraded = False
     targets = [(sc, d["lng"], d["lat"]) for sc, d in nearest_detail.items()]
     road_blocked: set = set()
     road_barrier_degraded = False
@@ -406,7 +421,11 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
                             if sc not in ("train", "tram_bus")}
         else:
             road_blocked = checked_road_blocked
-        water_blocked = water_crossings(db, lat, lng, targets)
+        checked_water_blocked = water_crossings(db, lat, lng, targets)
+        if checked_water_blocked is None:
+            water_barrier_degraded = True
+        else:
+            water_blocked = checked_water_blocked
 
     total_weight = sum(cfg["weight"] for cfg in SCENARIO_CONFIG.values())
     weighted_sum = 0.0
@@ -441,6 +460,7 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
                 "distance_m": round(raw_dist),
                 "decay": round(d, 2),
                 "count": count,
+                "count_basis": "source_rows_before_general_deduplication",
                 "barrier": eff_dist > raw_dist,
                 "water_barrier": scenario in water_blocked,
                 "icon": cfg["icon"],
@@ -456,6 +476,7 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
             d = 0.0
             category_scores[scenario] = {
                 "distance_m": None, "decay": 0.0, "count": 0,
+                "count_basis": "source_rows_before_general_deduplication",
                 "icon": cfg["icon"], "label": cfg["label"],
                 "group": cfg["group"],
             }
@@ -464,7 +485,15 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
     raw_score = round(weighted_sum / total_weight * 100)
 
     # Slope penalty: hilly terrain reduces walkability
-    slope_mult = _slope_penalty(lat, lng)
+    slope_assessment = _slope_penalty(lat, lng, return_status=True)
+    # Older internal callers and tests may monkeypatch _slope_penalty with the
+    # historical float-only shape. Preserve their score behaviour while the
+    # production implementation supplies the explicit status tuple.
+    if isinstance(slope_assessment, tuple):
+        slope_mult, slope_status, slope_grade_pct = slope_assessment
+    else:
+        slope_mult, slope_status, slope_grade_pct = (
+            float(slope_assessment), "test_or_legacy_override", None)
     score = max(0, min(100, round(raw_score * slope_mult)))
 
     if score >= 90:
@@ -486,18 +515,67 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
            if s not in nearest or nearest[s] >= 1000]
     summary_parts = []
     if close:
-        summary_parts.append(f"{', '.join(close[:3])} within 5 min walk")
+        summary_parts.append(
+            f"{', '.join(close[:3])} within 400 m straight-line")
     if far:
         summary_parts.append(f"no {' or '.join(far[:2])} within walking distance")
     summary = '. '.join(summary_parts) + '.' if summary_parts else None
 
+    screening_label = (
+        "Exceptional amenity proximity" if score >= 90 else
+        "High amenity proximity" if score >= 70 else
+        "Moderate amenity proximity" if score >= 50 else
+        "Low amenity proximity" if score >= 25 else
+        "Very low amenity proximity"
+    )
     result = {
         "score": score,
         "label": label,
-        "disclaimer": "Based on straight-line distance to amenities with highway barrier detection.",
+        "screening_label": screening_label,
+        "disclaimer": (
+            "Amenity screening based on straight-line distance, not a walking "
+            "route or travel-time model. Motorway, major-water and regional "
+            "slope checks are adjustments with their status disclosed below."
+        ),
         "category_scores": category_scores,
         "poi_count": len(pois),
+        "poi_count_basis": "source_rows_before_general_deduplication_legacy",
+        "unique_facility_count": len(unique_facilities),
+        "screening_contract": {
+            "schema_version": "amenity-walkability-screening-v1",
+            "intended_use": "property, portfolio and neighbourhood amenity screening",
+            "distance_basis": "straight_line_metres",
+            "route_network_time": "not_computed",
+            "search_radius_m": radius_m,
+            "scenario_count": len(SCENARIO_CONFIG),
+            "count_contract": (
+                "category count and poi_count are legacy source-row counts; "
+                "unique_facility_count deduplicates scenario/name/coordinate"
+            ),
+            "transit_mode_boundary": (
+                "The current GTFS rail-stop snapshot combines rail, metro and "
+                "tram services and does not deliver route_type; train and "
+                "tram_bus evidence can overlap. Rail-replacement bus stops "
+                "are excluded from the train scenario."
+            ),
+            "barrier_distance_multiplier": BARRIER_PENALTY,
+            "professional_or_statutory_reliance": "not_permitted",
+        },
+        "coverage": {
+            "amenities": "data_returned" if pois else "checked_clear_within_radius",
+            "road_barrier": (
+                "unavailable_conservative" if road_barrier_degraded
+                else "data_returned"
+            ),
+            "water_barrier": (
+                "unavailable_unadjusted" if water_barrier_degraded
+                else "data_returned"
+            ),
+            "slope": slope_status,
+        },
     }
+    if slope_grade_pct is not None:
+        result["slope_grade_proxy_pct"] = slope_grade_pct
     # Categories whose delivered `nearest` name and coordinate may have come
     # from OpenStreetMap. Only those actually present in this response, so a
     # consumer can credit exactly what it received. See the merge points above
@@ -515,6 +593,14 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
         result["disclaimer"] += (
             " The motorway crossing check was unavailable; non-transit "
             "destinations were conservatively treated as barrier-crossed.")
+    if water_barrier_degraded:
+        result["water_barrier_check"] = "unavailable_unadjusted"
+        result["disclaimer"] += (
+            " The major-water crossing check was unavailable; no water "
+            "penalty was applied, so inspect the destination evidence before use.")
+    if slope_status == "unavailable_neutral":
+        result["disclaimer"] += (
+            " Local elevation coverage was unavailable; no slope penalty was applied.")
     if slope_mult < 1.0:
         result["slope_penalty"] = round(slope_mult, 2)
     return result

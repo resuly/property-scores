@@ -10,7 +10,7 @@ import tempfile
 import pandas as pd
 import pytest
 
-from property_scores.common.overture import get_db, transit_stops_near
+from property_scores.common.overture import get_db, rail_stops_near, transit_stops_near
 from property_scores.walkability.score import _match_category
 
 
@@ -55,6 +55,23 @@ def test_transit_stops_missing_file_graceful():
 def test_bus_stop_category_maps_to_tram_bus_scenario():
     assert _match_category("bus_stop", "Somewhere St at Other St") == "tram_bus"
     assert _match_category("tram_stop", "Stop 12") == "tram_bus"
+
+
+def test_rail_replacement_bus_stop_is_not_a_train_station(tmp_path):
+    frame = pd.DataFrame([
+        {"stop_id": "vic:replacement",
+         "stop_name": "Parkville Railway Station Rail Replacement Bus Stop",
+         "lat": -37.799946, "lng": 144.959552, "state": "vic"},
+        {"stop_id": "vic:station", "stop_name": "Parkville Railway Station",
+         "lat": -37.799874, "lng": 144.959542, "state": "vic"},
+    ])
+    path = tmp_path / "rail.parquet"
+    frame.to_parquet(path, index=False)
+
+    rows = rail_stops_near(
+        get_db(), -37.8005, 144.9634, 1500, source=str(path))
+
+    assert [row[4] for row in rows] == ["Parkville Railway Station"]
 
 
 def test_overture_day_care_preschool_maps_to_childcare():
@@ -203,3 +220,53 @@ def test_road_query_failure_is_conservative_and_disclosed(monkeypatch):
     assert result["category_scores"]["supermarket"]["barrier"] is True
     assert result["road_barrier_check"] == "unavailable_conservative"
     assert "conservatively" in result["disclaimer"]
+
+
+def _one_market_walkability(monkeypatch, *, water_result=set(),
+                            slope_result=(1.0, "data_returned", 1.5)):
+    from property_scores.walkability import score as walk
+
+    rows = [("supermarket", 300, 145.0, -37.8, "Market")]
+    monkeypatch.setattr(walk, "get_db", lambda: object())
+    monkeypatch.setattr(walk, "pois_near_detailed", lambda *a, **k: rows)
+    for name in ("transit_stops_near", "sports_fields_near",
+                 "osm_amenities_near", "rail_stops_near", "walking_trails_near"):
+        monkeypatch.setattr(walk, name, lambda *a, **k: [])
+    monkeypatch.setattr(walk, "road_crossings", lambda *a, **k: set())
+    monkeypatch.setattr(walk, "water_crossings", lambda *a, **k: water_result)
+    monkeypatch.setattr(walk, "_slope_penalty", lambda *a, **k: slope_result)
+    return walk.walkability_score(-37.8, 145.0)
+
+
+def test_walkability_contract_never_claims_route_time(monkeypatch):
+    result = _one_market_walkability(monkeypatch)
+
+    contract = result["screening_contract"]
+    assert contract["schema_version"] == "amenity-walkability-screening-v1"
+    assert contract["distance_basis"] == "straight_line_metres"
+    assert contract["route_network_time"] == "not_computed"
+    assert contract["scenario_count"] == 24
+    assert "legacy source-row counts" in contract["count_contract"]
+    assert "route_type" in contract["transit_mode_boundary"]
+    assert "400 m straight-line" in result["summary"]
+    assert "5 min walk" not in result["summary"]
+    assert result["screening_label"] == "Very low amenity proximity"
+    assert result["unique_facility_count"] == 1
+    assert result["poi_count_basis"] == "source_rows_before_general_deduplication_legacy"
+
+
+def test_water_query_failure_is_not_silently_reported_clear(monkeypatch):
+    result = _one_market_walkability(monkeypatch, water_result=None)
+
+    assert result["coverage"]["water_barrier"] == "unavailable_unadjusted"
+    assert result["water_barrier_check"] == "unavailable_unadjusted"
+    assert "no water penalty was applied" in result["disclaimer"]
+
+
+def test_missing_slope_coverage_is_neutral_but_explicit(monkeypatch):
+    result = _one_market_walkability(
+        monkeypatch, slope_result=(1.0, "unavailable_neutral", None))
+
+    assert result["coverage"]["slope"] == "unavailable_neutral"
+    assert "no slope penalty was applied" in result["disclaimer"]
+    assert "slope_grade_proxy_pct" not in result

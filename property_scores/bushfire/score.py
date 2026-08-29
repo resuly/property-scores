@@ -20,7 +20,6 @@ import logging
 import math
 import time as _time
 
-import numpy as np
 import requests
 
 logger = logging.getLogger(__name__)
@@ -154,6 +153,7 @@ ACT_CATEGORY_MAP = {
 }
 
 TIMEOUT = 10
+BUSHFIRE_SCREENING_SCHEMA_VERSION = "bushfire-screening-v1"
 
 # ---------------------------------------------------------------------------
 # ESA WorldCover — fuel load mapping
@@ -595,34 +595,54 @@ def _fire_history_local(state: str | None, lat: float, lng: float) -> dict | Non
     try:
         if state == "VIC":
             buf = 0.02  # ~2km
-            url = (
-                "https://opendata.maps.vic.gov.au/geoserver/wfs"
-                f"?service=WFS&version=2.0.0&request=GetFeature"
-                f"&typeNames=open-data-platform:fire_history_scar"
-                f"&outputFormat=application/json"
-                f"&BBOX={lng-buf},{lat-buf},{lng+buf},{lat+buf},EPSG:4326"
-                f"&count=100&propertyName=firetype,season,area_ha"
+            url = "https://opendata.maps.vic.gov.au/geoserver/wfs"
+            # This GeoServer rejects BBOX and CQL_FILTER together, so the
+            # spatial predicate belongs inside CQL. Filtering server-side
+            # removes planned burns before the response cap is applied.
+            cql = (
+                f"BBOX(geom,{lng-buf},{lat-buf},{lng+buf},{lat+buf},'EPSG:4326') "
+                "AND firetype='Bushfire'"
             )
-            resp = requests.get(url, timeout=8)
+            resp = requests.get(url, params={
+                "service": "WFS", "version": "2.0.0",
+                "request": "GetFeature",
+                "typeNames": "open-data-platform:fire_history_scar",
+                "outputFormat": "application/json",
+                "CQL_FILTER": cql,
+                "count": 1000,
+                "propertyName": "firetype,season,area_ha",
+            }, timeout=8)
             if not resp.ok:
                 return None
             data = resp.json()
             features = data.get("features", [])
+            matched = data.get("numberMatched")
+            returned = data.get("numberReturned")
+            if (isinstance(matched, int) and isinstance(returned, int)
+                    and matched > returned):
+                logger.warning("VIC bushfire history truncated: %s matched, %s returned",
+                               matched, returned)
+                return None
+            bushfires = [
+                f for f in features
+                if str(f.get("properties", {}).get("firetype") or "").lower()
+                == "bushfire"
+            ]
             # 30-year window: the unfiltered source goes back to 1903, so a
             # 1927+1939+1962 history capped a town at 15 while Black Summer
             # suburbs (frozen 2017 source) showed nothing (2026-06-11 audit,
             # perfect inversion). Old ash is not a current-risk signal.
-            seasons = sorted({f["properties"].get("season") for f in features
-                              if f["properties"].get("firetype") == "Bushfire"
-                              and (f["properties"].get("season") or 0) >= window_start})
-            recent = [f for f in features
+            seasons = sorted({f["properties"].get("season") for f in bushfires
+                              if (f["properties"].get("season") or 0) >= window_start})
+            recent = [f for f in bushfires
                       if (f["properties"].get("season") or 0) >= recent_start]
             return {
                 "seasons_with_fire": len(seasons),
                 "window_years": 30,
                 "last_fire_season": str(seasons[-1]) if seasons else None,
-                "total_fires": len(features),
+                "total_fires": len(bushfires),
                 "recent_fires": len(recent),
+                "records_returned": len(features),
             }
 
         if state == "NSW":
@@ -964,6 +984,23 @@ def bushfire_score(lat: float, lng: float, *, quick: bool = False) -> dict:
         # instead of leaving a fuel-based score to speak for the government.
         "official_zone_status": ("in_zone" if hits else
                                  "outside" if overlay_clear else "unavailable"),
+        "screening_contract": {
+            "schema_version": BUSHFIRE_SCREENING_SCHEMA_VERSION,
+            "intended_use": "property-level preliminary screening",
+            "formal_assessment_required": True,
+            "regulatory_reliance": "not_permitted",
+        },
+        "coverage": {
+            "official_overlay": ("data_returned" if hits else
+                                 "checked_clear" if overlay_clear else "unavailable"),
+            "vegetation_fuel": ("not_requested" if quick else
+                                "data_returned" if veg else "unavailable"),
+            "terrain_slope": ("not_requested" if quick else
+                              "data_returned" if slope else "unavailable"),
+            "fire_history": ("not_requested" if quick else
+                             "not_integrated" if state not in ("VIC", "NSW") else
+                             "data_returned" if fire is not None else "unavailable"),
+        },
     }
     if overlay_basis:
         result["overlay_basis"] = overlay_basis

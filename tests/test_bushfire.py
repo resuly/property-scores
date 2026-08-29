@@ -8,6 +8,9 @@ timeout was indistinguishable from an official all-clear.
 from unittest import mock
 
 from property_scores.bushfire.score import (_check_layer, _combine_scores,
+                                            _fire_history_local,
+                                            bushfire_score,
+                                            BUSHFIRE_SCREENING_SCHEMA_VERSION,
                                             _OFFICIAL_CLEAR_FLOOR,
                                             _SEVERITY_FLOORS)
 
@@ -122,3 +125,61 @@ def test_check_layer_act_unknown_category_stays_severe():
     assert _act_layer({"Hazard_Category": "4"}) == ("high", "Hazard Category 4", True)
     sev, detail, ok = _act_layer({"OBJECTID": 1})
     assert (sev, ok) == ("high", True)
+
+
+def test_vic_fire_history_does_not_count_recent_planned_burns_as_bushfires():
+    response = mock.Mock()
+    response.ok = True
+    response.json.return_value = {"features": [
+        {"properties": {"firetype": "Burn", "season": 2025}},
+        {"properties": {"firetype": "Bushfire", "season": 2020}},
+        {"properties": {"firetype": "Bushfire", "season": 1983}},
+    ]}
+    with mock.patch("property_scores.bushfire.score.requests.get",
+                    return_value=response) as get:
+        result = _fire_history_local("VIC", -38.54, 143.97)
+
+    assert get.call_args.kwargs["params"]["count"] == 1000
+    assert "BBOX(geom," in get.call_args.kwargs["params"]["CQL_FILTER"]
+    assert "firetype='Bushfire'" in get.call_args.kwargs["params"]["CQL_FILTER"]
+    assert result["seasons_with_fire"] == 1
+    assert result["last_fire_season"] == "2020"
+    assert result["recent_fires"] == 1
+    assert result["total_fires"] == 2
+    assert result["records_returned"] == 3
+
+
+def test_vic_fire_history_fails_closed_when_server_response_is_truncated():
+    response = mock.Mock()
+    response.ok = True
+    response.json.return_value = {
+        "numberMatched": 1001,
+        "numberReturned": 1000,
+        "features": [{"properties": {
+            "firetype": "Bushfire", "season": 2020,
+        }}],
+    }
+    with mock.patch("property_scores.bushfire.score.requests.get",
+                    return_value=response):
+        result = _fire_history_local("VIC", -38.54, 143.97)
+    assert result is None
+
+
+def test_quick_screen_declares_omitted_inputs_instead_of_unavailable():
+    with mock.patch("property_scores.bushfire.score._detect_state", return_value="VIC"), \
+            mock.patch("property_scores.bushfire.score._overlay_check",
+                       return_value=(None, [], None, True, "state_service")):
+        result = bushfire_score(-37.8, 145.0, quick=True)
+
+    assert result["screening_contract"] == {
+        "schema_version": BUSHFIRE_SCREENING_SCHEMA_VERSION,
+        "intended_use": "property-level preliminary screening",
+        "formal_assessment_required": True,
+        "regulatory_reliance": "not_permitted",
+    }
+    assert result["coverage"] == {
+        "official_overlay": "checked_clear",
+        "vegetation_fuel": "not_requested",
+        "terrain_slope": "not_requested",
+        "fire_history": "not_requested",
+    }

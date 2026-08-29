@@ -26,24 +26,32 @@ logger = logging.getLogger(__name__)
 
 # ESA WorldCover class -> (AS 3959 class letter, worst/best formation pair, label).
 # WorldCover 10m cannot resolve canopy-cover %, so a "tree" pixel could be Forest
-# (A, heaviest), Woodland (B) or Rainforest (F). We take the CONSERVATIVE class as
+# (A, heaviest), Woodland (B) or Rainforest (F). We take the conservative class as
 # the point estimate and expose the lighter plausible class for the low end of the
-# confidence band. Grassland (G) is only assessed under FDI 50 (AS 3959 footnote:
-# grassland is not considered in the BAL except in Tasmania/FDI-50 jurisdictions).
+# confidence band. Grassland distance treatment follows the pinned GA implementation.
 WC_TREE, WC_SHRUB, WC_GRASS = 10, 20, 30
 _CLASSIFIED_WC = (WC_TREE, WC_SHRUB, WC_GRASS)
 
 # point class (conservative), lighter class (band low end), display label
 VEG_MAP = {
     WC_TREE:  ("A", "B", "Forest (tree cover)"),
-    WC_SHRUB: ("C", "D", "Shrubland"),
+    # In the pinned GA tables D (Scrub) has longer distance thresholds than
+    # C (Shrubland), so D is the conservative point and C the lighter bound.
+    WC_SHRUB: ("D", "C", "Shrub/scrub cover"),
     WC_GRASS: ("G", "G", "Grassland"),
 }
 
 MAX_VEG_M = 100          # AS 3959 cut-off: vegetation beyond 100 m -> BAL-LOW
 SEARCH_RADIUS_M = 150    # window to scan for nearest classified vegetation
-MIN_PATCH_PIXELS = 100   # ~1 ha of 10 m pixels: AS 3959 excludes <1 ha patches
+MIN_PATCH_AREA_M2 = 10_000  # one hectare
 SLOPE_BANDS = [(5, "d5"), (10, "d10"), (15, "d15"), (20, "d20")]
+_METHOD = "GA BAL Toolbox 2009 Method 1 adaptation (preliminary screen)"
+_METHOD_SOURCE = {
+    "name": "Geoscience Australia Bushfire Attack Level Toolbox",
+    "licence": "Apache-2.0",
+    "commit": tables.GA_BAL_TOOLBOX_COMMIT,
+    "url": tables.GA_BAL_TOOLBOX_URL,
+}
 
 # BAL ordering for "take the worst" and for banding.
 _BAL_ORDER = ["BAL-LOW", "BAL-12.5", "BAL-19", "BAL-29", "BAL-40", "BAL-FZ"]
@@ -51,6 +59,11 @@ _BAL_ORDER = ["BAL-LOW", "BAL-12.5", "BAL-19", "BAL-29", "BAL-40", "BAL-FZ"]
 
 def _bal_rank(label: str) -> int:
     return _BAL_ORDER.index(label) if label in _BAL_ORDER else 0
+
+
+def _grassland_excluded(fdi_used: int, distance_m: float) -> bool:
+    """Mirror the pinned GA rule: non-FDI-50 grass is excluded from 50 m."""
+    return fdi_used != 50 and distance_m >= 50
 
 
 def _haversine_m(lat1, lng1, lat2, lng2):
@@ -90,9 +103,17 @@ def _nearest_vegetation(lat: float, lng: float) -> dict | None:
     # pixel centre coordinates
     dlat = (north - south) / nrows
     dlng = (east - west) / ncols
+    pixel_height_m = abs(dlat) * 111_320.0
+    pixel_width_m = abs(dlng) * 111_320.0 * max(
+        math.cos(math.radians(lat)), 0.1)
+    pixel_area_m2 = pixel_height_m * pixel_width_m
+    if pixel_area_m2 <= 0:
+        return None
+    min_patch_pixels = max(1, math.ceil(MIN_PATCH_AREA_M2 / pixel_area_m2))
 
-    # count classified pixels per class for the >=1 ha patch test (window-wide
-    # proxy for contiguity, honest approximation, flagged in output)
+    # Count all pixels for transparent diagnostics, but qualify vegetation by
+    # its actual connected component. The former window-wide count treated 100
+    # isolated tree pixels as one hectare of vegetation.
     counts = {WC_TREE: 0, WC_SHRUB: 0, WC_GRASS: 0}
     for r in range(nrows):
         row = classes[r]
@@ -100,6 +121,36 @@ def _nearest_vegetation(lat: float, lng: float) -> dict | None:
             v = row[c]
             if v in counts:
                 counts[v] += 1
+
+    component_size: dict[tuple[int, int], int] = {}
+    visited: set[tuple[int, int]] = set()
+    for start_r in range(nrows):
+        for start_c in range(ncols):
+            start = (start_r, start_c)
+            veg_class = classes[start_r][start_c]
+            if veg_class not in _CLASSIFIED_WC or start in visited:
+                continue
+            stack = [start]
+            visited.add(start)
+            component = []
+            while stack:
+                r, c = stack.pop()
+                component.append((r, c))
+                for dr in (-1, 0, 1):
+                    for dc in (-1, 0, 1):
+                        if dr == 0 and dc == 0:
+                            continue
+                        nr, nc = r + dr, c + dc
+                        neighbour = (nr, nc)
+                        if not (0 <= nr < nrows and 0 <= nc < ncols):
+                            continue
+                        if neighbour in visited or classes[nr][nc] != veg_class:
+                            continue
+                        visited.add(neighbour)
+                        stack.append(neighbour)
+            size = len(component)
+            for cell in component:
+                component_size[cell] = size
 
     nearest = None  # (distance, wc_class, plat, plng)
     center_r, center_c = nrows // 2, ncols // 2
@@ -110,25 +161,31 @@ def _nearest_vegetation(lat: float, lng: float) -> dict | None:
             v = row[c]
             if v not in _CLASSIFIED_WC:
                 continue
-            if counts[v] < MIN_PATCH_PIXELS:
-                continue  # patch smaller than ~1 ha -> excluded per AS 3959
+            patch_size = component_size.get((r, c), 0)
+            if patch_size < min_patch_pixels:
+                continue
             plng = west + (c + 0.5) * dlng
             d = _haversine_m(lat, lng, plat, plng)
             if d > MAX_VEG_M:
                 continue
             if nearest is None or d < nearest[0]:
-                nearest = (d, v, plat, plng)
+                nearest = (d, v, plat, plng, patch_size)
 
     in_veg = classes[center_r][center_c] in _CLASSIFIED_WC
     if nearest is None:
         return {"distance_m": None, "wc_class": None, "in_vegetation": in_veg,
-                "patch_pixels": counts, "veg_lat": None, "veg_lng": None}
-    d, v, plat, plng = nearest
+                "patch_pixels": counts, "min_patch_pixels": min_patch_pixels,
+                "pixel_area_m2": round(pixel_area_m2, 1),
+                "veg_lat": None, "veg_lng": None}
+    d, v, plat, plng, patch_size = nearest
     # if the site itself sits in a qualifying patch, effective distance is ~0
     if in_veg and classes[center_r][center_c] == v:
         d = 0.0
     return {"distance_m": round(d, 1), "wc_class": v, "in_vegetation": in_veg,
-            "patch_pixels": counts, "veg_lat": plat, "veg_lng": plng}
+            "patch_pixels": counts, "nearest_patch_pixels": patch_size,
+            "min_patch_pixels": min_patch_pixels,
+            "pixel_area_m2": round(pixel_area_m2, 1),
+            "veg_lat": plat, "veg_lng": plng}
 
 
 def _effective_slope(lat, lng, veg_lat, veg_lng, *, slope_deg=None) -> dict:
@@ -224,8 +281,8 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
     ]
     if fdi_sub:
         assumptions.append(
-            f"FDI {fdi} is not tabulated in the public Method 1 tables; substituted "
-            f"the nearest more-conservative table (FDI {fdi_used}), widen confidence.")
+            f"FDI {fdi} is outside the four Australian branches in the pinned GA "
+            f"implementation; substituted FDI {fdi_used}, widen confidence.")
 
     # --- No classified vegetation within 100 m -> BAL-LOW -------------------
     if veg is None:
@@ -236,7 +293,7 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
             "state": state, "fdi": fdi, "fdi_basis": fdi_basis,
             "inputs": {"vegetation": "ESA WorldCover unavailable at this location"},
             "official_overlay": {"status": overlay_status, "zones": hits},
-            "method": "AS 3959-2009 Method 1 (indicative)",
+            "method": _METHOD, "method_source": _METHOD_SOURCE,
             "assumptions": assumptions + ["WorldCover mosaic missing, vegetation "
                                           "input could not be automated here."],
             "disclaimer": _DISCLAIMER, "lat": lat, "lng": lng,
@@ -259,7 +316,7 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
             "state": state, "fdi": fdi, "fdi_basis": fdi_basis,
             "inputs": {"vegetation": note, "patch_pixels": veg["patch_pixels"]},
             "official_overlay": {"status": overlay_status, "zones": hits},
-            "method": "AS 3959-2009 Method 1 (indicative)",
+            "method": _METHOD, "method_source": _METHOD_SOURCE,
             "assumptions": assumptions,
             "disclaimer": _DISCLAIMER, "lat": lat, "lng": lng,
         }
@@ -271,19 +328,21 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
 
     slope = _effective_slope(lat, lng, veg["veg_lat"], veg["veg_lng"], slope_deg=slope_deg)
 
-    # grassland only assessed under FDI 50 (AS 3959)
-    grass_ignored = wc == WC_GRASS and fdi_used == 100
-    if grass_ignored:
+    # GA's Method 1 implementation excludes grassland at >=50 m for every FDI
+    # except 50. It still assesses closer grassland; the former implementation
+    # incorrectly discarded all grassland in those jurisdictions.
+    grass_excluded = wc == WC_GRASS and _grassland_excluded(fdi_used, dist)
+    if grass_excluded:
         assumptions.append(
-            "Nearest vegetation is grassland; under FDI 100 grassland is not "
-            "assessed for BAL (AS 3959) -> BAL-LOW on the grassland input.")
+            f"Nearest vegetation is grassland at {dist} m; the GA Method 1 "
+            f"implementation excludes grassland from 50 m for FDI {fdi_used}.")
 
     def _bal_for(band, veg_class):
         if band == ">20":
             return "BAL-FZ"
         return tables.lookup_bal(fdi_table, band, veg_class, dist)
 
-    if grass_ignored:
+    if grass_excluded:
         point_bal = "BAL-LOW"
     else:
         point_bal = _bal_for(slope["band"], point_class)
@@ -291,7 +350,7 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
     # Confidence band: vary formation (point vs lighter class) and slope
     # (measured band vs flat as the mild end; one-steeper as the harsh end).
     band_candidates = []
-    if grass_ignored:
+    if grass_excluded:
         band_candidates = ["BAL-LOW"]
     else:
         harsh_band = slope["band"]
@@ -330,6 +389,9 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
                 "distance_m": dist,
                 "in_vegetation": veg["in_vegetation"],
                 "patch_pixels": veg["patch_pixels"],
+                "nearest_patch_pixels": veg.get("nearest_patch_pixels"),
+                "min_patch_pixels": veg.get("min_patch_pixels"),
+                "pixel_area_m2": veg.get("pixel_area_m2"),
                 "formation_uncertainty": (
                     "WorldCover 10m cannot resolve canopy-cover %; assumed heaviest "
                     f"plausible class ({point_class}); lighter plausible = {light_class}. "
@@ -337,11 +399,12 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
             },
             "slope": slope,
             "distance_cutoff_m": MAX_VEG_M,
-            "min_patch_ha": round(MIN_PATCH_PIXELS / 100, 1),
+            "min_patch_ha": 1.0,
         },
         "official_overlay": {"status": overlay_status, "zones": hits,
                              "category": worst_cat, "basis": overlay_basis},
-        "method": "AS 3959-2009 Method 1 (indicative, simplified procedure)",
+        "method": _METHOD,
+        "method_source": _METHOD_SOURCE,
         "assumptions": assumptions,
         "disclaimer": _DISCLAIMER,
         "lat": lat, "lng": lng,
@@ -350,9 +413,11 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
 
 
 _DISCLAIMER = (
-    "Indicative BAL pre-screen from open data (AS 3959 Method 1). This is NOT a "
+    "Preliminary BAL screen from open data using a pinned Geoscience Australia "
+    "2009 Method 1 implementation. This is NOT a "
     "certified Bushfire Attack Level assessment and must not be used for a building "
-    "permit. A compliant BAL requires a site assessment by an accredited bushfire "
+    "permit or treated as current AS 3959 conformity. A compliant BAL requires a "
+    "site assessment by an accredited bushfire "
     "hazard assessor. Vegetation is classified from 10 m satellite land cover, which "
     "cannot resolve canopy density or fine on-ground detail; distances and slope are "
     "modelled, not surveyed.")

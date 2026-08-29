@@ -34,9 +34,9 @@ classifying vegetation on the ground, per quadrant. Specific limits:
   conservative (heaviest) class as the point estimate and expose the lighter
   plausible class as the low end of the confidence band. This is the known 硬伤
   recorded in the registry: "植被分类误差会跨 BAL 档，必须带置信带."
-- **>=1 ha contiguity is approximated** by a pixel-count threshold in the search
-  window, not true patch segmentation. AS 3959 excludes <1 ha patches and isolated
-  trees; our proxy can over- or under-call small patches.
+- **>=1 ha contiguity is screened with connected components** in the local 10 m
+  WorldCover window. It is still a raster approximation rather than a surveyed
+  vegetation boundary, so fine or partly clipped patches can be misclassified.
 - **Slope direction is inferred**, not surveyed, from the elevation difference
   between the site and the nearest vegetation pixel.
 - **Distances are modelled** from 10 m rasters, not measured. Sub-10 m setbacks
@@ -47,11 +47,10 @@ classifying vegetation on the ground, per quadrant. Specific limits:
 
 ## Method sources (all public)
 
-- **BAL distance tables (FDI 100 & FDI 50), verbatim:** Victorian Government / CFA
-  public guide *"Assessing a property's Bushfire Attack Level (BAL)"*, which
-  reproduces the AS 3959-2009 Method 1 Tables 2.4.x. Transcribed 2026-07-20 into
-  `bal_prescreen/tables.py`. FDI-100 Forest band cross-checked against multiple
-  Victorian building guides.
+- **BAL computation data (FDI 100/80/50/40):** pinned to Geoscience Australia's
+  Apache-2.0 BAL Toolbox `utilities/bal_database.py` at commit
+  `18c6cff4b37544805e78cf00ec376dbca2ff8cd0`. The product remains a preliminary
+  screen based on the 2009 Method 1 model, not a current AS 3959 conformity claim.
 - **FDI by jurisdiction (Table 2.1):** Geoscience Australia **BAL Toolbox** docs
   (open-source, GA 2017), `background.html` / `bal.html`. The toolbox is GA's own
   open implementation of AS 3959 Method 1 and is the registry's cited method
@@ -60,10 +59,9 @@ classifying vegetation on the ground, per quadrant. Specific limits:
   are materially unchanged; using the 2009 tables for an *indicative* pre-screen is
   honest and is flagged in every result (`method` field).
 
-Only FDI 100 and 50 are tabulated in the public VIC guide. FDI 80 (NSW general /
-SA / WA) and FDI 40 (QLD / NT) are **not** reproduced; for those we substitute the
-nearest *more conservative* table (80→100, 40→50) and set `fdi_substituted` so the
-caller widens confidence. We never invent thresholds we cannot cite.
+The pinned GA implementation supplies all four Australian FDI branches, so SA/WA
+now use FDI 80 and QLD/NT use FDI 40 directly. Unknown FDI values still fail into
+an explicitly marked substitution and lower confidence.
 
 ## Reuse (why this was cheap to build)
 
@@ -101,8 +99,9 @@ What the demo proves and honestly shows:
 - **Confidence banding + overlay cross-check earn their keep**, Blackheath is
   flagged *low* confidence because WorldCover fuel is close but the official overlay
   reads "outside" (`*` disagreement surfaced, not hidden).
-- **The AS 3959 grassland rule fires**, Lismore plains grassland → BAL-LOW under
-  FDI 100 (grassland is not assessed except in FDI-50 jurisdictions).
+- **Grassland follows the GA implementation:** for FDI other than 50, grassland
+  inside 50 m is assessed and grassland from 50 m is excluded. The earlier code
+  incorrectly excluded all non-FDI-50 grassland.
 - **Centroid caveat**, several localities read BAL-FZ because the centroid sits
   literally in bush (distance 0). Production must screen the address/lot point, not a
   suburb centroid; Lorne is the representative real-lot-style result.

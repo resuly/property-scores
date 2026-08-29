@@ -283,12 +283,12 @@ def test_industrial_status_error_on_failure(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_label_bands_unchanged_when_everything_ok():
-    assert cs._contamination_label(95, epa_status="ok", ind_failed=False) == "Very Clean"
-    assert cs._contamination_label(80, epa_status="ok", ind_failed=False) == "Clean"
-    assert cs._contamination_label(55, epa_status="ok", ind_failed=False) == "Low Risk"
-    assert cs._contamination_label(35, epa_status="ok", ind_failed=False) == "Moderate Risk"
-    assert cs._contamination_label(20, epa_status="ok", ind_failed=False) == "High Risk"
-    assert cs._contamination_label(5, epa_status="ok", ind_failed=False) == "Very High Risk"
+    assert cs._contamination_label(95, epa_status="ok", ind_failed=False) == "No Mapped Red Flag"
+    assert cs._contamination_label(80, epa_status="ok", ind_failed=False) == "Lower Mapped Risk"
+    assert cs._contamination_label(55, epa_status="ok", ind_failed=False) == "Mapped Risk - Review"
+    assert cs._contamination_label(35, epa_status="ok", ind_failed=False) == "Elevated Mapped Risk"
+    assert cs._contamination_label(20, epa_status="ok", ind_failed=False) == "High Mapped Risk"
+    assert cs._contamination_label(5, epa_status="ok", ind_failed=False) == "Very High Mapped Risk"
 
 
 @pytest.mark.parametrize("score", [70, 80, 95, 100])
@@ -320,6 +320,43 @@ def test_evidence_context_beats_register_not_integrated_label(score):
     )
     assert label == cs.LABEL_MAPPED_CONTEXT
     assert "clean" not in label.lower()
+
+
+def test_nearby_register_evidence_blocks_clean_headline(monkeypatch):
+    monkeypatch.setattr(cs, "_detect_state", lambda *a: "NSW")
+    monkeypatch.setattr(cs, "_nsw_epa_sites", lambda *a, **k: [{
+        "distance_m": 500,
+        "geom": "point",
+        "issue": "Contamination currently regulated under CLM Act",
+        "source": "NSW EPA",
+    }])
+    monkeypatch.setattr(cs, "_industrial_proximity", lambda *a: {
+        "count_500m": 0, "nearest_m": None, "nearest_type": None,
+        "sites": [], "industrial_status": "ok",
+    })
+
+    result = cs.contamination_score(-33.86, 151.20)
+
+    assert result["score"] == 75
+    assert result["on_site"]["epa_active"] is False
+    assert result["label"] == cs.LABEL_MAPPED_CONTEXT
+
+
+def test_nearby_industrial_context_blocks_clean_headline(monkeypatch):
+    from property_scores.contamination.sources import act_register
+
+    monkeypatch.setattr(cs, "_detect_state", lambda *a: "ACT")
+    monkeypatch.setattr(act_register, "sites_at", lambda *a: [])
+    monkeypatch.setattr(cs, "_industrial_proximity", lambda *a: {
+        "count_500m": 1, "nearest_m": 300, "nearest_type": "dry cleaning",
+        "sites": [{"type": "dry cleaning", "distance_m": 300}],
+        "industrial_status": "ok",
+    })
+
+    result = cs.contamination_score(-35.28, 149.13)
+
+    assert result["score"] == 85
+    assert result["label"] == cs.LABEL_MAPPED_CONTEXT
 
 
 @pytest.mark.parametrize("score", [10, 25, 45, 65])
@@ -381,7 +418,7 @@ def test_happy_path_still_very_clean(monkeypatch):
     _patch_industrial(monkeypatch, ok=True)
     r = cs.contamination_score(*MELB)
     assert r["score"] == 95
-    assert r["label"] == "Very Clean"
+    assert r["label"] == "No Mapped Red Flag"
     assert r["epa_status"] == "ok"
     assert r["industrial_status"] == "ok"
     assert "note" not in r
@@ -420,9 +457,10 @@ def test_epa_outage_is_not_clean_and_is_not_cached(monkeypatch, mode):
     assert r["industrial_status"] == "ok"
     assert r["label"] == cs.LABEL_INCOMPLETE
     assert "clean" not in r["label"].lower()
-    # the note is the only channel that carries the warning into the UI
+    # The numeric score is withheld, so the note states unavailability
+    # rather than asking a caller to interpret an optimistic partial score.
     assert "EPA register could not be reached" in r["note"]
-    assert "may understate risk" in r["note"]
+    assert "No score could be produced" in r["note"]
     assert cs._contam_cache == {}
 
 
@@ -445,12 +483,13 @@ def test_both_signals_down_gives_no_score(monkeypatch):
     assert cs._contam_cache == {}
 
 
-def test_not_integrated_state_keeps_score_but_not_clean_label(monkeypatch):
+def test_not_integrated_state_drops_reassuring_score_and_names_coverage(monkeypatch):
     _patch_epa(monkeypatch, "ok")
     _patch_industrial(monkeypatch, ok=True)
     r = cs.contamination_score(*BRIS)
     assert r["state"] == "QLD"
-    assert r["score"] == 95
+    assert r["score"] is None
+    assert r["score_status"] == "unavailable_incomplete_coverage"
     assert r["epa_status"] == "not_integrated"
     assert r["industrial_status"] == "ok"
     assert r["label"] == cs.LABEL_REGISTER_NOT_CHECKED
@@ -469,7 +508,60 @@ def test_wa_register_is_not_queried_before_dwer_permission(monkeypatch):
     result = cs.contamination_score(*PERTH)
     assert result["state"] == "WA"
     assert result["epa_status"] == "not_integrated"
+    assert result["score"] is None
+    assert result["score_status"] == "unavailable_incomplete_coverage"
     assert result["label"] == cs.LABEL_REGISTER_NOT_CHECKED
+
+
+def test_act_official_register_positive_is_on_site_and_attributed(monkeypatch):
+    from property_scores.contamination.sources import act_register
+
+    monkeypatch.setattr(cs, "_detect_state", lambda *a: "ACT")
+    monkeypatch.setattr(act_register, "sites_at", lambda *a: [{
+        "site_id": "42",
+        "name": "Active BP Service Station",
+        "issue": "ACT Register of contaminated sites, notified under section 76A(1)",
+        "activity_type": "ACT contaminated sites register",
+        "management_class": "76A(1)",
+        "distance_m": 0,
+        "geom": "polygon",
+        "source": "ACT EPA Register of contaminated sites",
+    }])
+    _patch_industrial(monkeypatch, ok=True)
+
+    result = cs.contamination_score(-35.27582, 149.13277)
+
+    assert result["epa_status"] == "ok"
+    assert result["score"] == 10
+    assert result["label"] == "Very High Mapped Risk"
+    assert result["on_site"]["epa_active"] is True
+    assert result["attribution"] == [{
+        "source": "ACT EPA Register of contaminated sites",
+        "attribution": "Register of contaminated sites © Australian Capital Territory",
+        "licence": "CC BY 4.0",
+        "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+    }]
+
+
+def test_act_empty_and_failure_remain_distinguishable(monkeypatch):
+    from property_scores.contamination.sources import act_register
+
+    monkeypatch.setattr(cs, "_detect_state", lambda *a: "ACT")
+    _patch_industrial(monkeypatch, ok=True)
+    monkeypatch.setattr(act_register, "sites_at", lambda *a: [])
+    clear = cs.contamination_score(-35.28, 149.13)
+    assert clear["epa_status"] == "ok"
+    assert clear["score_status"] == "available"
+    assert clear["epa_sites"] == []
+    assert clear["label"] == "No Mapped Red Flag"
+
+    cs._contam_cache.clear()
+    monkeypatch.setattr(act_register, "sites_at", lambda *a: None)
+    failed = cs.contamination_score(-35.28, 149.13)
+    assert failed["epa_status"] == "error"
+    assert failed["score_status"] == "unavailable_incomplete_coverage"
+    assert failed["label"] == cs.LABEL_INCOMPLETE
+    assert cs._contam_cache == {}
 
 
 def test_industrial_outage_note_names_the_source(monkeypatch):
@@ -477,7 +569,7 @@ def test_industrial_outage_note_names_the_source(monkeypatch):
     _patch_industrial(monkeypatch, ok=False)
     r = cs.contamination_score(*MELB)
     assert "industrial land use data could not be reached" in r["note"]
-    assert "may understate risk" in r["note"]
+    assert "No score could be produced" in r["note"]
 
 
 def test_healthy_result_is_cached(monkeypatch):

@@ -17,6 +17,7 @@ import pytest
 
 from property_scores.contamination.sources import (
     _common,
+    act_register,
     ga_waste,
     nsw_groundwater,
     nsw_sites,
@@ -37,6 +38,148 @@ SHIPPED_RETRY_SLEEP_S = _common._RETRY_SLEEP_S
 MELBOURNE = (-37.8136, 144.9631)
 BOTANY = (-33.9500, 151.2000)
 EDWARDSTOWN = (-34.9800, 138.5700)
+ACT_BRADDON_BP = (-35.27582, 149.13277)
+
+
+def _act_rows():
+    return [
+        {
+            "id": "42",
+            "district_notified": "Canberra Central",
+            "division_notified": "Braddon",
+            "section_notified": "29",
+            "block_notified": "12",
+            "notified_under_section": "76A(1)",
+            "site_description": "Active BP Service Station",
+            "owner_name": "must not ship",
+        },
+        {
+            "id": "99",
+            "district_current": "Canberra Central",
+            "division_current": "Kingston",
+            "section_current": "62",
+            "block_current": "14+15+16+17+18",
+            "notified_under_section": "91D(1)",
+            "site_description": "Kingston Foreshore audit area",
+        },
+    ]
+
+
+def _act_block(*, division="BRADDON", section=29, block=12,
+               lifecycle="REGISTERED"):
+    return {"features": [{"attributes": {
+        "OBJECTID": 305387,
+        "DISTRICT_NAME": "CANBERRA CENTRAL",
+        "DIVISION_NAME": division,
+        "SECTION_NUMBER": section,
+        "BLOCK_NUMBER": block,
+        "CURRENT_LIFECYCLE_STAGE": lifecycle,
+    }}]}
+
+
+def test_act_register_exact_count_and_parcel_join(monkeypatch):
+    calls = []
+
+    def fake_fetch(url, params):
+        calls.append((url, params))
+        if url == act_register.BLOCK_QUERY_URL:
+            return _act_block()
+        if params == {"$select": "count(*)"}:
+            return [{"count": "2"}]
+        return _act_rows()
+
+    monkeypatch.setattr(act_register, "fetch_json", fake_fetch)
+    hits = act_register.sites_at(*ACT_BRADDON_BP)
+
+    assert len(hits) == 1
+    assert hits[0] == {
+        "site_id": "42",
+        "name": "Active BP Service Station",
+        "issue": (
+            "ACT Register of contaminated sites, notified under section 76A(1)"
+        ),
+        "activity_type": "ACT contaminated sites register",
+        "management_class": "76A(1)",
+        "distance_m": 0,
+        "geom": "polygon",
+        "source": "ACT EPA Register of contaminated sites",
+    }
+    assert "owner_name" not in str(hits)
+    block_params = calls[0][1]
+    assert block_params["geometry"] == "149.13277,-35.27582"
+    assert block_params["returnGeometry"] == "false"
+
+
+def test_act_register_composite_blocks_match_but_divisions_do_not(monkeypatch):
+    monkeypatch.setattr(
+        act_register, "all_rows",
+        lambda: act_register._parse_register_rows(_act_rows(), 2),
+    )
+    monkeypatch.setattr(
+        act_register, "_subject_blocks",
+        lambda *a: [{"district": "CANBERRA CENTRAL", "division": "KINGSTON",
+                     "section": "62", "block": "16"}],
+    )
+    assert [row["site_id"] for row in act_register.sites_at(-35.3, 149.1)] == ["99"]
+
+    monkeypatch.setattr(
+        act_register, "_subject_blocks",
+        lambda *a: [{"district": "CANBERRA CENTRAL", "division": "GRIFFITH",
+                     "section": "62", "block": "16"}],
+    )
+    assert act_register.sites_at(-35.3, 149.1) == []
+
+
+def test_act_register_count_schema_and_block_fail_closed(monkeypatch):
+    monkeypatch.setattr(act_register, "fetch_json", lambda url, params: (
+        [{"count": "3"}] if params == {"$select": "count(*)"} else _act_rows()))
+    assert act_register.fetch_all_rows() is None
+
+    monkeypatch.setattr(act_register, "_subject_blocks", lambda *a: None)
+    monkeypatch.setattr(
+        act_register, "all_rows",
+        lambda: act_register._parse_register_rows(_act_rows(), 2),
+    )
+    assert act_register.sites_at(*ACT_BRADDON_BP) is None
+
+    retired = _act_block(lifecycle="RETIRED")
+    monkeypatch.setattr(act_register, "fetch_json", lambda *a, **k: retired)
+    assert act_register._subject_blocks(*ACT_BRADDON_BP) is None
+
+
+def test_act_register_handles_publisher_optional_fields_and_one_reversed_row():
+    rows = act_register._parse_register_rows([{
+        "district_notified": "Fyshwick",
+        "division_notified": "Canberra Central",
+        "section_notified": "2",
+        "block_notified": "38",
+        "notified_under_section": "76A(1)",
+        "site_description": "Former Newcastle House",
+    }, {
+        "id": "10071",
+        "district_notified": "Jerrabomberra",
+        "division_notified": "Beard",
+        "section_notified": "8",
+        "block_notified": "24",
+    }], 2)
+
+    assert rows is not None
+    assert rows[0]["district"] == "CANBERRA CENTRAL"
+    assert rows[0]["division"] == "FYSHWICK"
+    assert rows[0]["site_id"].startswith("derived-")
+    assert rows[1]["notified_under_section"] == "Not specified"
+    assert rows[1]["site_description"] == "ACT contaminated sites register entry"
+
+
+def test_act_register_refresh_failure_serves_last_good(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(act_register._time, "time", lambda: clock[0])
+    monkeypatch.setattr(act_register, "fetch_all_rows", lambda: act_register._parse_register_rows(
+        _act_rows(), 2))
+    first = act_register.all_rows()
+    clock[0] += act_register.REGISTER_CACHE_TTL_S + 1
+    monkeypatch.setattr(act_register, "fetch_all_rows", lambda: None)
+    assert act_register.all_rows() == first
 
 
 def load_fixture(name: str):
@@ -68,6 +211,7 @@ def _isolate(monkeypatch):
 
     monkeypatch.setattr(_common.requests, "get", _forbidden)
     nsw_sites.clear_cache()
+    act_register.clear_cache()
     sa_gpa.clear_cache()
     sa_licensed.clear_cache()
     tas_epa.clear_cache()

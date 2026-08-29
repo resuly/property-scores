@@ -53,6 +53,13 @@ def test_relative_score_margin_is_machine_checked():
     assert probes.evaluate_margin({"score": None}, {"score": 45}, 5)[0] == "FAIL"
 
 
+def test_numeric_contract_fields_are_machine_checked():
+    payload = {"epa_sites_count": 11}
+    assert probes.evaluate("epa_sites_count>=11", payload)[0] == "PASS"
+    assert probes.evaluate("epa_sites_count>=12", payload)[0] == "FAIL"
+    assert probes.evaluate("epa_sites_count>=1", {})[0] == "FAIL"
+
+
 def test_external_blocker_can_use_named_low_noise_cadence():
     assert probes.reminder_due_seconds({"reminder_days": "30"}) == 30 * 86400 - 1800
     assert probes.reminder_due_seconds({}) == probes.STALE_RED_DAYS * 86400 - 1800

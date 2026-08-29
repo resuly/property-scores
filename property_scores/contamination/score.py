@@ -566,7 +566,7 @@ def _industrial_to_score(ind: dict) -> int:
 
 # Labels a reader takes as "this address was checked and it came back clean".
 # They are the ones that must never be produced off an incomplete check.
-_REASSURING_LABELS = {"Very Clean", "Clean"}
+_REASSURING_LABELS = {"No Mapped Red Flag", "Lower Mapped Risk"}
 
 LABEL_CHECK_UNAVAILABLE = "Check Unavailable"
 LABEL_INCOMPLETE = "Incomplete Check"
@@ -576,16 +576,16 @@ LABEL_MAPPED_CONTEXT = "Mapped Context - Review"
 
 def _score_band_label(score: int) -> str:
     if score >= 90:
-        return "Very Clean"
+        return "No Mapped Red Flag"
     if score >= 70:
-        return "Clean"
+        return "Lower Mapped Risk"
     if score >= 50:
-        return "Low Risk"
+        return "Mapped Risk - Review"
     if score >= 30:
-        return "Moderate Risk"
+        return "Elevated Mapped Risk"
     if score >= 15:
-        return "High Risk"
-    return "Very High Risk"
+        return "High Mapped Risk"
+    return "Very High Mapped Risk"
 
 
 def _contamination_label(score: int | None, epa_status: str, ind_failed: bool,
@@ -641,6 +641,13 @@ _TAS_SOURCE_RIGHTS = {
         ),
         "licence": "CC BY 3.0 AU",
         "licence_url": "https://creativecommons.org/licenses/by/3.0/au/",
+    },
+}
+_ACT_SOURCE_RIGHTS = {
+    "ACT EPA Register of contaminated sites": {
+        "attribution": "Register of contaminated sites © Australian Capital Territory",
+        "licence": "CC BY 4.0",
+        "licence_url": "https://creativecommons.org/licenses/by/4.0/",
     },
 }
 # Density gate, measured 2026-08-27: Melbourne CBD has 1,684 deduped rows and
@@ -948,7 +955,7 @@ _CONTAM_CACHE_TTL = 3600
 def contamination_score(lat: float, lng: float) -> dict:
     """Compute contamination risk score for an Australian coordinate.
 
-    Combines official EPA registers (VIC/NSW/WA) with industrial POI
+    Combines official EPA registers (VIC/NSW/ACT) with industrial POI
     proximity from Overture data for national coverage.
     """
     # EPA sites have specific locations and the score bands break at 100m /
@@ -982,6 +989,9 @@ def contamination_score(lat: float, lng: float) -> dict:
             return _vic_epa_sites(lat, lng)
         elif state == "NSW":
             return _nsw_epa_sites(lat, lng)
+        elif state == "ACT":
+            from property_scores.contamination.sources import act_register
+            return act_register.sites_at(lat, lng)
         # WA DWER-059 is technically queryable, but its Custom Active
         # Acceptance licence requires written permission for external derived
         # products. Keep the adapter tested below, but do not call it from the
@@ -1011,7 +1021,7 @@ def contamination_score(lat: float, lng: float) -> dict:
             epa_failed = True
             epa_sites = []
     epa_score = (_epa_to_score(epa_sites)
-                 if not epa_failed and (epa_sites or state in ("VIC", "NSW"))
+                 if not epa_failed and (epa_sites or state in ("VIC", "NSW", "ACT"))
                  else None)
 
     industrial = f_ind.result()
@@ -1040,11 +1050,20 @@ def contamination_score(lat: float, lng: float) -> dict:
     score = max(0, min(100, min(components))) if components else None
 
     epa_status = ("error" if epa_failed
-                  else "ok" if state in ("VIC", "NSW")
+                  else "ok" if state in ("VIC", "NSW", "ACT")
                   else "not_integrated")
+    # Any delivered evidence must block a reassuring "Clean" label, even
+    # when it belongs to a neighbouring site and correctly does not lower the
+    # subject parcel into a risk band. NSW CBD/Wagga/Killara returned 7-18
+    # official register rows while the headline still said Clean because this
+    # gate only looked at historical-use and groundwater context. The detail
+    # was technically present, but the commercial headline contradicted it.
     context_flagged = bool(
-        historical.get("entries")
-        or (state == "NSW" and groundwater.get("entries"))
+        epa_sites
+        or industrial.get("sites")
+        or historical.get("entries")
+        or landfill.get("entries")
+        or groundwater.get("entries")
     )
     label = _contamination_label(
         score,
@@ -1052,6 +1071,22 @@ def contamination_score(lat: float, lng: float) -> dict:
         ind_failed=ind_failed or aux_failed or unattributed,
         context_flagged=context_flagged,
     )
+    # An incomplete screen may still carry a useful bad signal, but it must
+    # never export a reassuring 70-100 number that downstream customers can
+    # sort as "safe" while the official register was not checked. Known WA
+    # remediation-required anchors previously returned 95 with only a prose
+    # caveat. Preserve <=65 warnings; null optimistic scores structurally.
+    incomplete_coverage = (
+        epa_status != "ok" or ind_failed or aux_failed or unattributed)
+    if score is None:
+        score_status = "unavailable"
+    elif incomplete_coverage and score >= 70:
+        score = None
+        score_status = "unavailable_incomplete_coverage"
+    elif incomplete_coverage:
+        score_status = "partial_risk_signal"
+    else:
+        score_status = "available"
 
     # On-site summary, so consumers can show "this address" separately from
     # "the neighbourhood" instead of implying a nearby entry is site risk.
@@ -1077,6 +1112,7 @@ def contamination_score(lat: float, lng: float) -> dict:
 
     result: dict = {
         "score": score,
+        "score_status": score_status,
         "label": label,
         "disclaimer": ("Score reflects register entries and industrial land "
                        "use at the address itself; nearby entries are shown "
@@ -1099,15 +1135,16 @@ def contamination_score(lat: float, lng: float) -> dict:
     }
     result["epa_status"] = epa_status
     result["industrial_status"] = industrial.get("industrial_status", "ok")
-    delivered_tas_sources = {
+    delivered_rights_sources = {
         entry.get("source")
-        for entry in historical.get("entries", [])
-        if entry.get("source") in _TAS_SOURCE_RIGHTS
+        for entry in [*epa_sites, *historical.get("entries", [])]
+        if entry.get("source") in {**_TAS_SOURCE_RIGHTS, **_ACT_SOURCE_RIGHTS}
     }
-    if delivered_tas_sources:
+    if delivered_rights_sources:
+        rights = {**_TAS_SOURCE_RIGHTS, **_ACT_SOURCE_RIGHTS}
         result["attribution"] = [
-            {"source": source, **_TAS_SOURCE_RIGHTS[source]}
-            for source in sorted(delivered_tas_sources)
+            {"source": source, **rights[source]}
+            for source in sorted(delivered_rights_sources)
         ]
 
     notes: list[str] = []

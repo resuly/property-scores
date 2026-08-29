@@ -165,6 +165,19 @@ def evaluate(expected: str, payload: dict) -> tuple[str, str]:
         ok = {"<": score < n, "<=": score <= n, ">": score > n, ">=": score >= n}[op]
         return ("PASS" if ok else "FAIL", f"score={score} expected {op}{n}")
 
+    m = re.fullmatch(
+        r"([a-z_][a-z0-9_]*)\s*(<=|<|>=|>)\s*(-?\d+(?:\.\d+)?)", e, re.I)
+    if m:
+        field, op, raw_n = m.group(1), m.group(2), m.group(3)
+        got = payload.get(field)
+        if not isinstance(got, (int, float)):
+            return "FAIL", f"{field}={got!r} expected {op}{raw_n}"
+        n = float(raw_n)
+        ok = {"<": got < n, "<=": got <= n,
+              ">": got > n, ">=": got >= n}[op]
+        return ("PASS" if ok else "FAIL",
+                f"{field}={got} expected {op}{raw_n}")
+
     m = re.match(r"([a-z_]+)\s*<=\s*(\d+)\s*m", e)
     if m:
         cat, dist = m.group(1), int(m.group(2))

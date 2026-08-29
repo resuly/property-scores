@@ -1,4 +1,4 @@
-# Commercial Readiness Assessment (2026-04-24, updated)
+# Commercial Readiness Assessment (2026-04-24, contamination updated 2026-08-30)
 
 > ⚠️ 补充 (2026-07-19):walkability 坡度惩罚已完成(commit 23cd101),本文 line16「no slope penalty」及 remaining #7 均已过时。仍准确的剩余项 = auth/rate-limit(#3)+ DA Leads /map 集成(#4)。
 
@@ -20,7 +20,7 @@
 | Solar | 50% | Caveat added | Pure API passthrough; no roof analysis |
 | Bushfire | **55%** | Overlay+Veg+Slope (FireHistory local, VIC/NSW only) | latency figure below unreliable; remote MODIS fire is dead code |
 | Heat Island | **50%** | MODIS day+night LST (local median mosaic 2026-07), night heat retention | 1km coarse; ~1.2s latency (was 18s) |
-| Contamination | **50%** | EPA 3-state + POI deduped, disclaimer | POI proxy ≠ actual contamination |
+| Contamination | **NOT READY for Self-Serve** | VIC/NSW register adapters; ACT register + official block join locally complete; VIC history/landfill/groundwater, SA GPA/licensed, QLD/TAS context; fail-closed status and monitoring | Known WA/QLD/VIC truth anchors still fail; WA rights pending; QLD/SA/TAS/NT official register coverage absent; live production does not yet contain ACT or the label/score-status fixes |
 
 ## All Disclaimers Present: 8/8 ✅
 
@@ -52,6 +52,20 @@ Every score now returns a `disclaimer` or `caveat` field in the API response.
 ### Other Scores
 - Validated via sanity checks at Melbourne CBD: 8/8 scores within expected ranges ✅
 - No systematic ground-truth validation yet for non-noise scores
+
+### Contamination commercial gate (2026-08-30)
+- Production smoke returns HTTP 200 in all eight jurisdictions, but this proves
+  availability, not official-register coverage.
+- The machine-readable truth suite now has zero manual contamination rows. On
+  the pre-fix production service it exposes known WA remediation sites, QLD
+  Newstead Gasworks and VIC Fitzroy Gasworks as failures rather than burying
+  them in manual notes.
+- Local code adds the CC BY 4.0 ACT register joined to ACTGOV Block, removes
+  Clean/Very Clean labels, and withholds optimistic 70-100 scores when required
+  coverage is incomplete. These changes are not production evidence until
+  independently reviewed and deployed.
+- Self-Serve checkout remains blocked until the remaining truth failures have
+  an authorised source or the public product coverage is deliberately narrowed.
 
 ## Remaining Items (prioritized)
 

@@ -23,6 +23,7 @@ redistribution; TAS EPA Regulated Premises and UPSS are CC BY 3.0 AU.
 """
 
 from property_scores.contamination.sources import (  # noqa: F401
+    act_register,
     ga_waste,
     nsw_groundwater,
     nsw_sites,
@@ -34,6 +35,6 @@ from property_scores.contamination.sources import (  # noqa: F401
 )
 
 __all__ = [
-    "nsw_sites", "nsw_groundwater", "vic_wfs", "sa_gpa", "sa_licensed",
+    "act_register", "nsw_sites", "nsw_groundwater", "vic_wfs", "sa_gpa", "sa_licensed",
     "qld_ea", "ga_waste", "tas_epa",
 ]

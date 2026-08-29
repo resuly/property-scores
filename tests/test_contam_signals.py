@@ -78,11 +78,12 @@ def test_min_combination_across_signals(monkeypatch):
 
 
 def test_signal_error_blocks_reassuring_label(monkeypatch):
-    # 历史用途查询挂了 + 其他一切干净: 分数可以是 95, 但不许自称 Very Clean
+    # 历史用途查询挂了 + 其他一切干净: 乐观分数不出站。
     _stub_signals(monkeypatch, hist={"status": "error", "score": None,
                                      "entries": []})
     r = cs.contamination_score(*MELB)
-    assert r["score"] == 95
+    assert r["score"] is None
+    assert r["score_status"] == "unavailable_incomplete_coverage"
     assert r["label"] == cs.LABEL_INCOMPLETE
 
 
@@ -93,7 +94,7 @@ def test_signal_error_keeps_bad_bands(monkeypatch):
                   lf={"status": "ok", "score": 45, "entries": []})
     r = cs.contamination_score(*MELB)
     assert r["score"] == 45
-    assert r["label"] == "Moderate Risk"
+    assert r["label"] == "Elevated Mapped Risk"
 
 
 def test_result_carries_new_blocks(monkeypatch):
@@ -502,7 +503,8 @@ def test_dense_unattributed_a_blocks_reassuring_label(monkeypatch):
                                      "entries": [{"tier": "A",
                                                   "distance_m": 5}]})
     r = cs.contamination_score(*MELB)
-    assert r["score"] == 95
+    assert r["score"] is None
+    assert r["score_status"] == "unavailable_incomplete_coverage"
     assert r["label"] == cs.LABEL_INCOMPLETE
 
 

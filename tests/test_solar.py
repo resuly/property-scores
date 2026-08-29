@@ -171,6 +171,29 @@ def test_malformed_gsa_annual_block_degrades_to_unavailable(monkeypatch):
     assert out["label"] == "Data unavailable"
 
 
+@pytest.mark.parametrize("bad_pvout", ["not-a-number", float("nan"), [1500], True])
+def test_malformed_gsa_numeric_metric_degrades_to_unavailable(
+        monkeypatch, bad_pvout):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "annual": {
+                    "data": {"GHI": 1600.0, "PVOUT_csi": bad_pvout},
+                    "metadata": {},
+                },
+            }
+
+    monkeypatch.setattr(ss.requests, "get", lambda *_args, **_kwargs: Response())
+
+    out = ss.solar_score(-37.81, 144.96)
+
+    assert out["score"] is None
+    assert out["label"] == "Data unavailable"
+
+
 @pytest.mark.parametrize(
     ("path", "target"),
     [

@@ -443,6 +443,25 @@ def _greenspace_proxy(lat: float, lng: float) -> float | None:
         return None
 
 
+def _score_from_components(temp_score: float, uhi_penalty: float,
+                           building_density: float | None,
+                           greenspace: float | None) -> int:
+    """Combine the same precision the API publishes for local factors.
+
+    Density and greenspace are returned at two decimals.  Scoring on hidden
+    extra precision made a caller recomputing the documented formula get a
+    different integer at rounding boundaries (Kew: disclosed inputs imply 55,
+    hidden 0.326 greenery produced 54).  Quantise once at the contract boundary
+    and use those exact values for both score and payload.
+    """
+    density = round(building_density, 2) if building_density is not None else None
+    green = round(greenspace, 2) if greenspace is not None else None
+    density_penalty = density * 6 if density is not None else 0.0
+    green_adjust = (green - 0.35) * 22 if green is not None else 0.0
+    return max(0, min(100, round(
+        temp_score - uhi_penalty - density_penalty + green_adjust)))
+
+
 # ---------------------------------------------------------------------------
 # Main scoring function
 # ---------------------------------------------------------------------------
@@ -562,7 +581,6 @@ def heat_island_score(lat: float, lng: float) -> dict:
         }
 
     # --- Local adjustments (already fetched in parallel) ---
-    density_penalty = building_density * 6 if building_density is not None else 0.0
     # Tree/green cover is the primary UHI lever, so weight it as a CENTRED
     # adjustment rather than a bonus-only term: above ~0.35 green fraction
     # (typical AU suburban cover) reads cooler, below it reads hotter. The old
@@ -574,10 +592,8 @@ def heat_island_score(lat: float, lng: float) -> dict:
     # anchors: fixes the CBD outlier (60->54 Moderate) and lifts genuinely leafy
     # sites, without pushing ordinary suburbia into Hot or the hot-truth anchors
     # (Oran Park / Penrith / Tarneit) into Extreme.
-    GREEN_BASELINE = 0.35
-    green_adjust = (greenspace - GREEN_BASELINE) * 22 if greenspace is not None else 0.0
-
-    score = max(0, min(100, round(temp_score - uhi_penalty - density_penalty + green_adjust)))
+    score = _score_from_components(
+        temp_score, uhi_penalty, building_density, greenspace)
 
     # Very Cool at 85 keeps the top label to ~15% of addresses (80 let 32%
     # of the 350-point sweep in; Bo opted for the tighter cut 2026-06-11).

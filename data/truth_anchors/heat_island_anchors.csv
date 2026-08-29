@@ -1,4 +1,4 @@
-lat,lng,expected,why
+lat,lng,expected,why,ref_lat,ref_lng,min_margin
 -33.7512,150.6920,score<=25 label Hot,Penrith CBD hardstand; famous Western Sydney heat hotspot (48.9C Jan 2020); orig <=20 was calibrated to the pre-reanchor scale (old model read 2); 2026-06 reanchor: 22 Hot
 -34.0014,150.7427,score<=39 label Hot,Oran Park treeless 2020s estate (WorldCover tree 0.03); orig <=30 calibrated to old scale (read 15); 2026-06 reanchor: 35 Hot
 -37.8585,144.6945,score<=50,Tarneit VIC treeless 2020s estate; MODIS 1km LST 34.4 vs leafy Kew 32.7 = 1.7C apart so a 'Hot' demand exceeds sensor resolution; must stay below Kew control (57); 2026-06 reanchor: 49
@@ -8,7 +8,7 @@ lat,lng,expected,why
 -33.7971,151.2877,score>=65 label Cool,Manly beachfront sea-breeze; model 58 Moderate Heat = marginal-wrong; building COUNT density 0.96 drags it down
 -33.8908,151.2743,score>=60 label Cool,Bondi Beach beachfront; model 39 Hot (prod-verified 2026-06-10) with uhi_delta +1.9C vs surroundings = coastal artefact; WRONG
 -33.7140,150.3310,score>=70 label Cool/Very Cool,Leura Blue Mountains 950m elevation in eucalypt forest; model 59 Moderate Heat + claims +1.5C hotter than surroundings; 999 cottages within 500m saturate count-density penalty = WRONG
--37.8060,145.0300,score>=55,Kew Melbourne established canopy; model 36 Hot = WRONG
+-37.8060,145.0300,score>=55,"Kew Melbourne established canopy. The original absolute truth stays >=55. The model now computes from the same two-decimal local factors it publishes, removing hidden-precision disagreement; the relative gate additionally requires Kew to remain at least 5 score points cooler than treeless Tarneit.",-37.8585,144.6945,5
 -42.8985,147.3258,score>=70 label Cool/Very Cool,Sandy Bay Hobart coolest capital; model 70 Cool = OK
 -33.6839,150.8290,greenspace_factor must NOT be ~1.0 (vintage tracker; no score gate),Marsden Park Elara estate built 2021-2026; WorldCover 2021 still shows grass paddock -> green 1.0 + density 0.0 + uhi -0.4 so the SCORE follows stale inputs (68 under 2026-06 scale); the gate here is the landcover vintage not the scale
 -27.5658,153.0704,score<=40 label Hot,Upper Mount Gravatt QLD genuine urban heat island: uhi_delta +3.7C / LST 37.4 (350-pt sweep 2026-06-11); replacement data-driven hot anchor; new scale: 31 Hot

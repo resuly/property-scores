@@ -1,6 +1,8 @@
-lat,lng,expected,why
--31.91002,116.02581,flag_high_risk,"Inside WA DWER polygon classified 'Contaminated - remediation required' (https://cssbsr.dwer.wa.gov.au/6217, LOT 6 ON DIAGRAM 3259, Bellevue). Current output: 90 Very Clean"
--31.95651,115.78446,flag_high_risk,"Inside WA DWER polygon 'Contaminated - remediation required' (https://cssbsr.dwer.wa.gov.au/8, LOT 12970 ON PLAN 219939). Current output treats all WA sites as Unknown/2000m"
+lat,lng,expected,why,id,reminder_days,blocker
+-31.91002,116.02581,flag_high_risk,"Known WA DWER remediation-required polygon (report 6217). The risk truth stays FAIL while commercial derived-score permission is pending; do not treat the rights gate's score 95 as clean.",,30,"DWER commercial derived-score permission pending; trigger = written permission or a cleared equivalent source"
+-31.91002,116.02581,epa_status=not_integrated,"Independent coverage contract for report 6217. It must remain not_integrated while rights are pending and turn red when integration status changes.",wa_dwer_6217_coverage_contract,,
+-31.95651,115.78446,flag_high_risk,"Known WA DWER remediation-required polygon (report 8). The risk truth stays FAIL while commercial derived-score permission is pending; do not treat the rights gate's score 95 as clean.",,30,"DWER commercial derived-score permission pending; trigger = written permission or a cleared equivalent source"
+-31.95651,115.78446,epa_status=not_integrated,"Independent coverage contract for report 8. It must remain not_integrated while rights are pending and turn red when integration status changes.",wa_dwer_8_coverage_contract,,
 -31.947251,115.878342,flag_with_classification,"WA DWER 'Remediated for restricted use' (https://cssbsr.dwer.wa.gov.au/2992, East Perth). Classification must surface, lower severity than remediation-required"
 -36.0805,146.9158,state_NSW_11_clr_sites,"Albury NSW CBD. NSW CLR has 11 notified sites within 2km incl Former Gasworks 447m. Currently misdetected as VIC -> 0 sites, 70 Clean"
 -36.084169,146.91377,flag_very_high_risk,"Exact register point: 'Former Gasworks and surrounding commercial land', Albury, NSW EPA CLR. Currently state=VIC -> invisible"

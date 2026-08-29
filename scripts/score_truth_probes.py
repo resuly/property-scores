@@ -121,6 +121,7 @@ def evaluate(expected: str, payload: dict) -> tuple[str, str]:
     Returns (status, note): status PASS / FAIL / MANUAL.
     Parseable forms (first match wins):
       score<N, score<=N, score>=N, score>N
+      <field>=<value>  e.g. epa_status=not_integrated
       label <text>  (substring, case-insensitive, also matches 'label X/Y')
       <category><=Nm  e.g. pool<=200m (walkability category distance)
       official_*_prone / *_mapped  -> zones/hits list must be non-empty
@@ -128,6 +129,30 @@ def evaluate(expected: str, payload: dict) -> tuple[str, str]:
     """
     e = expected.strip()
     score = payload.get("score")
+
+    # Contract/status anchors are for deliberate coverage gates. They remain
+    # live canaries: when a pending source is integrated and the status moves,
+    # the old expectation turns red instead of being silently deleted.
+    m = re.fullmatch(r"([a-z_][a-z0-9_]*)\s*=\s*([A-Za-z0-9_.-]+)", e, re.I)
+    if m:
+        field, want = m.group(1), m.group(2)
+        got = payload.get(field)
+        # Walkability contract fields live under category_scores, while
+        # status fields such as epa_status are top-level.  Resolve both rather
+        # than treating `supermarket_barrier=false` as a missing top-level key.
+        if field not in payload:
+            for suffix in ("water_barrier", "distance_m", "barrier", "count", "decay"):
+                marker = "_" + suffix
+                if field.endswith(marker):
+                    category = field[:-len(marker)]
+                    got = ((payload.get("category_scores") or {}).get(category) or {}).get(suffix)
+                    break
+        if want.lower() in ("true", "false"):
+            ok = isinstance(got, bool) and got is (want.lower() == "true")
+        else:
+            ok = str(got).lower() == want.lower()
+        return ("PASS" if ok else "FAIL",
+                f"{field}={got!r} expected {want!r}")
 
     m = re.match(r"score\s*(<=|<|>=|>)\s*(\d+)", e)
     if m:
@@ -176,6 +201,17 @@ def evaluate(expected: str, payload: dict) -> tuple[str, str]:
     return ("MANUAL", e[:70])
 
 
+def evaluate_margin(payload: dict, reference: dict, min_margin: float) -> tuple[str, str]:
+    """Require this score to stay at least ``min_margin`` above a control."""
+    score = payload.get("score")
+    ref_score = reference.get("score")
+    if not isinstance(score, (int, float)) or not isinstance(ref_score, (int, float)):
+        return "FAIL", f"comparison unavailable: score={score!r}, reference={ref_score!r}"
+    actual = score - ref_score
+    return ("PASS" if actual >= min_margin else "FAIL",
+            f"score={score} reference={ref_score} margin={actual} expected >={min_margin:g}")
+
+
 def run_anchors(base: str, only_domain: str | None) -> list[dict]:
     results = []
     for f in sorted(ANCHOR_DIR.glob("*_anchors.csv")):
@@ -186,18 +222,39 @@ def run_anchors(base: str, only_domain: str | None) -> list[dict]:
         if ep is None:
             continue  # ui_claims / paid_reports / suburb_data need their own surfaces
         for row in csv.DictReader(open(f)):
+            result_key = row.get("id") or f"{row['lat']},{row['lng']}"
             url = f"{base}/scores/{ep}?lat={row['lat']}&lng={row['lng']}"
             payload = _get(url)
             time.sleep(SLEEP_S)
             if payload is None:
-                results.append({"domain": domain, "key": f"{row['lat']},{row['lng']}",
+                results.append({"domain": domain, "key": result_key,
                                 "status": "FAIL", "note": "endpoint unreachable",
-                                "expected": row["expected"][:60]})
+                                "expected": row["expected"][:60],
+                                "reminder_days": row.get("reminder_days"),
+                                "blocker": row.get("blocker")})
                 continue
             status, note = evaluate(row["expected"], _flatten(payload))
-            results.append({"domain": domain, "key": f"{row['lat']},{row['lng']}",
+            if status == "PASS" and row.get("ref_lat") and row.get("ref_lng"):
+                ref_url = (f"{base}/scores/{ep}?lat={row['ref_lat']}"
+                           f"&lng={row['ref_lng']}")
+                ref_payload = _get(ref_url)
+                time.sleep(SLEEP_S)
+                if ref_payload is None:
+                    status, margin_note = "FAIL", "comparison endpoint unreachable"
+                else:
+                    try:
+                        min_margin = float(row.get("min_margin") or 0)
+                    except ValueError:
+                        status, margin_note = "FAIL", "invalid comparison min_margin"
+                    else:
+                        status, margin_note = evaluate_margin(
+                            _flatten(payload), _flatten(ref_payload), min_margin)
+                note = f"{note}; {margin_note}"
+            results.append({"domain": domain, "key": result_key,
                             "status": status, "note": note,
-                            "expected": row["expected"][:60]})
+                            "expected": row["expected"][:60],
+                            "reminder_days": row.get("reminder_days"),
+                            "blocker": row.get("blocker")})
     return results
 
 
@@ -237,6 +294,15 @@ def run_canaries() -> list[dict]:
                     "status": "PASS" if ok else "FAIL", "note": note,
                     "expected": c.get("assert", "")})
     return out
+
+
+def reminder_due_seconds(result: dict) -> float:
+    """Per-anchor reminder cadence; known external blockers may be quieter."""
+    try:
+        days = float(result.get("reminder_days") or STALE_RED_DAYS)
+    except (TypeError, ValueError):
+        days = float(STALE_RED_DAYS)
+    return max(days, 1.0) * 86400 - 1800
 
 
 def main():
@@ -290,14 +356,11 @@ def main():
     keep = now_failing | untouched
     since = {k: since.get(k, now) for k in keep}
     reminded = {k: v for k, v in reminded.items() if k in keep}
-    # Half an hour of slack, because the window is measured against a daily
-    # cron: without it a run that starts even a second later than the one
-    # seven days ago misses the threshold and the reminder slips a full day,
-    # every time, until it drifts off the schedule entirely.
-    due = STALE_RED_DAYS * 86400 - 1800
+    fail_by_key = {f"{r['domain']}|{r['key']}": r for r in fails}
     stale = sorted(
         k for k in now_failing - new_failures
-        if now - since[k] >= due and now - reminded.get(k, since[k]) >= due)
+        if now - since[k] >= reminder_due_seconds(fail_by_key[k])
+        and now - reminded.get(k, since[k]) >= reminder_due_seconds(fail_by_key[k]))
 
     def _send(title, level, keys):
         """True only if Telegram actually took the message.
@@ -307,10 +370,11 @@ def main():
         return value is how a 502 or an expired token turns into a week of
         silence -- the very failure this reminder exists to end.
         """
-        by_key = {f"{r['domain']}|{r['key']}": r for r in fails}
+        by_key = fail_by_key
         shown = [k for k in keys if k in by_key]
         lines = [
             f"• {by_key[k]['domain']} {by_key[k]['key']}: {by_key[k]['note']}"
+            + (f"；阻塞: {by_key[k]['blocker']}" if by_key[k].get("blocker") else "")
             + (f" (已红 {int((now - since[k]) / 86400)} 天)" if k in stale else "")
             for k in shown[:12]]
         # Never let the cap read as "that was all of them": there are already

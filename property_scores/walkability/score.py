@@ -9,12 +9,11 @@ Uses straight-line distance as a baseline. Road-network distance (via Valhalla
 or OSRM) can be substituted for higher accuracy.
 """
 
-import math
-
 from property_scores.common.overture import (get_db, osm_amenities_near, pois_near,
                                               pois_near_detailed, rail_stops_near,
-                                              roads_near, sports_fields_near,
-                                              transit_stops_near, water_crossings)
+                                              road_crossings, sports_fields_near,
+                                              transit_stops_near, walking_trails_near,
+                                              water_crossings)
 
 # Exact Overture category → walkability scenario mapping.
 # Keys are exact Overture category strings; values are (scenario, sub_type).
@@ -31,6 +30,7 @@ CATEGORY_MAP: dict[str, tuple[str, str]] = {
     "child_care_and_day_care": ("childcare", "childcare"),
     "preschool": ("childcare", "preschool"),
     "kindergarten": ("childcare", "kindergarten"),
+    "day_care_preschool": ("childcare", "childcare"),
     # Primary school
     "elementary_school": ("primary_school", "primary"),
     "primary_school": ("primary_school", "primary"),
@@ -202,9 +202,10 @@ def _match_category(poi_category: str | None, poi_name: str | None = None) -> st
     if cat_lower in ("grocery_store", "specialty_grocery_store") and scenario == "convenience":
         if any(sn in name_lower for sn in _SUPERMARKET_NAMES):
             return "supermarket"
-    if scenario == "primary_school" and name_lower:
-        if "school" not in name_lower and "primary" not in name_lower:
-            return None
+    # Exact elementary_school / primary_school taxonomy is stronger than a
+    # display name.  Requiring the words "school" or "primary" in the name
+    # discarded hundreds of valid campuses (the truth audit found 642), e.g.
+    # a campus branded only with its institution name.
     if scenario == "gp_clinic" and name_lower:
         if any(w in name_lower for w in ["cosmetic", "plastic", "aesthetic", "laser", "online", "montu"]):
             return None
@@ -328,6 +329,13 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
         # harmless where under-crediting is not. Beach is OSM-only by the drop
         # above, sports by the merge below.
         _osm_cats |= {row[0] for row in _osm_rows}
+        # Overture Places stores a long trail as one representative point.
+        # Transportation carries the line geometry, so query the nearest point
+        # on named ODbL trail segments instead.  The rows share the POI tuple
+        # contract and are credited through the OSM/ODbL category disclosure.
+        _trail_rows = walking_trails_near(db, lat, lng, radius_m)
+        pois_full = pois_full + _trail_rows
+        _osm_cats |= {"walking_trail"} if _trail_rows else set()
         # Train stations come from GTFS EXCLUSIVELY: Overture both misses
         # whole new lines (Perth Morley-Ellenbrook 2024) and keeps stations
         # closed in 2014 (Newcastle) as "open", so its rail categories are
@@ -337,14 +345,6 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
         pois_full = pois_full + rail_stops_near(db, lat, lng, radius_m)
         pois = [(cat, dist) for cat, dist, *_ in pois_full]
         detailed = True
-
-    # Detect major road/rail barriers within the search area
-    barriers = roads_near(db, lat, lng, radius_m, source=source)
-    barrier_segments = [
-        (dist_m, near_lng, near_lat)
-        for road_class, dist_m, _, near_lng, near_lat in barriers
-        if road_class in BARRIER_CLASSES
-    ]
 
     nearest: dict[str, float] = {}
     nearest_detail: dict[str, dict] = {}
@@ -380,40 +380,11 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
                         })
                         seen_names.setdefault(matched, set()).add(norm)
 
-    def _bearing(to_lng: float, to_lat: float) -> float:
-        return math.degrees(math.atan2(to_lng - lng, to_lat - lat)) % 360
-
-    def _effective_distance(poi_dist_m: float, scenario: str = "",
-                            poi_lng: float | None = None,
-                            poi_lat: float | None = None) -> float:
-        """Check if a highway barrier lies between property and POI.
-
-        Barrier must be at 15-85% of the distance AND, when the POI position
-        is known, within +-50 degrees of the POI's bearing. The old scalar
-        test penalised a supermarket due north for a motorway due south
-        (Hughesdale: all 11 qualifying segments at 165-210 degrees behind the
-        property; Bay Run scored 16/100 with 21 phantom barriers,
-        2026-06-11 audit).
-
-        Transit destinations (train / tram / bus) sit on or across the road
-        and rail corridors by nature, and crossing a main road to reach them
-        is a normal, signalised part of the walk, so transit stays exempt.
-        """
-        if not barrier_segments or poi_dist_m < 100:
-            return poi_dist_m
+    def _effective_distance(poi_dist_m: float, scenario: str = "") -> float:
+        """Apply the precomputed exact road-crossing result for this POI."""
         if scenario in ("train", "tram_bus"):
             return poi_dist_m
-        lo = poi_dist_m * 0.15
-        hi = poi_dist_m * 0.85
-        poi_b = (_bearing(poi_lng, poi_lat)
-                 if poi_lng is not None and poi_lat is not None else None)
-        for b_dist, b_lng, b_lat in barrier_segments:
-            if not (lo < b_dist < hi):
-                continue
-            if poi_b is not None and b_lng is not None:
-                diff = abs((_bearing(b_lng, b_lat) - poi_b + 180) % 360 - 180)
-                if diff > 50:
-                    continue
+        if scenario in road_blocked:
             return poi_dist_m * BARRIER_PENALTY
         return poi_dist_m
 
@@ -422,7 +393,19 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
     # all scenario-nearests; crossed scenarios take the barrier penalty.
     water_blocked: set = set()
     targets = [(sc, d["lng"], d["lat"]) for sc, d in nearest_detail.items()]
+    road_blocked: set = set()
+    road_barrier_degraded = False
     if targets:
+        checked_road_blocked = road_crossings(db, lat, lng, targets, source=source)
+        if checked_road_blocked is None:
+            # A broken spatial query must not silently remove every motorway
+            # barrier. Conservatively penalise non-transit destinations and
+            # expose the degradation in the payload.
+            road_barrier_degraded = True
+            road_blocked = {sc for sc, _lng, _lat in targets
+                            if sc not in ("train", "tram_bus")}
+        else:
+            road_blocked = checked_road_blocked
         water_blocked = water_crossings(db, lat, lng, targets)
 
     total_weight = sum(cfg["weight"] for cfg in SCENARIO_CONFIG.values())
@@ -435,8 +418,7 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
         if scenario in nearest:
             raw_dist = nearest[scenario]
             nd = nearest_detail.get(scenario) or {}
-            eff_dist = _effective_distance(raw_dist, scenario,
-                                           nd.get("lng"), nd.get("lat"))
+            eff_dist = _effective_distance(raw_dist, scenario)
             if scenario in water_blocked:
                 eff_dist = max(eff_dist, raw_dist * BARRIER_PENALTY)
             if eff_dist > raw_dist:
@@ -528,6 +510,11 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
         result["summary"] = summary
     if barriers_crossed > 0:
         result["barriers_crossed"] = barriers_crossed
+    if road_barrier_degraded:
+        result["road_barrier_check"] = "unavailable_conservative"
+        result["disclaimer"] += (
+            " The motorway crossing check was unavailable; non-transit "
+            "destinations were conservatively treated as barrier-crossed.")
     if slope_mult < 1.0:
         result["slope_penalty"] = round(slope_mult, 2)
     return result

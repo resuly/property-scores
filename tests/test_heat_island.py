@@ -14,6 +14,12 @@ import pytest
 from property_scores.heat_island import score as hs
 
 
+def test_score_uses_the_same_two_decimal_local_factors_it_publishes():
+    # Kew's disclosed components imply 55. Hidden green=0.326 used to score 54
+    # while the payload printed 0.33, so a customer could not reproduce it.
+    assert hs._score_from_components(61.0, 0.0, 1.0, 0.326) == 55
+
+
 @pytest.fixture(autouse=True)
 def _clear_caches():
     hs._cache.clear()

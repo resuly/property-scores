@@ -57,6 +57,15 @@ def test_bus_stop_category_maps_to_tram_bus_scenario():
     assert _match_category("tram_stop", "Stop 12") == "tram_bus"
 
 
+def test_overture_day_care_preschool_maps_to_childcare():
+    assert _match_category("day_care_preschool", "Rosny Child Care Centre") == "childcare"
+
+
+def test_exact_primary_taxonomy_does_not_require_school_word_in_name():
+    assert _match_category("primary_school", "The Springfield Anglican College") == "primary_school"
+    assert _match_category("elementary_school", "Greenfields Campus") == "primary_school"
+
+
 @pytest.fixture
 def fields_parquet(tmp_path):
     df = pd.DataFrame([
@@ -108,8 +117,9 @@ def test_school_options_are_complete_while_other_categories_stay_bounded(monkeyp
     monkeypatch.setattr(walk, "get_db", lambda: object())
     monkeypatch.setattr(walk, "pois_near_detailed", lambda *a, **k: rows)
     for name in ("transit_stops_near", "sports_fields_near",
-                 "osm_amenities_near", "rail_stops_near", "roads_near"):
+                 "osm_amenities_near", "rail_stops_near", "walking_trails_near"):
         monkeypatch.setattr(walk, name, lambda *a, **k: [])
+    monkeypatch.setattr(walk, "road_crossings", lambda *a, **k: set())
     monkeypatch.setattr(walk, "water_crossings", lambda *a, **k: set())
     monkeypatch.setattr(walk, "_slope_penalty", lambda *a, **k: 1.0)
 
@@ -150,8 +160,9 @@ def test_school_option_dedup_does_not_move_score_baseline(monkeypatch):
     monkeypatch.setattr(walk, "get_db", lambda: object())
     monkeypatch.setattr(walk, "pois_near_detailed", lambda *a, **k: rows)
     for name in ("transit_stops_near", "sports_fields_near",
-                 "osm_amenities_near", "rail_stops_near", "roads_near"):
+                 "osm_amenities_near", "rail_stops_near", "walking_trails_near"):
         monkeypatch.setattr(walk, name, lambda *a, **k: [])
+    monkeypatch.setattr(walk, "road_crossings", lambda *a, **k: set())
     monkeypatch.setattr(walk, "water_crossings", lambda *a, **k: set())
     monkeypatch.setattr(walk, "_slope_penalty", lambda *a, **k: 1.0)
 
@@ -173,3 +184,22 @@ def test_school_option_dedup_does_not_move_score_baseline(monkeypatch):
         + walk.SCENARIO_CONFIG["secondary_school"]["weight"] * walk._decay(200)
     ) / total_weight * 100)
     assert result["score"] == expected_score
+
+
+def test_road_query_failure_is_conservative_and_disclosed(monkeypatch):
+    from property_scores.walkability import score as walk
+
+    rows = [("supermarket", 500, 145.0, -37.8, "Market")]
+    monkeypatch.setattr(walk, "get_db", lambda: object())
+    monkeypatch.setattr(walk, "pois_near_detailed", lambda *a, **k: rows)
+    for name in ("transit_stops_near", "sports_fields_near",
+                 "osm_amenities_near", "rail_stops_near", "walking_trails_near"):
+        monkeypatch.setattr(walk, name, lambda *a, **k: [])
+    monkeypatch.setattr(walk, "road_crossings", lambda *a, **k: None)
+    monkeypatch.setattr(walk, "water_crossings", lambda *a, **k: set())
+    monkeypatch.setattr(walk, "_slope_penalty", lambda *a, **k: 1.0)
+
+    result = walk.walkability_score(-37.8, 145.0)
+    assert result["category_scores"]["supermarket"]["barrier"] is True
+    assert result["road_barrier_check"] == "unavailable_conservative"
+    assert "conservatively" in result["disclaimer"]

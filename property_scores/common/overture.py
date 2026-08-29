@@ -217,6 +217,80 @@ def roads_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
     return db.sql(sql).fetchall()
 
 
+def road_crossings(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
+                   targets: list[tuple], radius_m: int = 2000,
+                   *, source: str | None = None) -> set | None:
+    """Return target keys whose straight path crosses a motorway/trunk line.
+
+    ``roads_near`` only supplies the point on each road nearest the property.
+    Comparing that point's bearing with a POI bearing produced broad angular
+    false positives (most visibly around Sydney's Bay Run).  This query tests
+    the actual property-to-target segment against the actual road geometry.
+    """
+    if not targets:
+        return set()
+    table = f"read_parquet('{source or _local_or_fail(ROADS_FILE)}')"
+    delta = radius_m / 111_000 * 1.5
+    values = ", ".join(
+        f"({i}, {tlng}, {tlat})" for i, (_key, tlng, tlat) in enumerate(targets))
+    sql = f"""
+        SELECT DISTINCT t.idx
+        FROM (VALUES {values}) AS t(idx, tlng, tlat)
+        JOIN {table} r
+          ON ST_Intersects(r.geometry,
+                           ST_MakeLine(ST_Point({lng}, {lat}),
+                                       ST_Point(t.tlng, t.tlat)))
+        WHERE r.bbox.xmin <= {lng + delta} AND r.bbox.xmax >= {lng - delta}
+          AND r.bbox.ymin <= {lat + delta} AND r.bbox.ymax >= {lat - delta}
+          AND r.subtype = 'road'
+          AND r.class IN ('motorway', 'trunk')
+    """
+    try:
+        hit = {row[0] for row in db.sql(sql).fetchall()}
+    except Exception:
+        return None
+    return {targets[i][0] for i in hit}
+
+
+def walking_trails_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
+                        radius_m: int = 1500, *, source: str | None = None) -> list[tuple]:
+    """Named walking/cycling trail lines from Overture transportation.
+
+    Places encode a trail as one representative point, which can be more than
+    a kilometre from an address lying directly beside another part of the same
+    trail.  Transportation retains the line geometry.  Only named path,
+    footway and cycleway segments are accepted so ordinary unnamed sidewalks
+    do not become recreational trails.  Returns the standard detailed-POI
+    tuple with the nearest point on each line.
+    """
+    table = f"read_parquet('{source or _local_or_fail(ROADS_FILE)}')"
+    delta = radius_m / 111_000 * 1.5
+    import math
+    m_per_deg = 111_320 * math.cos(math.radians(lat))
+    deg_thresh = radius_m / m_per_deg
+    sql = f"""
+        SELECT 'hiking_trail' AS category, dist_m,
+               ST_X(cp) AS lng, ST_Y(cp) AS lat, name
+        FROM (
+            SELECT name, cp,
+                   {_metres_from_closest_point(lng, lat, m_per_deg)} AS dist_m
+            FROM (
+                SELECT names.primary AS name,
+                       {_closest_point_sql('geometry', lng, lat)} AS cp
+                FROM {table}
+                WHERE bbox.xmin BETWEEN {lng - delta} AND {lng + delta}
+                  AND bbox.ymin BETWEEN {lat - delta} AND {lat + delta}
+                  AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
+                  AND class IN ('path', 'footway', 'cycleway')
+                  AND names.primary IS NOT NULL
+            )
+        )
+        WHERE dist_m < {radius_m}
+        ORDER BY dist_m
+    """
+    return db.sql(sql).fetchall()
+
+
 def rail_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
               radius_m: int = 1000, *, source: str | None = None,
               legacy_distance: bool = False) -> list[tuple]:
@@ -622,7 +696,14 @@ def pois_near_detailed(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
             SELECT category, poi_lng, poi_lat, name,
                    {_metres_from_closest_point(lng, lat, m_per_deg)} AS dist_m
             FROM (
-                SELECT categories.primary AS category,
+                SELECT CASE
+                         WHEN categories.primary = 'school'
+                          AND len(list_filter(
+                                websites,
+                                url -> contains(lower(url), 'primary'))) > 0
+                         THEN 'primary_school'
+                         ELSE categories.primary
+                       END AS category,
                        ST_X(geometry) AS poi_lng,
                        ST_Y(geometry) AS poi_lat,
                        names.primary AS name,
@@ -670,6 +751,11 @@ def water_crossings(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
           AND w.bbox.ymin <= {lat + delta} AND w.bbox.ymax >= {lat - delta}
           AND w.class IN ('river', 'canal', 'lake', 'ocean', 'sea', 'bay', 'lagoon')
           AND ST_Area(w.geometry) > 0.0000020
+          -- A waterfront probe can fall a few metres inside a coarse water
+          -- polygon.  Such a polygon is the origin/shoreline, not a body that
+          -- must be crossed to reach every amenity in every direction.
+          AND NOT ST_Intersects(w.geometry, ST_Point({lng}, {lat}))
+          AND NOT ST_Intersects(w.geometry, ST_Point(t.tlng, t.tlat))
     """
     try:
         hit = {row[0] for row in db.sql(sql).fetchall()}

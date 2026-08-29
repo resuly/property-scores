@@ -29,6 +29,75 @@ overlap; interior points fall through to a coarse bbox only as a final safety ne
 
 import requests
 
+# ACT is not a rectangle: Queanbeyan cuts into its eastern edge.  The old
+# 148.76..149.40 bbox routed Queanbeyan NSW into ACT.  This is the mainland ACT
+# exterior derived from the ABS ASGS 2021 SAL polygons (GDA2020, CC BY 4.0),
+# simplified to ~500 m while retaining 99.7% of area.  It is only a routing
+# boundary; no ABS fields or geometry are returned to customers.
+_ACT_BOUNDARY = [
+    (149.090715, -35.765604), (149.101510, -35.803640),
+    (149.093577, -35.824099), (149.095693, -35.845624),
+    (149.064289, -35.874934), (149.049550, -35.919946),
+    (149.012400, -35.899611), (148.999423, -35.902664),
+    (148.997668, -35.896414), (148.975662, -35.892163),
+    (148.961605, -35.896708), (148.932902, -35.873576),
+    (148.909451, -35.853061), (148.907069, -35.829566),
+    (148.886684, -35.810051), (148.897783, -35.794646),
+    (148.894868, -35.771865), (148.903325, -35.757924),
+    (148.894104, -35.751326), (148.886711, -35.719226),
+    (148.877720, -35.714949), (148.872491, -35.721415),
+    (148.857529, -35.761445), (148.822500, -35.720958),
+    (148.796288, -35.709339), (148.788448, -35.697794),
+    (148.798454, -35.666583), (148.767504, -35.647400),
+    (148.783448, -35.628497), (148.768439, -35.603293),
+    (148.788779, -35.588327), (148.772945, -35.567785),
+    (148.777954, -35.558507), (148.762796, -35.495486),
+    (148.774387, -35.486132), (148.766747, -35.467168),
+    (148.775991, -35.454874), (148.774846, -35.441822),
+    (148.788922, -35.426482), (148.785800, -35.408898),
+    (148.795982, -35.406624), (148.795693, -35.392990),
+    (148.808665, -35.382442), (148.793552, -35.339109),
+    (148.810139, -35.307437), (149.120953, -35.124403),
+    (149.138992, -35.127970), (149.149618, -35.138393),
+    (149.146732, -35.144540), (149.164284, -35.141892),
+    (149.167584, -35.159739), (149.185612, -35.161109),
+    (149.183646, -35.175656), (149.197041, -35.185355),
+    (149.189548, -35.203311), (149.208523, -35.211499),
+    (149.204992, -35.229087), (149.213790, -35.219593),
+    (149.238703, -35.222215), (149.246799, -35.229137),
+    (149.234379, -35.242779), (149.273184, -35.259166),
+    (149.271813, -35.273472), (149.315306, -35.276218),
+    (149.322482, -35.286727), (149.341504, -35.286690),
+    (149.361671, -35.309012), (149.394791, -35.303176),
+    (149.399293, -35.319077), (149.355571, -35.350701),
+    (149.336419, -35.339714), (149.254750, -35.330108),
+    (149.207167, -35.345286), (149.146693, -35.414833),
+    (149.139075, -35.432520), (149.155022, -35.436663),
+    (149.135078, -35.454825), (149.151261, -35.507189),
+    (149.131459, -35.553590), (149.142687, -35.592776),
+    (149.084620, -35.580802), (149.078153, -35.586404),
+    (149.087568, -35.639640), (149.097485, -35.647282),
+    (149.095304, -35.679267), (149.109423, -35.696573),
+    (149.099355, -35.714646), (149.104104, -35.724969),
+    (149.090715, -35.765604),
+]
+
+
+def _point_in_polygon(lng: float, lat: float,
+                      polygon: list[tuple[float, float]]) -> bool:
+    """Dependency-free ray casting for the small ACT routing polygon."""
+    inside = False
+    j = len(polygon) - 1
+    for i, (xi, yi) in enumerate(polygon):
+        xj, yj = polygon[j]
+        crosses = ((yi > lat) != (yj > lat))
+        if crosses:
+            edge_x = (xj - xi) * (lat - yi) / (yj - yi) + xi
+            if lng < edge_x:
+                inside = not inside
+        j = i
+    return inside
+
 # --- river-border polylines: list of (lng, border_lat); state membership decided
 #     by whether the point's lat is north (larger, less negative) or south of the
 #     interpolated border_lat at that lng. Traced from Overture water vertices. ---
@@ -144,8 +213,10 @@ def detect_state(lat: float, lng: float) -> str | None:
     if 143.50 <= lng <= 148.55 and -43.70 <= lat <= -39.40:
         return "TAS"
 
-    # --- ACT: enclave inside NSW; must be tested before the NSW/VIC logic. ---
-    if 148.76 <= lng <= 149.40 and -35.93 <= lat <= -35.12:
+    # --- ACT: enclave inside NSW; must be tested before NSW/VIC.  Its eastern
+    # edge wraps around Queanbeyan, so a rectangle is not a valid boundary. ---
+    if (148.76 <= lng <= 149.40 and -35.93 <= lat <= -35.12
+            and _point_in_polygon(lng, lat, _ACT_BOUNDARY)):
         return "ACT"
 
     # --- Western third: meridian 129 E splits WA from SA/NT. ---

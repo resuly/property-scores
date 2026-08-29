@@ -70,6 +70,28 @@ FACTORS: dict[str, float] = {
 }
 
 
+def _coastal_escarpment_floor(factors: dict[str, dict]) -> int | None:
+    """Great-view floor for an elevated, open site immediately above ocean.
+
+    The additive average treats all-direction building/green density as if it
+    could cancel a strong one-direction coastal outlook.  A site is only in
+    this class when three independent signals agree: ocean within 200 m,
+    >=30 m relative terrain advantage, and at least half the horizon open.
+    Flat beaches, dense waterfront streets without an open horizon, and high
+    inland sites do not qualify.  The floor says *potential* only; the API's
+    line-of-sight caveat remains unchanged.
+    """
+    ocean = factors.get("ocean_proximity") or {}
+    elevation = factors.get("elevation_advantage") or {}
+    horizon = factors.get("horizon_openness") or {}
+    if (ocean.get("distance_m") is not None
+            and ocean["distance_m"] <= 200
+            and elevation.get("advantage_m", 0) >= 30
+            and horizon.get("open_directions", 0) >= 4):
+        return 68
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Factor computations
 # ---------------------------------------------------------------------------
@@ -449,6 +471,9 @@ def view_quality_score(lat: float, lng: float) -> dict:
         }
 
     score = max(0, min(100, round(weighted_sum / active_weight * 100)))
+    score_floor = _coastal_escarpment_floor(factor_results)
+    if score_floor is not None:
+        score = max(score, score_floor)
 
     # Label cuts trimmed to the observed AU distribution (350-point sweep,
     # 2026-06-11): the factor sum tops out near 83 nationally, so 85+ was
@@ -480,6 +505,9 @@ def view_quality_score(lat: float, lng: float) -> dict:
         "missing_factors": missing,
         "degraded": degraded,
     }
+    if score_floor is not None:
+        result["score_floor"] = score_floor
+        result["score_floor_reason"] = "elevated_open_coastal_escarpment"
     if degraded:
         result["caveat"] = ("Terrain data was unavailable for this estimate; "
                             "the score uses the remaining factors only. "

@@ -1,0 +1,38 @@
+[
+  {
+    "id": "nsw-wallabi-point-32-ocean",
+    "address": "32 Ocean Drive, Wallabi Point NSW 2430",
+    "lat": -31.99412282,
+    "lng": 152.57074959,
+    "state": "NSW",
+    "expected_bal": "BAL-12.5",
+    "eligible_for_range_validation": false,
+    "exclusion_reason": "professional report does not publish the assessed building coordinates",
+    "point_basis": "G-NAF address point inside current Overture building footprint; report does not publish coordinates",
+    "source_url": "https://apps.planningportal.nsw.gov.au/prweb/PRRestService/DocMgmt/v1/PublicDocuments/DATA-WORKATTACH-FILE%20PEC-DPE-EP-WORK%20PAN-574270%2120250919T060315.189%20GMT"
+  },
+  {
+    "id": "nsw-warriewood-bubalo-lot14",
+    "address": "Lot 14, Bubalo Street, Warriewood NSW 2102",
+    "lat": -33.655499,
+    "lng": 151.13971,
+    "state": "NSW",
+    "expected_bal": "BAL-LOW",
+    "eligible_for_range_validation": false,
+    "exclusion_reason": "printed longitude is about 15 km from Warriewood and conflicts with the site address",
+    "point_basis": "GPS coordinates printed in professional Bushfire Hazard Assessment",
+    "source_url": "https://eservices.northernbeaches.nsw.gov.au/ePlanning/live/Common/Output/Document.aspx?id=%21%21JZNg24Y910uEcbnw6y6uRpzGo1WDJzfKMYyHWg%253d%253dllAppBTjgkM%253d&t=app"
+  },
+  {
+    "id": "nsw-warriewood-bubalo-lot16",
+    "address": "Lot 16 DP 1216899, Bubalo Street, Warriewood NSW 2102",
+    "lat": -33.686971,
+    "lng": 151.299532,
+    "state": "NSW",
+    "expected_bal": "BAL-LOW",
+    "eligible_for_range_validation": true,
+    "exclusion_reason": null,
+    "point_basis": "GPS coordinates printed in professional Bushfire Hazard Assessment",
+    "source_url": "https://eservices.northernbeaches.nsw.gov.au/ePlanning/live/Common/Output/Document.aspx?id=%21%21GCRPIJRc8kuG66NSEkJvFT0Q3VIibFMvqWs6QA%253d%253dKko6m9ytZYc%253d&t=app"
+  }
+]

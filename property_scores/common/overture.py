@@ -558,16 +558,9 @@ def water_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
         return []
 
 
-def building_footprint_m2(db: duckdb.DuckDBPyConnection, lat: float,
-                          lng: float) -> float | None:
-    """Footprint area (m²) of the building CONTAINING the point, else None.
-
-    Whole-building semantics: for strata/apartments this is the tower's
-    footprint, not a unit's share — callers must label it as such. G-NAF
-    points for detached houses often sit in the yard, so a containment miss
-    falls back to the nearest footprint within 30 m (still the same parcel's
-    dwelling at that range); beyond that returns None rather than guessing.
-    """
+def building_containing_point_m2(db: duckdb.DuckDBPyConnection, lat: float,
+                                 lng: float) -> float | None:
+    """Footprint area (m²) only when a polygon strictly contains the point."""
     buildings_path = data_path("overture_buildings.parquet")
     if not buildings_path.exists():
         return None
@@ -585,9 +578,29 @@ def building_footprint_m2(db: duckdb.DuckDBPyConnection, lat: float,
         row = db.sql(sql).fetchone()
     except Exception:
         return None
-    if row and row[0] is not None:
-        return float(row[0]) * m_per_deg * 111_320
+    if not row or row[0] is None:
+        return None
+    return float(row[0]) * m_per_deg * 111_320
 
+
+def building_footprint_m2(db: duckdb.DuckDBPyConnection, lat: float,
+                          lng: float) -> float | None:
+    """Footprint area (m²) of the building containing/nearest the point.
+
+    Whole-building semantics: for strata/apartments this is the tower's
+    footprint, not a unit's share — callers must label it as such. G-NAF
+    points for detached houses often sit in the yard, so a containment miss
+    falls back to the nearest footprint within 30 m (still the same parcel's
+    dwelling at that range); beyond that returns None rather than guessing.
+    """
+    contained = building_containing_point_m2(db, lat, lng)
+    if contained is not None:
+        return contained
+    buildings_path = data_path("overture_buildings.parquet")
+    if not buildings_path.exists():
+        return None
+    import math
+    m_per_deg = 111_320 * math.cos(math.radians(lat))
     fallback_m = 30.0
     delta_lat = fallback_m / 111_320
     delta_lng = fallback_m / m_per_deg

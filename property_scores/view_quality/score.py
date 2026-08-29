@@ -1,53 +1,45 @@
-"""
-View Quality score — estimates visual amenity of a location.
+"""Landscape Openness context, retained under the legacy ``view_quality`` key.
 
-Five factors weighted and combined into a 0-100 score:
+Six factors are weighted and combined into a 0-100 score:
 1. Ocean/coast proximity (weight 3.0) — Overture water features
 2. Inland water proximity (weight 1.5) — rivers, lakes, reservoirs
-3. Elevation advantage (weight 2.5) — Open-Meteo DEM, higher than neighbors
+3. Elevation advantage (weight 2.5) — local 5 m/30 m terrain
 4. Green space proximity (weight 2.0) — parks/gardens from Overture POIs
 5. Building openness (weight 2.0) — inverse of nearby building density
+6. Terrain-horizon openness (weight 2.5) — eight directional terrain profiles
 
-Score 100 = best views, 0 = most obstructed. Factors without data are
-excluded from the weighted average rather than penalized.
+The model does not know an observer's storey, window orientation or building
+occlusion along a target sightline, so it must never be described as actual
+line-of-sight or a guaranteed view.
 """
 
+import logging
 import math
 import time as _time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 
-from property_scores.common.overture import (
-    get_db, water_near, buildings_near, pois_near,
-)
 from property_scores.common import landcover as lc
+from property_scores.common.config import data_path
+from property_scores.common.overture import (
+    POIS_FILE,
+    WATER_FILE,
+    buildings_near,
+    get_db,
+    pois_near,
+    water_near,
+)
+
+log = logging.getLogger(__name__)
 
 
 def _sample_elevations(lats: list, lngs: list) -> list | None:
-    """Batch elevations from the LOCAL dem.vrt. The same GLO-30 DEM already
-    sits on disk for the noise model, so read it locally.
-
-    2026-08-02: dropped the api.open-meteo.com fallback used when the local
-    file was missing or a point fell outside its populated-AU coverage —
-    DA Leads is a paid commercial product and Open-Meteo's free-tier
-    elevation endpoint is non-commercial-use-only (open-meteo.com/en/terms).
-    Returning None here just excludes `elevation_advantage` from the
-    weighted average (see module docstring: "Factors without data are
-    excluded ... rather than penalized"), the same honest-degradation
-    pattern the other four factors already use.
-    """
+    """Batch local bare-earth elevations: 5 m LiDAR, then 30 m fallback."""
     try:
-        from property_scores.noise import raster_sample as rs
-        from property_scores.common.config import data_path
-        import os
-        dem = str(data_path("global") / "dem.vrt")
-        if os.path.exists(dem):
-            out = []
-            for la, lo in zip(lats, lngs):
-                v = rs.sample(dem, la, lo, default=float("nan"))
-                out.append(None if v != v else float(v))
-            if any(v is not None for v in out):
-                return out
+        from property_scores.common import terrain
+        out = [terrain.elevation(la, lo) for la, lo in zip(lats, lngs)]
+        if any(v is not None for v in out):
+            return out
     except Exception:
         pass
     return None
@@ -68,6 +60,33 @@ FACTORS: dict[str, float] = {
     "building_openness": 2.0,
     "horizon_openness": 2.5,
 }
+
+_M_PER_DEG_LAT = 111_320.0
+_ELEVATION_DIRECTIONS = (
+    ("N", 0.0), ("S", 180.0), ("E", 90.0), ("W", 270.0),
+    ("NE", 45.0), ("NW", 315.0), ("SE", 135.0), ("SW", 225.0),
+)
+_HORIZON_DIRECTIONS = (
+    ("N", 0.0), ("NE", 45.0), ("E", 90.0), ("SE", 135.0),
+    ("S", 180.0), ("SW", 225.0), ("W", 270.0), ("NW", 315.0),
+)
+
+
+def _offset_point(lat: float, lng: float, distance_m: float,
+                  bearing_deg: float) -> tuple[float, float]:
+    """Small-distance WGS84 offset with equal ground distance in every bearing."""
+    bearing = math.radians(bearing_deg)
+    north_m = math.cos(bearing) * distance_m
+    east_m = math.sin(bearing) * distance_m
+    cos_lat = max(abs(math.cos(math.radians(lat))), 1e-9)
+    return (
+        lat + north_m / _M_PER_DEG_LAT,
+        lng + east_m / (_M_PER_DEG_LAT * cos_lat),
+    )
+
+
+def _data_file_available(filename: str) -> bool:
+    return data_path(filename).exists()
 
 
 def _coastal_escarpment_floor(factors: dict[str, dict]) -> int | None:
@@ -98,9 +117,9 @@ def _coastal_escarpment_floor(factors: dict[str, dict]) -> int | None:
 
 def _ocean_proximity_factor(db, lat: float, lng: float) -> dict | None:
     """Score based on distance to nearest ocean/coastline."""
-    rows = water_near(db, lat, lng, radius_m=10_000)
-    if not rows:
+    if not _data_file_available(WATER_FILE):
         return None
+    rows = water_near(db, lat, lng, radius_m=10_000, strict=True)
 
     ocean_dist = None
     for cls, _sub, dist_m in rows:
@@ -109,7 +128,12 @@ def _ocean_proximity_factor(db, lat: float, lng: float) -> dict | None:
             break
 
     if ocean_dist is None:
-        return None
+        return {
+            "value": 0.0,
+            "distance_m": None,
+            "searched_radius_m": 10_000,
+            "coverage_status": "checked_clear",
+        }
 
     if ocean_dist < 200:
         decay = 1.0
@@ -124,14 +148,15 @@ def _ocean_proximity_factor(db, lat: float, lng: float) -> dict | None:
     else:
         decay = max(0.0, 0.15 * (1 - (ocean_dist - 5000) / 5000))
 
-    return {"value": decay, "distance_m": round(ocean_dist)}
+    return {"value": decay, "distance_m": round(ocean_dist),
+            "searched_radius_m": 10_000, "coverage_status": "data_returned"}
 
 
 def _inland_water_factor(db, lat: float, lng: float) -> dict | None:
     """Score based on distance to nearest river/lake/reservoir."""
-    rows = water_near(db, lat, lng, radius_m=3000)
-    if not rows:
+    if not _data_file_available(WATER_FILE):
         return None
+    rows = water_near(db, lat, lng, radius_m=3000, strict=True)
 
     water_dist = None
     for cls, _sub, dist_m in rows:
@@ -140,7 +165,12 @@ def _inland_water_factor(db, lat: float, lng: float) -> dict | None:
             break
 
     if water_dist is None:
-        return None
+        return {
+            "value": 0.0,
+            "distance_m": None,
+            "searched_radius_m": 3000,
+            "coverage_status": "checked_clear",
+        }
 
     if water_dist < 100:
         decay = 1.0
@@ -155,7 +185,8 @@ def _inland_water_factor(db, lat: float, lng: float) -> dict | None:
     else:
         decay = 0.0
 
-    return {"value": decay, "distance_m": round(water_dist)}
+    return {"value": decay, "distance_m": round(water_dist),
+            "searched_radius_m": 3000, "coverage_status": "data_returned"}
 
 
 def _elevation_advantage_factor(lat: float, lng: float) -> dict | None:
@@ -167,17 +198,14 @@ def _elevation_advantage_factor(lat: float, lng: float) -> dict | None:
     Uses the better of the two advantages so hilltops AND elevated plateaus
     both score well. Also gives a baseline bonus for absolute elevation.
     """
-    near_offset = 0.0045  # ~500m
-    far_offset = 0.018    # ~2km
     lats = [lat]
     lngs = [lng]
-    for off in (near_offset, far_offset):
-        for dlat, dlng in [
-            (off, 0), (-off, 0), (0, off), (0, -off),
-            (off, off), (off, -off), (-off, off), (-off, -off),
-        ]:
-            lats.append(lat + dlat)
-            lngs.append(lng + dlng)
+    for distance_m in (500, 2000):
+        for _label, bearing in _ELEVATION_DIRECTIONS:
+            sample_lat, sample_lng = _offset_point(
+                lat, lng, distance_m, bearing)
+            lats.append(sample_lat)
+            lngs.append(sample_lng)
 
     elevations = _sample_elevations(lats, lngs)
     if not elevations or len(elevations) < 17:
@@ -250,7 +278,8 @@ def _green_space_factor(db, lat: float, lng: float) -> dict | None:
     take the better of the POI score and the actual woody-canopy fraction within
     500m. Falls back to POI-only when WorldCover is unavailable.
     """
-    pois = pois_near(db, lat, lng, radius_m=1000)
+    poi_available = _data_file_available(POIS_FILE)
+    pois = pois_near(db, lat, lng, radius_m=1000) if poi_available else []
 
     green_distances: list[float] = []
     for cat, dist_m in pois:
@@ -276,10 +305,16 @@ def _green_space_factor(db, lat: float, lng: float) -> dict | None:
     # (Warrandyte canopy 0.939).
     green = lc.canopy_fraction(lat, lng, radius_m=500)
     if green is None:
+        if not poi_available:
+            return None
         if not green_distances:
-            return {"value": 0.0, "count": 0, "nearest_m": None, "green_pct": None}
+            return {"value": 0.0, "count": 0, "nearest_m": None,
+                    "green_pct": None, "coverage_status": "checked_clear",
+                    "signals_used": ["overture_places"]}
         return {"value": round(poi_value, 3), "count": count,
-                "nearest_m": round(nearest), "green_pct": None}
+                "nearest_m": round(nearest), "green_pct": None,
+                "coverage_status": "data_returned",
+                "signals_used": ["overture_places"]}
 
     # Real vegetation cover is the honest "green outlook" signal (40% within 500m
     # = fully green). Park POIs only act as a floor for destination parks, capped
@@ -293,6 +328,9 @@ def _green_space_factor(db, lat: float, lng: float) -> dict | None:
         "count": count,
         "nearest_m": round(nearest) if nearest is not None else None,
         "green_pct": round(green * 100),
+        "coverage_status": "data_returned",
+        "signals_used": (["esa_worldcover"]
+                         + (["overture_places"] if poi_available else [])),
     }
 
 
@@ -303,6 +341,8 @@ def _building_openness_factor(db, lat: float, lng: float) -> dict | None:
     ~100-200 buildings per 300m radius. Only truly dense urban areas
     (CBD, high-rise) should score near 0.
     """
+    if not _data_file_available("overture_buildings.parquet"):
+        return None
     rows = buildings_near(db, lat, lng, radius_m=300)
     if rows is None:
         return None
@@ -345,19 +385,17 @@ def _horizon_openness_factor(lat: float, lng: float) -> dict | None:
     Low horizon angle = open views. Negative angle = downhill (bonus).
     """
     distances = [100, 300, 600, 1000, 2000]
-    dirs = [(0, 1), (1, 1), (1, 0), (1, -1), (0, -1), (-1, -1), (-1, 0), (-1, 1)]
-    labels = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
 
     lats = [lat]
     lngs = [lng]
-    for dlat, dlng in dirs:
+    for _label, bearing in _HORIZON_DIRECTIONS:
         for d in distances:
-            off = d / 111320
-            lats.append(lat + dlat * off)
-            lngs.append(lng + dlng * off * math.cos(math.radians(lat)))
+            sample_lat, sample_lng = _offset_point(lat, lng, d, bearing)
+            lats.append(sample_lat)
+            lngs.append(sample_lng)
 
     elevs = _sample_elevations(lats, lngs)
-    if not elevs or len(elevs) < 1 + len(dirs) * len(distances):
+    if not elevs or len(elevs) < 1 + len(_HORIZON_DIRECTIONS) * len(distances):
         return None
 
     center_elev = elevs[0]
@@ -368,8 +406,10 @@ def _horizon_openness_factor(lat: float, lng: float) -> dict | None:
     open_dirs = 0
     downhill_dirs = 0
     max_angles = {}
+    missing_directions = []
+    valid_directions = 0
 
-    for i, label in enumerate(labels):
+    for label, _bearing in _HORIZON_DIRECTIONS:
         max_angle = -90
         for d in distances:
             e = elevs[idx]
@@ -378,13 +418,27 @@ def _horizon_openness_factor(lat: float, lng: float) -> dict | None:
                 angle = math.degrees(math.atan2(e - center_elev, d))
                 if angle > max_angle:
                     max_angle = angle
-        max_angles[label] = max_angle
+        if max_angle == -90:
+            max_angles[label] = None
+            missing_directions.append(label)
+            continue
+        valid_directions += 1
+        max_angles[label] = round(max_angle, 1)
         if max_angle < 3:
             open_dirs += 1
         if max_angle < -2:
             downhill_dirs += 1
 
-    openness = open_dirs / 8
+    # A direction-normalised score becomes misleading when only a small arc
+    # has DEM coverage: one clear direction used to become 1.0 and receive the
+    # full 2.5 horizon weight.  Require at least six of eight compass sectors;
+    # below that, omit the factor and let the public completeness contract show
+    # it as missing.  Above the threshold, scale its effective weight by actual
+    # directional coverage.
+    min_directions = 6
+    if valid_directions < min_directions:
+        return None
+    openness = open_dirs / valid_directions
     downhill_bonus = min(downhill_dirs * 0.05, 0.15)
     decay = min(1.0, openness + downhill_bonus)
 
@@ -392,8 +446,55 @@ def _horizon_openness_factor(lat: float, lng: float) -> dict | None:
         "value": round(decay, 3),
         "open_directions": open_dirs,
         "downhill_directions": downhill_dirs,
-        "horizon_angles": {k: round(v, 1) for k, v in max_angles.items()},
+        "sampled_directions": valid_directions,
+        "coverage_fraction": round(
+            valid_directions / len(_HORIZON_DIRECTIONS), 3),
+        "missing_directions": missing_directions,
+        "degraded": bool(missing_directions),
+        "horizon_angles": max_angles,
     }
+
+
+def _source_rows(factors: dict[str, dict]) -> list[dict]:
+    rows = []
+    if factors.keys() & {"ocean_proximity", "inland_water"}:
+        rows.append({
+            "source": "Overture Maps water",
+            "licence": "ODbL-1.0; derived distances only",
+            "attribution": "Overture Maps Foundation and OpenStreetMap contributors",
+            "role": "derived proximity to ocean and inland water",
+        })
+    if "building_openness" in factors:
+        rows.append({
+            "source": "Overture Maps buildings",
+            "licence": "mixed CC BY 4.0 and ODbL-1.0 inputs; derived aggregate only",
+            "attribution": "Overture Maps Foundation and contributing data providers",
+            "role": "derived nearby-building counts and height bands",
+        })
+    green = factors.get("green_space") or {}
+    signals = set(green.get("signals_used") or [])
+    if "overture_places" in signals:
+        rows.append({
+            "source": "Overture Maps places",
+            "licence": "CDLA-Permissive-2.0 / Apache-2.0 / CC0-1.0",
+            "attribution": "Overture Maps Foundation and contributing data providers",
+            "role": "derived park and green-destination proximity",
+        })
+    if "esa_worldcover" in signals:
+        rows.append({
+            "source": "ESA WorldCover",
+            "licence": "CC BY 4.0",
+            "attribution": "ESA WorldCover project 2021",
+            "role": "10 m tree-canopy context",
+        })
+    if factors.keys() & {"elevation_advantage", "horizon_openness"}:
+        rows.append({
+            "source": "Geoscience Australia elevation products",
+            "licence": "CC BY 4.0",
+            "attribution": "Commonwealth of Australia (Geoscience Australia)",
+            "role": "5 m LiDAR where available, 30 m bare-earth DEM fallback",
+        })
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -406,7 +507,7 @@ _VQ_CACHE_TTL = 3600
 
 
 def view_quality_score(lat: float, lng: float) -> dict:
-    """Compute view quality score for a coordinate.
+    """Compute Landscape Openness under the legacy API function name.
 
     Returns dict with score (0-100), label, and per-factor details.
     Factors without data are excluded from the weighted average.
@@ -442,13 +543,20 @@ def view_quality_score(lat: float, lng: float) -> dict:
         f_open = pool.submit(_run_open, lat, lng)
         f_horiz = pool.submit(_horizon_openness_factor, lat, lng)
 
+    def resolved(name, future):
+        try:
+            return future.result()
+        except Exception:
+            log.exception("landscape factor %s failed", name)
+            return None
+
     factor_map = {
-        "ocean_proximity": f_ocean.result(),
-        "inland_water": f_water.result(),
-        "elevation_advantage": f_elev.result(),
-        "green_space": f_green.result(),
-        "building_openness": f_open.result(),
-        "horizon_openness": f_horiz.result(),
+        "ocean_proximity": resolved("ocean_proximity", f_ocean),
+        "inland_water": resolved("inland_water", f_water),
+        "elevation_advantage": resolved("elevation_advantage", f_elev),
+        "green_space": resolved("green_space", f_green),
+        "building_openness": resolved("building_openness", f_open),
+        "horizon_openness": resolved("horizon_openness", f_horiz),
     }
 
     factor_results: dict[str, dict] = {}
@@ -458,16 +566,27 @@ def view_quality_score(lat: float, lng: float) -> dict:
     for name, result in factor_map.items():
         if result:
             factor_results[name] = result
-            w = FACTORS[name]
+            coverage = result.get("coverage_fraction", 1.0)
+            w = FACTORS[name] * max(0.0, min(1.0, coverage))
             weighted_sum += result["value"] * w
             active_weight += w
 
     if active_weight == 0:
         return {
+            "product": "landscape_openness",
+            "assessment_level": "location_context",
             "score": None,
             "label": "Data unavailable",
             "factors": {},
             "active_factors": 0,
+            "missing_factors": sorted(FACTORS),
+            "degraded": True,
+            "line_of_sight": {
+                "modelled": False,
+                "observer_height_modelled": False,
+                "window_orientation_modelled": False,
+                "building_occlusion_modelled": False,
+            },
         }
 
     score = max(0, min(100, round(weighted_sum / active_weight * 100)))
@@ -479,39 +598,57 @@ def view_quality_score(lat: float, lng: float) -> dict:
     # 2026-06-11): the factor sum tops out near 83 nationally, so 85+ was
     # effectively unreachable (0.9% of addresses).
     if score >= 80:
-        label = "Exceptional Views"
+        label = "Exceptional Landscape Openness"
     elif score >= 68:
-        label = "Great Views"
+        label = "High Landscape Openness"
     elif score >= 55:
-        label = "Good Views"
+        label = "Good Landscape Openness"
     elif score >= 40:
-        label = "Average Views"
+        label = "Moderate Landscape Openness"
     elif score >= 25:
-        label = "Limited Views"
+        label = "Limited Landscape Openness"
     else:
-        label = "Obstructed Views"
+        label = "Low Landscape Openness"
 
     # Terrain factors silently renormalising away is exactly how prod served
     # "80 Great Views" with both DEM factors dead (Open-Meteo 429,
     # 2026-06-11). Surface the degradation instead of hiding it.
     missing = sorted(set(FACTORS) - set(factor_results))
-    degraded = any(f in missing for f in ("elevation_advantage", "horizon_openness"))
+    partial = sorted(
+        name for name, value in factor_results.items()
+        if value.get("degraded") is True)
+    degraded = bool(missing or partial)
     result = {
+        "product": "landscape_openness",
+        "legacy_score_key": "view_quality",
+        "assessment_level": "location_context",
         "score": score,
         "caveat": "Based on proximity to landscape features, not actual line-of-sight. Does not guarantee unobstructed views.",
         "label": label,
         "factors": factor_results,
         "active_factors": len(factor_results),
         "missing_factors": missing,
+        "partial_factors": partial,
+        "factor_weight_completeness": round(
+            active_weight / sum(FACTORS.values()), 3),
         "degraded": degraded,
+        "line_of_sight": {
+            "modelled": False,
+            "observer_height_modelled": False,
+            "window_orientation_modelled": False,
+            "building_occlusion_modelled": False,
+            "terrain_horizon_directions": 8,
+        },
+        "sources": _source_rows(factor_results),
     }
     if score_floor is not None:
         result["score_floor"] = score_floor
         result["score_floor_reason"] = "elevated_open_coastal_escarpment"
     if degraded:
-        result["caveat"] = ("Terrain data was unavailable for this estimate; "
-                            "the score uses the remaining factors only. "
-                            + result["caveat"])
+        unavailable = ", ".join(missing + partial)
+        result["caveat"] = (
+            f"One or more inputs were unavailable or partial ({unavailable}); "
+            "the score reweights the remaining factors. " + result["caveat"])
 
     _vq_cache[key] = (result, _time.time())
     if len(_vq_cache) > _VQ_CACHE_MAX:

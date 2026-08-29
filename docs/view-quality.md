@@ -1,125 +1,59 @@
-# View Quality Score
+# Landscape Openness
 
-> ⚠️ 部分过时 (2026-07-19):海拔因子已改读本地 dem.vrt(GLO-30,Open-Meteo 仅兜底);绿化因子已从 park-POI 关键词改为 ESA WorldCover 植被覆盖率。数据源描述以 view_quality/score.py 为准。
+The legacy module and response key remain `view_quality` for compatibility.
+The product name and labels are Landscape Openness.
 
-Estimates visual amenity potential at a location using five open-data factors.
+## Product boundary
 
-## Scoring
+This is location-level visual-amenity context. It does not raytrace a view from
+a window and does not model observer storey, window/balcony orientation,
+building occlusion along a target sightline, or future development. A high
+score cannot guarantee an ocean, city, landmark or green view.
 
-**Scale**: 0-100 (100 = best views)
+## Six factors
 
-| Range | Label |
-|-------|-------|
-| 85-100 | Exceptional Views |
-| 70-84 | Great Views |
-| 55-69 | Good Views |
-| 40-54 | Average Views |
-| 25-39 | Limited Views |
-| 0-24 | Obstructed Views |
+1. Ocean/coast proximity, weight 3.0.
+2. Inland-water proximity, weight 1.5.
+3. Relative elevation advantage, weight 2.5.
+4. Tree canopy and green-destination context, weight 2.0.
+5. Nearby building openness, weight 2.0.
+6. Eight-direction bare-earth terrain horizon, nominal weight 2.5. At least
+   six directions must have DEM coverage; otherwise the factor is omitted.
+   With six or seven directions its effective weight is scaled by directional
+   coverage instead of treating a narrow clear arc as a complete horizon.
 
-## Five Factors
+Terrain now uses the shared local elevation path: 5 m LiDAR where available,
+then the 30 m bare-earth DEM. Direction samples use equal ground distances in
+every bearing. The former degree offsets made east/west samples too short at
+Australian latitudes and diagonal samples too long.
 
-### 1. Ocean/Coast Proximity (weight 3.0)
+## Coverage semantics
 
-Distance to nearest ocean, bay, or strait feature from Overture water data.
+No ocean or inland-water feature inside the documented search radius is a
+checked zero contribution, not missing data. A source outage or absent local
+artifact remains missing.
 
-| Distance | Score |
-|----------|-------|
-| <200m | 1.0 |
-| <500m | 0.9 |
-| <1km | 0.75 |
-| <2km | 0.55 |
-| <5km | 0.30 |
-| >5km | Linear decay to 0 |
+Missing factors still use compatible adaptive weighting, but they can no longer
+silently present as a complete score:
 
-Classes: ocean, sea, bay, strait, tidal_channel, lagoon.
+- `missing_factors` names absent factors;
+- `partial_factors` names incomplete directional factors;
+- `factor_weight_completeness` reports the active weight share; and
+- `degraded=true` plus the caveat states that the remaining factors were
+  reweighted.
 
-### 2. Inland Water Proximity (weight 1.5)
+## Output contract
 
-Distance to nearest river, lake, reservoir, or stream.
+- `product=landscape_openness`
+- `legacy_score_key=view_quality`
+- `assessment_level=location_context`
+- Landscape Openness labels rather than guaranteed-view labels
+- explicit `line_of_sight` false flags
+- per-factor evidence and response-level source/rights rows
 
-| Distance | Score |
-|----------|-------|
-| <100m | 1.0 |
-| <300m | 0.80 |
-| <500m | 0.60 |
-| <1km | 0.35 |
-| <2km | 0.15 |
-| >2km | 0 |
+## Future evidence gate
 
-Excludes ponds, drains, swimming pools, canals.
-
-### 3. Elevation Advantage (weight 2.5)
-
-Two-scale DEM sampling via Open-Meteo:
-- **Near ring**: 8 points at ~500m (detects local hilltops)
-- **Far ring**: 8 points at ~2km (detects regional plateaus)
-
-Uses the better of the two advantages. Absolute elevation >50m gets a small bonus.
-
-| Advantage | Score |
-|-----------|-------|
-| +50m+ | 1.0 |
-| +30m | 0.85 |
-| +15m | 0.65 |
-| +5m | 0.45 |
-| 0m | 0.25 |
-| Negative | Decays to 0 |
-
-### 4. Green Space (weight 2.0)
-
-Parks, gardens, reserves, playgrounds within 1km from Overture POIs.
-Combines proximity (60%) and density (40%).
-
-### 5. Building Openness (weight 2.0)
-
-Inverse of building density within 300m, calibrated for Australian suburbs.
-
-| Buildings in 300m | Score |
-|-------------------|-------|
-| 0 | 1.0 |
-| 10 | 0.95 |
-| 40 | 0.80 |
-| 100 | 0.65 |
-| 200 | 0.45 |
-| 350 | 0.25 |
-| 400+ | 0.10 |
-
-Tall buildings (>10m) add additional penalty.
-
-## Adaptive Weighting
-
-Factors without available data are excluded rather than penalized.
-The final score is: `sum(factor_value * weight) / sum(active_weights) * 100`.
-
-This means:
-- Inland locations (no ocean data) are scored on 4 factors
-- Remote areas (no POIs) are scored on available factors only
-
-## Data Sources
-
-| Data | Source | Size |
-|------|--------|------|
-| Water features | Overture Maps (water) | 605 MB (1.1M features) |
-| Buildings | Overture Maps (building) | 1.9 GB (13.6M) |
-| POIs | Overture Maps (place) | 271 MB (1.4M) |
-| Elevation | Open-Meteo DEM API | Real-time |
-
-## Validation Examples
-
-| Location | Score | Label | Notes |
-|----------|-------|-------|-------|
-| St Kilda | 58 | Good Views | Coastal (341m), dense suburb |
-| Mt Dandenong | 67 | Good Views | 577m elevation, +202m advantage |
-| Melbourne CBD | 32 | Limited Views | Near bay but tall buildings block |
-| Brighton Beach | 50 | Average Views | ON ocean, but flat + suburban |
-| Werribee | 40 | Average Views | Near river, typical outer suburb |
-| Yarra Valley (rural) | 52 | Average Views | Elevated +21m, very open |
-
-## API
-
-```
-GET /scores/view-quality?lat=-37.8676&lng=144.9785
-```
-
-Response includes per-factor breakdown for transparency.
+A true Viewshed or View Intelligence product requires at least observer height,
+orientation, 3D terrain plus building occlusion, visible-target classification
+and labelled real-property validation. It is not a rename of this score and
+should be built only after a named buyer demonstrates a repeated sightline job.

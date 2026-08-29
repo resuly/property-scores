@@ -507,7 +507,8 @@ ptv_rail_near = gtfs_rail_near
 
 
 def water_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
-               radius_m: int = 5000, *, legacy_distance: bool = False) -> list[tuple]:
+               radius_m: int = 5000, *, legacy_distance: bool = False,
+               strict: bool = False) -> list[tuple]:
     f"""Find water features within radius.
 
     Returns (class, subtype, dist_m) sorted by distance.
@@ -555,6 +556,8 @@ def water_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
     try:
         return db.sql(sql).fetchall()
     except Exception:
+        if strict:
+            raise
         return []
 
 

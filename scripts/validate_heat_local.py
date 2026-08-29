@@ -38,15 +38,21 @@ def check_gate(expected: str, res: dict) -> tuple[str, str]:
     if m:
         want = m.group(1); c = want in label.lower()
         checks.append(f"label~{want}:{'Y' if c else 'N'}({label})"); ok &= c
-    if "returns null" in exp or "water pixel" in exp:
-        c = src == "era5"
-        checks.append(f"null->era5:{'Y' if c else 'N'}({src})"); ok &= c
+    if ("returns null" in exp or "water pixel" in exp
+            or "data unavailable" in exp):
+        # The commercial Open-Meteo/ERA5 fallback was removed 2026-08-02.
+        # A true MODIS/water gap must now fail closed rather than silently move
+        # to a differently scaled, non-commercial upstream.
+        c = score is None and label.lower() == "data unavailable"
+        checks.append(
+            f"data-unavailable:{'Y' if c else 'N'}({score}/{label})")
+        ok &= c
     if not checks:
         return "MANUAL", expected[:48]
     return ("PASS" if ok else "FAIL"), " ".join(checks)
 
 
-def run(with_remote: bool = True) -> None:
+def run(with_remote: bool = True) -> int:
     rows = list(csv.DictReader(open(ANCHORS)))
     npass = nfail = nman = 0
     maxd = 0.0
@@ -74,10 +80,11 @@ def run(with_remote: bool = True) -> None:
     print(f"PASS {npass} · FAIL {nfail} · MANUAL {nman}  (共 {len(rows)} 锚点)")
     if with_remote:
         print(f"本地 vs 远程 point LST 最大绝对差: {maxd:.1f}°C")
+    return nfail
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-remote", action="store_true", help="跳过远程对比(快)")
     a = ap.parse_args()
-    run(with_remote=not a.no_remote)
+    raise SystemExit(1 if run(with_remote=not a.no_remote) else 0)

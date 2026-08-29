@@ -1,14 +1,16 @@
 """FastAPI entry point for property scores."""
 
 import logging
+import math
 import os
 import time
 from collections import defaultdict
 from pathlib import Path
 from threading import Lock
+from typing import Literal
 
-from fastapi import FastAPI, Query, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 import property_scores.common.config  # noqa: F401 — ensure .env is loaded
@@ -31,23 +33,32 @@ logger = logging.getLogger(__name__)
 
 
 def _solar_with_footprint(lat: float, lng: float) -> dict:
-    """Solar score with roof area auto-derived from the Overture building
-    footprint containing the point, so estimated_annual_kwh populates without
-    the caller supplying roof_area (it never did; the field was always null
-    in the batch payload until 2026-07-16). Whole-building semantics for
-    strata — labelled via roof_area_source."""
+    """Solar resource plus separately labelled building-footprint context.
+
+    A footprint is not usable roof area: it has no planes, pitch, azimuth,
+    setbacks, obstructions or shading.  The old batch path passed the whole
+    footprint into ``solar_score`` as if panels covered 100% of it, producing a
+    precise-looking annual-kWh estimate for detached houses and entire strata
+    towers.  Keep the useful scalar, but never feed it into generation maths.
+    """
     roof_m2 = None
     try:
         roof_m2 = building_footprint_m2(get_db(), lat, lng)
     except Exception:
         logger.warning("building footprint lookup failed", exc_info=True)
-    result = solar_score(lat, lng, roof_area_m2=roof_m2)
+    result = solar_score(lat, lng)
     if roof_m2:
-        result["roof_area_m2"] = round(roof_m2)
-        result["roof_area_source"] = (
-            "building_footprint: the whole building containing this point "
-            "(not a per-unit share), panels across the full footprint at 20% "
-            "efficiency")
+        result["building_context"] = {
+            "building_footprint_m2": round(roof_m2),
+            "source": "Overture Maps buildings",
+            "licence": "mixed CC BY 4.0 and ODbL-1.0 inputs; derived scalar only",
+            "attribution": (
+                "Overture Maps Foundation and contributing data providers"),
+            "semantics": (
+                "whole-building ground footprint containing or nearest the "
+                "point; not a per-unit share or usable roof area"),
+            "used_in_generation_estimate": False,
+        }
     return result
 
 
@@ -104,11 +115,6 @@ DISCLAIMER = (
     "Scores are estimates based on open data and are not professional assessments. "
     "Do not rely on these scores for insurance, legal, or financial decisions. "
     "Flood, bushfire, and contamination scores do not replace site-specific investigations."
-)
-
-VIEW_QUALITY_CAVEAT = (
-    "Based on proximity to landscape features and building density, "
-    "not actual line-of-sight analysis. A high score does not guarantee unobstructed views."
 )
 
 app = FastAPI(
@@ -215,7 +221,8 @@ def index():
 
 @app.get("/solar")
 def solar_page():
-    return FileResponse(STATIC_DIR / "solar.html")
+    return RedirectResponse(
+        "https://daleads.com.au/property-scores/solar/", status_code=308)
 
 
 @app.get("/noise")
@@ -241,12 +248,15 @@ def bushfire_page():
 
 @app.get("/heat-island")
 def heat_island_page():
-    return FileResponse(STATIC_DIR / "heat_island.html")
+    return RedirectResponse(
+        "https://daleads.com.au/property-scores/heat-island/", status_code=308)
 
 
 @app.get("/view-quality")
+@app.get("/landscape-openness")
 def view_quality_page():
-    return FileResponse(STATIC_DIR / "view_quality.html")
+    return RedirectResponse(
+        "https://daleads.com.au/property-scores/view-quality/", status_code=308)
 
 
 @app.get("/contamination")
@@ -356,9 +366,15 @@ def get_walkability(
 @app.get("/scores/solar")
 def get_solar(
     lat: float = Query(...), lng: float = Query(...),
-    roof_area: float | None = Query(None),
-    orientation: str = Query("optimal"),
+    roof_area: float | None = Query(None, gt=0),
+    orientation: Literal["optimal", "east", "west", "suboptimal"] = Query(
+        "optimal"),
 ):
+    if roof_area is not None and not math.isfinite(roof_area):
+        raise HTTPException(
+            status_code=422,
+            detail="roof_area must be a finite positive number",
+        )
     return solar_score(lat, lng, roof_area_m2=roof_area, orientation=orientation)
 
 
@@ -433,6 +449,7 @@ def get_heat_island(lat: float = Query(...), lng: float = Query(...)):
 
 
 @app.get("/scores/view-quality")
+@app.get("/scores/landscape-openness")
 def get_view_quality(lat: float = Query(...), lng: float = Query(...)):
     try:
         return view_quality_score(lat, lng)

@@ -24,7 +24,9 @@ gaps: outside tile coverage, >2 km of water/fill, or a point that WorldCover
 says is water.
 """
 
+import json
 import math
+import os
 import time as _time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -60,6 +62,107 @@ from property_scores.common.config import data_path as _data_path
 
 _DAY_VRT = str(_data_path("global/modis_lst_day.vrt"))
 _NIGHT_VRT = str(_data_path("global/modis_lst_night.vrt"))
+_MOSAIC_METADATA = str(_data_path("global/modis_lst_metadata.json"))
+_ACTIVE_MOSAIC_DIR = str(_data_path("global/modis_lst_current"))
+_MOSAIC_RELEASES_DIR = str(_data_path("global/modis_lst_releases"))
+
+_MODIS_ATTRIBUTION = (
+    "NASA LP DAAC MOD11A2 Version 6.1 land-surface temperature, accessed "
+    "through Microsoft Planetary Computer; DA Leads summer-median processing."
+)
+_HEAT_SOURCES = [
+    {
+        "source": "NASA MOD11A2 Version 6.1",
+        "licence": "Public domain (United States government work)",
+        "attribution": _MODIS_ATTRIBUTION,
+        "role": "day/night land-surface temperature",
+    },
+    {
+        "source": "ESA WorldCover",
+        "licence": "CC BY 4.0",
+        "attribution": "ESA WorldCover project 2021",
+        "role": "10 m canopy, built-surface and water context",
+    },
+    {
+        "source": "Overture Maps buildings",
+        "licence": "mixed CC BY 4.0 and ODbL-1.0 inputs; derived aggregate only",
+        "attribution": "Overture Maps Foundation and contributing data providers",
+        "role": "derived building-density aggregate",
+    },
+]
+
+_mosaic_metadata_cache: tuple[str, float | None, str | None, dict] | None = None
+
+
+def _resolve_mosaic_paths() -> tuple[str, str, str]:
+    """Pin one active generation for a score call, with legacy fallback."""
+    if os.path.lexists(_ACTIVE_MOSAIC_DIR):
+        release_dir = os.path.realpath(_ACTIVE_MOSAIC_DIR)
+        return (
+            os.path.join(release_dir, "modis_lst_day.vrt"),
+            os.path.join(release_dir, "modis_lst_night.vrt"),
+            os.path.join(release_dir, "modis_lst_metadata.json"),
+        )
+    return _DAY_VRT, _NIGHT_VRT, _MOSAIC_METADATA
+
+
+def _mosaic_vintage(metadata_path: str | None = None) -> dict:
+    """Machine-readable vintage, never inferred from a file mtime.
+
+    The original bake produced only GeoTIFFs and a VRT, so production cannot
+    prove which summers were selected.  That state is reported as unverified
+    until the refreshed downloader atomically writes the sidecar manifest.
+    """
+    global _mosaic_metadata_cache
+    metadata_path = metadata_path or _resolve_mosaic_paths()[2]
+    release_dir = os.path.dirname(os.path.realpath(metadata_path))
+    releases_root = os.path.realpath(_MOSAIC_RELEASES_DIR)
+    try:
+        in_published_release = (
+            os.path.commonpath((release_dir, releases_root)) == releases_root
+            and release_dir != releases_root)
+    except ValueError:
+        in_published_release = False
+    try:
+        mtime = os.path.getmtime(metadata_path)
+    except OSError:
+        mtime = None
+    if (_mosaic_metadata_cache
+            and _mosaic_metadata_cache[:3] == (
+                metadata_path, mtime, release_dir)):
+        return dict(_mosaic_metadata_cache[3])
+    if not in_published_release:
+        out = {
+            "status": "unverified",
+            "note": (
+                "The installed mosaic is not an atomically published "
+                "generation."),
+        }
+    elif mtime is None:
+        out = {
+            "status": "unverified",
+            "note": "The installed mosaic predates the machine-readable vintage manifest.",
+        }
+    else:
+        try:
+            with open(metadata_path, encoding="utf-8") as handle:
+                raw = json.load(handle)
+            required = {
+                "collection", "seasons", "stat", "generated_at",
+                "release_id", "tile_count",
+            }
+            if not isinstance(raw, dict) or not required.issubset(raw):
+                raise ValueError("incomplete manifest")
+            if raw["release_id"] != os.path.basename(release_dir):
+                raise ValueError("manifest release does not match active directory")
+            out = {"status": "verified", **raw}
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            out = {
+                "status": "unverified",
+                "note": "The installed mosaic vintage manifest is unreadable or incomplete.",
+            }
+    _mosaic_metadata_cache = (metadata_path, mtime, release_dir, out)
+    return dict(out)
 
 # MODIS LST is water-masked at source: any 1km pixel MODIS classes as water is
 # written as fill, so a beachfront address sits on a NODATA pixel even though
@@ -146,7 +249,7 @@ def _point_is_water(lat: float, lng: float) -> bool:
         return False
 
 
-def _nearest_land_pixel(rs, lat: float, lng: float
+def _nearest_land_pixel(rs, lat: float, lng: float, day_vrt: str | None = None
                         ) -> tuple[float, list[tuple[float, float]], float] | None:
     """Day LST from the nearest ring of MODIS pixels that carries data.
 
@@ -156,6 +259,7 @@ def _nearest_land_pixel(rs, lat: float, lng: float
     A day value from one place and a night value from another would not be a
     single site's diurnal behaviour.
     """
+    day_vrt = day_vrt or _DAY_VRT
     sx, sy = _wgs84_to_sinusoidal(lat, lng)
     for dist, offsets in _neighbour_rings(_MODIS_NEIGHBOUR_MAX_M, _MODIS_PIXEL_M):
         vals: list[float] = []
@@ -163,7 +267,7 @@ def _nearest_land_pixel(rs, lat: float, lng: float
         for dx, dy in offsets:
             nlat, nlng = _sinusoidal_to_wgs84(sx + dx * _MODIS_PIXEL_M,
                                               sy + dy * _MODIS_PIXEL_M)
-            v = rs.sample(_DAY_VRT, nlat, nlng)
+            v = rs.sample(day_vrt, nlat, nlng)
             if v is None or v != v:
                 continue
             vals.append(float(v))
@@ -213,8 +317,8 @@ def _modis_lst(lat: float, lng: float) -> dict | None:
     the point itself is water, or on any sampler error, so the caller reports
     "Data unavailable".
     """
-    import os as _os
-    if not _os.path.exists(_DAY_VRT):
+    day_vrt, night_vrt, metadata_path = _resolve_mosaic_paths()
+    if not (os.path.exists(day_vrt) and os.path.exists(night_vrt)):
         return None
     try:
         from property_scores.common import landcover as _lc
@@ -228,16 +332,16 @@ def _modis_lst(lat: float, lng: float) -> dict | None:
         # Area LST over the 5x5 1km-pixel window (radius 2km on the ~926m
         # sinusoidal grid -> +/-2 pixels), which is also the window every
         # fallback candidate lives in.
-        st = rs.window_stats(_DAY_VRT, lat, lng, radius_m=2000)
+        st = rs.window_stats(day_vrt, lat, lng, radius_m=2000)
         n = int(st.get("count", 0)) if st else 0
 
-        day = rs.sample(_DAY_VRT, lat, lng)
+        day = rs.sample(day_vrt, lat, lng)
         if day is None or day != day:  # None or NaN (outside coverage / nodata)
             if n == 0:
                 return None  # nothing within 2 km has data; skip the ring search
             if _point_is_water(lat, lng):
                 return None  # the address really is on water; do not invent land
-            hit = _nearest_land_pixel(rs, lat, lng)
+            hit = _nearest_land_pixel(rs, lat, lng, day_vrt)
             if hit is None:
                 return None  # only corner pixels had data, outside the 2 km cap
             day, night_points, offset_m = hit
@@ -261,7 +365,7 @@ def _modis_lst(lat: float, lng: float) -> dict | None:
 
         nights = []
         for nlat, nlng in night_points:
-            v = rs.sample(_NIGHT_VRT, nlat, nlng)
+            v = rs.sample(night_vrt, nlat, nlng)
             if v is not None and v == v:
                 nights.append(float(v))
         night = sum(nights) / len(nights) if nights else None
@@ -274,6 +378,7 @@ def _modis_lst(lat: float, lng: float) -> dict | None:
         "uhi_delta_c": round(uhi_delta, 1) if uhi_delta is not None else None,
         "samples": 1,  # composites averaged; the local mosaic is one composite
         "lst_source": lst_source,
+        "_mosaic_metadata_path": metadata_path,
     }
     if lst_source != "pixel":
         result["lst_offset_m"] = int(round(offset_m))
@@ -526,6 +631,11 @@ def heat_island_score(lat: float, lng: float) -> dict:
         f_green = pool.submit(_greenspace_proxy, lat, lng)
 
     modis = f_modis.result()
+    mosaic_metadata_path = None
+    if modis:
+        modis = dict(modis)
+        mosaic_metadata_path = modis.pop("_mosaic_metadata_path", None)
+    mosaic_vintage = _mosaic_vintage(mosaic_metadata_path)
     building_density = f_density.result()
     greenspace = f_green.result()
 
@@ -575,9 +685,15 @@ def heat_island_score(lat: float, lng: float) -> dict:
         # `_building_density_proxy` — that endpoint's free tier is
         # non-commercial-use-only and DA Leads is a paid product).
         return {
+            "product": "neighbourhood_heat",
+            "assessment_level": "neighbourhood_context",
             "score": None,
             "label": "Data unavailable",
             "error": "Could not fetch temperature data",
+            "temperature_resolution_m": 1000,
+            "land_cover_resolution_m": 10,
+            "temperature_vintage": mosaic_vintage,
+            "sources": [dict(source) for source in _HEAT_SOURCES],
         }
 
     # --- Local adjustments (already fetched in parallel) ---
@@ -631,9 +747,16 @@ def heat_island_score(lat: float, lng: float) -> dict:
             f"address.")
 
     result: dict = {
+        "product": "neighbourhood_heat",
+        "assessment_level": "neighbourhood_context",
         "score": score,
         "label": label,
         "disclaimer": disclaimer,
+        "temperature_resolution_m": 1000,
+        "temperature_native_grid_step_m": _MODIS_PIXEL_M,
+        "land_cover_resolution_m": 10,
+        "temperature_vintage": mosaic_vintage,
+        "sources": [dict(source) for source in _HEAT_SOURCES],
     }
 
     # `source` is always "modis" here: the only other branch (no MODIS
@@ -643,6 +766,8 @@ def heat_island_score(lat: float, lng: float) -> dict:
     result["source"] = source
     if modis and modis.get("night_lst_c") is not None:
         result["night_lst_c"] = modis["night_lst_c"]
+        result["day_night_cooling_c"] = round(
+            modis["point_lst_c"] - modis["night_lst_c"], 1)
     if modis:
         result["modis_lst_c"] = modis["point_lst_c"]
         # Withheld on the borrowed-pixel path, because DA Leads' map panel

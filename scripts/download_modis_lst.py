@@ -1,9 +1,9 @@
 """下载澳洲夏季 MODIS 11A2 LST(Day+Night)建本地 mosaic, 供 heat_island 本地采样。
 
 对每个覆盖澳洲的 MODIS sinusoidal tile, 取多个夏季 8-day composite 的
-LST_Day_1km / LST_Night_1km, mask 无效像元, 跨 composite 求均值转 °C,
-day / night 各写一张本地 GeoTIFF(保留原生 sinusoidal CRS), gdalbuildvrt 建
-data/global/modis_lst_day.vrt + modis_lst_night.vrt。
+LST_Day_1km / LST_Night_1km, mask 无效像元, 跨 composite 求均值转 °C。
+每次刷新都在独立 generation 目录构建完整 day/night tiles、VRT 与 manifest，
+验证后只原子切换 data/global/modis_lst_current 这一个 symlink。
 
 采样端复用 property_scores.common.landcover.sampler(= noise.raster_sample):
 sample() 会自动把 lat/lng 重投影到栅格的 sinusoidal CRS, 所以无需 warp,
@@ -12,16 +12,22 @@ sample() 会自动把 lat/lng 重投影到栅格的 sinusoidal CRS, 所以无需
 用法:
   python scripts/download_modis_lst.py --dry-run                       # 只搜索统计, 不下载
   python scripts/download_modis_lst.py --tiles 29,12 --max-composites 3 # 单 tile 小测
-  python scripts/download_modis_lst.py                                 # 全澳全量(默认 2023 夏季)
+  python scripts/download_modis_lst.py                                 # 全澳最近三个完整夏季
   python scripts/download_modis_lst.py --seasons 2022,2023,2024        # 多夏季均值(更稳)
 """
 import argparse
+import calendar
+import json
 import os
+import shutil
 import subprocess
+import tempfile
 import time
+import uuid
 import warnings
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime, timezone
 
 import numpy as np
 import rasterio
@@ -29,9 +35,12 @@ import requests
 
 PC_STAC = "https://planetarycomputer.microsoft.com/api/stac/v1"
 PC_SIGN = "https://planetarycomputer.microsoft.com/api/sas/v1/sign"
-OUT_DIR = "data/global/modis_lst"
-DAY_VRT = "data/global/modis_lst_day.vrt"
-NIGHT_VRT = "data/global/modis_lst_night.vrt"
+RELEASES_DIR = "data/global/modis_lst_releases"
+ACTIVE_LINK = "data/global/modis_lst_current"
+TILES_DIRNAME = "tiles"
+DAY_VRT_NAME = "modis_lst_day.vrt"
+NIGHT_VRT_NAME = "modis_lst_night.vrt"
+METADATA_NAME = "modis_lst_metadata.json"
 AU_BBOX = [112, -44, 154, -9]
 VALID_DN_MIN = 7500   # MODIS LST 有效 DN 下限(< 此为 fill / 无效低值)
 SCALE = 0.02          # DN -> Kelvin
@@ -152,35 +161,113 @@ def write_tile(path, arr, meta):
         dst.write(arr, 1)
 
 
-def build_vrt(vrt_path, tile_paths):
+def build_vrt(vrt_path, tile_paths, *, cwd=None):
     if not tile_paths:
         print(f"skip vrt {vrt_path}: no tiles")
-        return
+        return False
     try:
         subprocess.run(["gdalbuildvrt", "-srcnodata", str(NODATA),
                         "-vrtnodata", str(NODATA), vrt_path] + tile_paths,
-                       check=True, capture_output=True)
+                       check=True, capture_output=True, cwd=cwd)
         print(f"built {vrt_path} ({len(tile_paths)} tiles)")
+        return True
     except Exception as e:
         print(f"vrt fail {vrt_path}: {e}")
+        return False
 
 
-def main():
+def default_seasons(today=None):
+    """The three most recent *completed* southern-hemisphere summers."""
+    today = today or date.today()
+    last_start = today.year - 1 if today.month >= 3 else today.year - 2
+    return [last_start - 2, last_start - 1, last_start]
+
+
+def write_metadata(path, *, release_id, seasons, stat, tile_count,
+                   composite_count):
+    """Publish vintage only after both VRTs completed, using atomic replace."""
+    payload = {
+        "collection": "modis-11A2-061",
+        "seasons": seasons,
+        "period_start": f"{min(seasons)}-12-01",
+        "period_end": (
+            f"{max(seasons) + 1}-02-"
+            f"{calendar.monthrange(max(seasons) + 1, 2)[1]:02d}"),
+        "stat": stat,
+        "native_grid_step_m": 926.625,
+        "tile_count": tile_count,
+        "composite_count": composite_count,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "release_id": release_id,
+    }
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+    print(f"wrote {path}")
+
+
+def validate_tile_sets(expected_tags, day_tags, night_tags):
+    """Require the same complete tile identity set on both sides."""
+    expected = set(expected_tags)
+    day = set(day_tags)
+    night = set(night_tags)
+    if not expected or day != expected or night != expected:
+        raise RuntimeError(
+            "day/night mosaic incomplete; active generation was not changed "
+            f"(expected={sorted(expected)}, day={sorted(day)}, "
+            f"night={sorted(night)})")
+
+
+def publish_release(stage_dir, release_id):
+    """Rename a verified generation, then atomically switch one symlink."""
+    os.makedirs(RELEASES_DIR, exist_ok=True)
+    final_dir = os.path.join(RELEASES_DIR, release_id)
+    if os.path.exists(final_dir):
+        raise RuntimeError(f"release already exists: {final_dir}")
+    if os.path.lexists(ACTIVE_LINK) and not os.path.islink(ACTIVE_LINK):
+        raise RuntimeError(
+            f"refusing to replace non-symlink active path: {ACTIVE_LINK}")
+
+    os.replace(stage_dir, final_dir)
+    active_parent = os.path.dirname(ACTIVE_LINK) or "."
+    os.makedirs(active_parent, exist_ok=True)
+    temp_link = (
+        f"{ACTIVE_LINK}.tmp-{os.getpid()}-{uuid.uuid4().hex[:8]}")
+    target = os.path.relpath(final_dir, active_parent)
+    try:
+        os.symlink(target, temp_link)
+        os.replace(temp_link, ACTIVE_LINK)
+    finally:
+        if os.path.lexists(temp_link):
+            os.unlink(temp_link)
+    print(f"activated {ACTIVE_LINK} -> {target}")
+    return final_dir
+
+
+def build_parser():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--seasons", default="2023",
-                    help="逗号分隔的南半球夏季起始年(默认 2023 = 2023-12~2024-02)")
+    ap.add_argument("--seasons", default="",
+                    help=("逗号分隔的南半球夏季起始年;"
+                          "默认自动取最近三个完整夏季"))
     ap.add_argument("--tiles", default="",
                     help="限定 tile, 如 '29,12' 或 '29,12;30,11'(测试用)")
     ap.add_argument("--max-composites", type=int, default=0,
                     help="每 tile 最多用几期 composite(0=全部)")
-    ap.add_argument("--skip-existing", action="store_true",
-                    help="已存在的 tile tif 跳过(断点续下)")
     ap.add_argument("--stat", choices=["median", "mean"], default="median",
                     help="逐像元聚合方式(默认 median, 抗热带云污染)")
     ap.add_argument("--dry-run", action="store_true", help="只搜索统计不下载")
-    args = ap.parse_args()
+    return ap
 
-    seasons = [int(s) for s in args.seasons.split(",") if s.strip()]
+
+def main():
+    args = build_parser().parse_args()
+
+    seasons = ([int(s) for s in args.seasons.split(",") if s.strip()]
+               if args.seasons.strip() else default_seasons())
     only = set()
     if args.tiles:
         for t in args.tiles.replace(";", " ").split():
@@ -200,39 +287,72 @@ def main():
             print(f"  h{h:02d}v{v:02d}: {len(its)} composites")
         return
 
-    os.makedirs(OUT_DIR, exist_ok=True)
-    day_tiles, night_tiles = [], []
+    os.makedirs(RELEASES_DIR, exist_ok=True)
+    stage_dir = tempfile.mkdtemp(prefix=".staging-", dir=RELEASES_DIR)
+    tiles_dir = os.path.join(stage_dir, TILES_DIRNAME)
+    os.makedirs(tiles_dir)
+    day_tiles: dict[str, str] = {}
+    night_tiles: dict[str, str] = {}
     t0 = time.time()
-    for i, ((h, v), its) in enumerate(sorted(by_tile.items()), 1):
-        tag = f"h{h:02d}v{v:02d}"
-        dp, npth = f"{OUT_DIR}/modis_day_{tag}.tif", f"{OUT_DIR}/modis_night_{tag}.tif"
+    release_id = (
+        f"summer-{'-'.join(str(year) for year in seasons)}-{args.stat}-"
+        f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-"
+        f"{uuid.uuid4().hex[:8]}")
+    try:
+        for i, ((h, v), its) in enumerate(sorted(by_tile.items()), 1):
+            tag = f"h{h:02d}v{v:02d}"
+            day_rel = f"{TILES_DIRNAME}/modis_day_{tag}.tif"
+            night_rel = f"{TILES_DIRNAME}/modis_night_{tag}.tif"
 
-        if args.skip_existing and os.path.exists(dp) and os.path.exists(npth):
-            day_tiles.append(dp)
-            night_tiles.append(npth)
-            print(f"  [{i}/{len(by_tile)}] {tag} skip(existing)", flush=True)
-            continue
+            day_hrefs = [it["assets"]["LST_Day_1km"]["href"] for it in its
+                         if it.get("assets", {}).get("LST_Day_1km")]
+            night_hrefs = [it["assets"]["LST_Night_1km"]["href"] for it in its
+                           if it.get("assets", {}).get("LST_Night_1km")]
 
-        day_hrefs = [it["assets"]["LST_Day_1km"]["href"] for it in its
-                     if it.get("assets", {}).get("LST_Day_1km")]
-        night_hrefs = [it["assets"]["LST_Night_1km"]["href"] for it in its
-                       if it.get("assets", {}).get("LST_Night_1km")]
+            day_arr, meta = agg_stack(
+                day_hrefs, args.max_composites, stat=args.stat)
+            night_arr, nmeta = agg_stack(
+                night_hrefs, args.max_composites, stat=args.stat)
+            if day_arr is not None and night_arr is not None:
+                write_tile(os.path.join(stage_dir, day_rel), day_arr, meta)
+                write_tile(os.path.join(stage_dir, night_rel), night_arr, nmeta)
+                day_tiles[tag] = day_rel
+                night_tiles[tag] = night_rel
+            else:
+                print(f"  [{i}/{len(by_tile)}] {tag} incomplete", flush=True)
 
-        day_arr, meta = agg_stack(day_hrefs, args.max_composites, stat=args.stat)
-        if day_arr is not None:
-            write_tile(dp, day_arr, meta)
-            day_tiles.append(dp)
+            print(
+                f"  [{i}/{len(by_tile)}] {tag} done "
+                f"({time.time() - t0:.0f}s)", flush=True)
 
-        night_arr, nmeta = agg_stack(night_hrefs, args.max_composites, stat=args.stat)
-        if night_arr is not None:
-            write_tile(npth, night_arr, nmeta)
-            night_tiles.append(npth)
-
-        print(f"  [{i}/{len(by_tile)}] {tag} done ({time.time() - t0:.0f}s)", flush=True)
-
-    build_vrt(DAY_VRT, sorted(day_tiles))
-    build_vrt(NIGHT_VRT, sorted(night_tiles))
-    print(f"\n完成, 总耗时 {time.time() - t0:.0f}s")
+        expected_tags = {
+            f"h{h:02d}v{v:02d}" for h, v in by_tile
+        }
+        validate_tile_sets(expected_tags, day_tiles, night_tiles)
+        day_ok = build_vrt(
+            DAY_VRT_NAME, sorted(day_tiles.values()), cwd=stage_dir)
+        night_ok = build_vrt(
+            NIGHT_VRT_NAME, sorted(night_tiles.values()), cwd=stage_dir)
+        if not (day_ok and night_ok):
+            raise RuntimeError(
+                "day/night VRT build failed; active generation was not changed")
+        write_metadata(
+            os.path.join(stage_dir, METADATA_NAME),
+            release_id=release_id,
+            seasons=seasons,
+            stat=args.stat,
+            tile_count=len(day_tiles),
+            composite_count=sum(len(items) for items in by_tile.values()),
+        )
+        publish_release(stage_dir, release_id)
+        stage_dir = None
+        print(f"\n完成, 总耗时 {time.time() - t0:.0f}s")
+    finally:
+        # A failed generation was created by this invocation and was never
+        # activated. Removing only that exact mkdtemp path cannot touch the
+        # live pointer or a prior verified release.
+        if stage_dir and os.path.isdir(stage_dir):
+            shutil.rmtree(stage_dir)
 
 
 if __name__ == "__main__":

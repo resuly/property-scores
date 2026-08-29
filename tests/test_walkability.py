@@ -49,7 +49,9 @@ def test_transit_stops_near_tram_category(stops_parquet):
 
 
 def test_transit_stops_missing_file_graceful():
-    assert transit_stops_near(get_db(), -33.7, 151.1, 1500, source="/tmp/nope_missing.parquet") == []
+    assert transit_stops_near(
+        get_db(), -33.7, 151.1, 1500,
+        source="/tmp/nope_missing.parquet") is None
 
 
 def test_bus_stop_category_maps_to_tram_bus_scenario():
@@ -64,6 +66,12 @@ def test_rail_replacement_bus_stop_is_not_a_train_station(tmp_path):
          "lat": -37.799946, "lng": 144.959552, "state": "vic"},
         {"stop_id": "vic:station", "stop_name": "Parkville Railway Station",
          "lat": -37.799874, "lng": 144.959542, "state": "vic"},
+        {"stop_id": "tas:bus", "stop_name": "Cygnet Bus Station",
+         "lat": -37.799800, "lng": 144.959500, "state": "tas"},
+        {"stop_id": "vic:street", "stop_name": "Station St/Rutland Rd",
+         "lat": -37.799700, "lng": 144.959400, "state": "vic"},
+        {"stop_id": "sa:tram", "stop_name": "Adelaide Railway Station Tram Stop",
+         "lat": -37.799600, "lng": 144.959300, "state": "sa"},
     ])
     path = tmp_path / "rail.parquet"
     frame.to_parquet(path, index=False)
@@ -106,7 +114,9 @@ def test_sports_fields_near_finds_oval(fields_parquet):
 
 def test_sports_fields_missing_file_graceful():
     from property_scores.common.overture import sports_fields_near
-    assert sports_fields_near(get_db(), -33.7, 151.1, 1500, source="/tmp/nope2.parquet") == []
+    assert sports_fields_near(
+        get_db(), -33.7, 151.1, 1500,
+        source="/tmp/nope2.parquet") is None
 
 
 def test_sports_category_maps_to_sports_scenario():
@@ -223,7 +233,8 @@ def test_road_query_failure_is_conservative_and_disclosed(monkeypatch):
 
 
 def _one_market_walkability(monkeypatch, *, water_result=set(),
-                            slope_result=(1.0, "data_returned", 1.5)):
+                            slope_result=(1.0, "data_returned", 1.5),
+                            missing_stream: str | None = None):
     from property_scores.walkability import score as walk
 
     rows = [("supermarket", 300, 145.0, -37.8, "Market")]
@@ -231,7 +242,8 @@ def _one_market_walkability(monkeypatch, *, water_result=set(),
     monkeypatch.setattr(walk, "pois_near_detailed", lambda *a, **k: rows)
     for name in ("transit_stops_near", "sports_fields_near",
                  "osm_amenities_near", "rail_stops_near", "walking_trails_near"):
-        monkeypatch.setattr(walk, name, lambda *a, **k: [])
+        value = None if name == missing_stream else []
+        monkeypatch.setattr(walk, name, lambda *a, _value=value, **k: _value)
     monkeypatch.setattr(walk, "road_crossings", lambda *a, **k: set())
     monkeypatch.setattr(walk, "water_crossings", lambda *a, **k: water_result)
     monkeypatch.setattr(walk, "_slope_penalty", lambda *a, **k: slope_result)
@@ -253,6 +265,9 @@ def test_walkability_contract_never_claims_route_time(monkeypatch):
     assert result["screening_label"] == "Very low amenity proximity"
     assert result["unique_facility_count"] == 1
     assert result["poi_count_basis"] == "source_rows_before_general_deduplication_legacy"
+    assert result["amenity_source_categories"] == {
+        "overture_places": ["supermarket"],
+    }
 
 
 def test_water_query_failure_is_not_silently_reported_clear(monkeypatch):
@@ -270,3 +285,38 @@ def test_missing_slope_coverage_is_neutral_but_explicit(monkeypatch):
     assert result["coverage"]["slope"] == "unavailable_neutral"
     assert "no slope penalty was applied" in result["disclaimer"]
     assert "slope_grade_proxy_pct" not in result
+
+
+def test_missing_auxiliary_amenity_artifact_is_partial_not_clear(monkeypatch):
+    result = _one_market_walkability(
+        monkeypatch, missing_stream="rail_stops_near")
+
+    assert result["coverage"]["amenities"] == "partial"
+    assert result["coverage"]["amenity_sources"]["gtfs_rail"] == "unavailable"
+    assert result["category_scores"]["train"]["count"] == 0
+
+
+def test_osm_sports_source_is_credited_under_mapped_scenario(monkeypatch):
+    from property_scores.walkability import score as walk
+
+    monkeypatch.setattr(walk, "get_db", lambda: object())
+    monkeypatch.setattr(walk, "pois_near_detailed", lambda *a, **k: [])
+    monkeypatch.setattr(
+        walk, "sports_fields_near",
+        lambda *a, **k: [
+            ("sports_and_recreation_venue", 0, 145.0, -37.8, "Monash Aquatic"),
+        ])
+    for name in ("transit_stops_near", "osm_amenities_near",
+                 "rail_stops_near", "walking_trails_near"):
+        monkeypatch.setattr(walk, name, lambda *a, **k: [])
+    monkeypatch.setattr(walk, "road_crossings", lambda *a, **k: set())
+    monkeypatch.setattr(walk, "water_crossings", lambda *a, **k: set())
+    monkeypatch.setattr(
+        walk, "_slope_penalty",
+        lambda *a, **k: (1.0, "data_returned", 1.0))
+
+    result = walk.walkability_score(-37.8, 145.0)
+
+    assert result["osm_amenity_categories"] == ["sports"]
+    assert result["amenity_source_categories"]["osm_sports"] == ["sports"]
+    assert result["category_scores"]["sports"]["nearest"]["source"] == "osm_sports"

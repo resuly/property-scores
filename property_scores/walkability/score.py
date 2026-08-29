@@ -291,28 +291,34 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
         dict with score (0-100), label, category_scores, poi_count.
     """
     db = get_db()
-    # Categories whose delivered name and coordinate may come from
-    # OpenStreetMap (ODbL-1.0) rather than the permissively licensed Overture
-    # places stream. Collected as the streams merge, so the attribution
-    # downstream follows the data instead of a hardcoded list. Initialised
-    # outside the branch: the `source` path never fills it, but the result
-    # block below reads it either way.
-    _osm_cats: set = set()
+    source_coverage: dict[str, str] = {}
+
+    def tagged(rows, source_id: str) -> list[tuple]:
+        if rows is None:
+            source_coverage[source_id] = "unavailable"
+            return []
+        source_coverage[source_id] = (
+            "data_returned" if rows else "checked_clear_within_radius")
+        return [(*row, source_id) for row in rows]
+
     if source:
         pois = pois_near(db, lat, lng, radius_m, source=source)
+        source_coverage["custom_overture_places"] = (
+            "data_returned" if pois else "checked_clear_within_radius")
         detailed = False
     else:
-        pois_full = pois_near_detailed(db, lat, lng, radius_m)
+        pois_full = tagged(
+            pois_near_detailed(db, lat, lng, radius_m), "overture_places")
         # GTFS bus/tram stops: Overture places have essentially no AU bus
         # stops (zero within 1500 m of Turramurra's bus interchange), so the
         # tram_bus scenario reads official GTFS stops. Same 5-tuple shape,
         # categories bus_stop/tram_stop already map via CATEGORY_MAP.
-        pois_full = pois_full + transit_stops_near(db, lat, lng, radius_m)
+        pois_full += tagged(
+            transit_stops_near(db, lat, lng, radius_m), "gtfs_bus_tram")
         # OSM leisure polygons: council ovals are polygons, not commercial
         # POIs, so Overture misses most of them ("no sports ovals near us").
-        _sports_rows = sports_fields_near(db, lat, lng, radius_m)
-        pois_full = pois_full + _sports_rows
-        _osm_cats |= {row[0] for row in _sports_rows}
+        pois_full += tagged(
+            sports_fields_near(db, lat, lng, radius_m), "osm_sports")
         # Beaches/lakes come from OSM natural=beach EXCLUSIVELY: Overture's
         # beach/lake places are spam pages pinned to arbitrary coordinates
         # ("Bondi Beach" in Carlton, "Whitehaven Beach" in Brisbane CBD), so
@@ -322,33 +328,22 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
         pois_full = [p for p in pois_full if p[0] not in _ghost_beach]
         # OSM public amenities (playground/dog park/public pool/beach):
         # commercial POI recall on public infrastructure is 26-44% holes.
-        _osm_rows = osm_amenities_near(db, lat, lng, radius_m)
-        pois_full = pois_full + _osm_rows
-        # Which categories drew on OpenStreetMap. The delivered payload names
-        # and locates the nearest place in each category, and OSM is ODbL-1.0,
-        # so the consumer has to be able to credit it. Recording the categories
-        # here rather than hardcoding a list downstream keeps the credit tied to
-        # the data: change what the OSM streams cover and the attribution
-        # follows. Deliberately errs toward crediting -- for playground, dog
-        # park and pool the OSM rows are merged alongside Overture's, so the
-        # specific nearest may have come from either, and over-crediting is
-        # harmless where under-crediting is not. Beach is OSM-only by the drop
-        # above, sports by the merge below.
-        _osm_cats |= {row[0] for row in _osm_rows}
+        pois_full += tagged(
+            osm_amenities_near(db, lat, lng, radius_m), "osm_public")
         # Overture Places stores a long trail as one representative point.
         # Transportation carries the line geometry, so query the nearest point
         # on named ODbL trail segments instead.  The rows share the POI tuple
         # contract and are credited through the OSM/ODbL category disclosure.
-        _trail_rows = walking_trails_near(db, lat, lng, radius_m)
-        pois_full = pois_full + _trail_rows
-        _osm_cats |= {"walking_trail"} if _trail_rows else set()
+        pois_full += tagged(
+            walking_trails_near(db, lat, lng, radius_m), "osm_named_trails")
         # Train stations come from GTFS EXCLUSIVELY: Overture both misses
         # whole new lines (Perth Morley-Ellenbrook 2024) and keeps stations
         # closed in 2014 (Newcastle) as "open", so its rail categories are
         # dropped before the GTFS stations are merged in.
         _ghost_train = {"train_station", "railway_station", "subway_station"}
         pois_full = [p for p in pois_full if p[0] not in _ghost_train]
-        pois_full = pois_full + rail_stops_near(db, lat, lng, radius_m)
+        pois_full += tagged(
+            rail_stops_near(db, lat, lng, radius_m), "gtfs_rail")
         pois = [(cat, dist) for cat, dist, *_ in pois_full]
         detailed = True
 
@@ -357,13 +352,13 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
     top_pois: dict[str, list] = {}
     cat_counts: dict[str, int] = {}
     unique_facilities: set[tuple] = set()
-    items = pois_full if detailed else [(c, d, None, None, None) for c, d in pois]
+    items = (pois_full if detailed else
+             [(c, d, None, None, None, "custom_source") for c, d in pois])
     seen_names: dict[str, set] = {}
-    for poi_cat, dist_m, plng, plat, pname in items:
+    for poi_cat, dist_m, plng, plat, pname, source_id in items:
         matched = _match_category(poi_cat, pname)
         if matched:
             facility_key = (
-                matched,
                 (pname or poi_cat or "").lower().strip(),
                 round(float(plng), 5) if plng is not None else None,
                 round(float(plat), 5) if plat is not None else None,
@@ -376,6 +371,7 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
                     nearest_detail[matched] = {
                         "lng": round(plng, 6), "lat": round(plat, 6),
                         "name": pname or poi_cat,
+                        "source": source_id,
                     }
             if plng is not None and matched not in seen_names:
                 seen_names[matched] = set()
@@ -391,6 +387,7 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
                             "lng": round(plng, 6), "lat": round(plat, 6),
                             "name": pname or poi_cat,
                             "distance_m": round(dist_m),
+                            "source": source_id,
                         })
                         seen_names.setdefault(matched, set()).add(norm)
 
@@ -528,6 +525,29 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
         "Low amenity proximity" if score >= 25 else
         "Very low amenity proximity"
     )
+    delivered_source_categories: dict[str, set[str]] = {}
+    for scenario, category in category_scores.items():
+        delivered = []
+        if isinstance(category.get("nearest"), dict):
+            delivered.append(category["nearest"])
+        delivered.extend(item for item in category.get("options") or []
+                         if isinstance(item, dict))
+        for item in delivered:
+            source_id = item.get("source")
+            if source_id:
+                delivered_source_categories.setdefault(source_id, set()).add(scenario)
+    source_categories = {
+        source_id: sorted(categories)
+        for source_id, categories in sorted(delivered_source_categories.items())
+    }
+    auxiliary_unavailable = any(
+        status == "unavailable" for key, status in source_coverage.items()
+        if key != "custom_overture_places"
+    )
+    amenity_coverage = (
+        "partial" if auxiliary_unavailable else
+        "data_returned" if pois else "checked_clear_within_radius"
+    )
     result = {
         "score": score,
         "label": label,
@@ -541,6 +561,7 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
         "poi_count": len(pois),
         "poi_count_basis": "source_rows_before_general_deduplication_legacy",
         "unique_facility_count": len(unique_facilities),
+        "amenity_source_categories": source_categories,
         "screening_contract": {
             "schema_version": "amenity-walkability-screening-v1",
             "intended_use": "property, portfolio and neighbourhood amenity screening",
@@ -550,19 +571,21 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
             "scenario_count": len(SCENARIO_CONFIG),
             "count_contract": (
                 "category count and poi_count are legacy source-row counts; "
-                "unique_facility_count deduplicates scenario/name/coordinate"
+                "unique_facility_count deduplicates name/coordinate across scenarios"
             ),
             "transit_mode_boundary": (
                 "The current GTFS rail-stop snapshot combines rail, metro and "
                 "tram services and does not deliver route_type; train and "
-                "tram_bus evidence can overlap. Rail-replacement bus stops "
-                "are excluded from the train scenario."
+                "tram_bus evidence can overlap. Explicit bus-station, rail-"
+                "replacement-bus and tram-stop names are excluded from the "
+                "train scenario."
             ),
             "barrier_distance_multiplier": BARRIER_PENALTY,
             "professional_or_statutory_reliance": "not_permitted",
         },
         "coverage": {
-            "amenities": "data_returned" if pois else "checked_clear_within_radius",
+            "amenities": amenity_coverage,
+            "amenity_sources": source_coverage,
             "road_barrier": (
                 "unavailable_conservative" if road_barrier_degraded
                 else "data_returned"
@@ -576,14 +599,18 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
     }
     if slope_grade_pct is not None:
         result["slope_grade_proxy_pct"] = slope_grade_pct
-    # Categories whose delivered `nearest` name and coordinate may have come
-    # from OpenStreetMap. Only those actually present in this response, so a
-    # consumer can credit exactly what it received. See the merge points above
-    # for why this is collected rather than hardcoded.
-    _delivered_osm = sorted(c for c in _osm_cats
-                            if (category_scores.get(c) or {}).get("nearest"))
+    _delivered_osm = sorted({
+        scenario for source_id, scenarios in source_categories.items()
+        if source_id.startswith("osm_") for scenario in scenarios
+    })
     if _delivered_osm:
         result["osm_amenity_categories"] = _delivered_osm
+    _delivered_gtfs = sorted({
+        scenario for source_id, scenarios in source_categories.items()
+        if source_id.startswith("gtfs_") for scenario in scenarios
+    })
+    if _delivered_gtfs:
+        result["gtfs_amenity_categories"] = _delivered_gtfs
     if summary:
         result["summary"] = summary
     if barriers_crossed > 0:

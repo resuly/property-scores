@@ -253,7 +253,7 @@ def road_crossings(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
 
 
 def walking_trails_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
-                        radius_m: int = 1500, *, source: str | None = None) -> list[tuple]:
+                        radius_m: int = 1500, *, source: str | None = None) -> list[tuple] | None:
     """Named walking/cycling trail lines from Overture transportation.
 
     Places encode a trail as one representative point, which can be more than
@@ -263,7 +263,10 @@ def walking_trails_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
     do not become recreational trails.  Returns the standard detailed-POI
     tuple with the nearest point on each line.
     """
-    table = f"read_parquet('{source or _local_or_fail(ROADS_FILE)}')"
+    try:
+        table = f"read_parquet('{source or _local_or_fail(ROADS_FILE)}')"
+    except FileNotFoundError:
+        return None
     delta = radius_m / 111_000 * 1.5
     import math
     m_per_deg = 111_320 * math.cos(math.radians(lat))
@@ -288,7 +291,10 @@ def walking_trails_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
         WHERE dist_m < {radius_m}
         ORDER BY dist_m
     """
-    return db.sql(sql).fetchall()
+    try:
+        return db.sql(sql).fetchall()
+    except Exception:
+        return None
 
 
 def rail_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
@@ -689,7 +695,8 @@ def pois_near_detailed(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
     """Like pois_near but returns (category, dist_m, lng, lat, name)."""
     pois_path = data_path(POIS_FILE)
     if not pois_path.exists():
-        return []
+        raise FileNotFoundError(
+            f"Required Overture places artifact missing: {pois_path}")
     delta = radius_m / 111_000 * 1.5
     import math
     m_per_deg = 111_320 * math.cos(math.radians(lat))
@@ -776,7 +783,7 @@ AMENITIES_FILE = "au_osm_amenities.parquet"
 
 
 def osm_amenities_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
-                       radius_m: int = 1500, *, source: str | None = None) -> list[tuple]:
+                       radius_m: int = 1500, *, source: str | None = None) -> list[tuple] | None:
     """OSM public amenities near a point: same 5-tuple shape as the POI stream.
 
     playground / dog_park / swimming_pool / beach from OSM polygons+nodes
@@ -788,7 +795,7 @@ def osm_amenities_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
     path = source or data_path(AMENITIES_FILE)
     import os
     if not os.path.exists(str(path)):
-        return []
+        return None
     import math
     m_per_deg = 111_320 * math.cos(math.radians(lat))
     dlat = radius_m / 111_320
@@ -806,14 +813,17 @@ def osm_amenities_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
         WHERE dist_m < {radius_m}
         ORDER BY dist_m
     """
-    return db.sql(sql).fetchall()
+    try:
+        return db.sql(sql).fetchall()
+    except Exception:
+        return None
 
 
 RAIL_STOPS_FILE = "au_rail_stops.parquet"
 
 
 def rail_stops_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
-                    radius_m: int = 1500, *, source: str | None = None) -> list[tuple]:
+                    radius_m: int = 1500, *, source: str | None = None) -> list[tuple] | None:
     """GTFS rail/metro/tram stations near a point: same 5-tuple shape.
 
     GTFS only contains stops with CURRENT service, so this kills both failure
@@ -825,7 +835,7 @@ def rail_stops_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
     path = source or data_path(RAIL_STOPS_FILE)
     import os
     if not os.path.exists(str(path)):
-        return []
+        return None
     import math
     m_per_deg = 111_320 * math.cos(math.radians(lat))
     dlat = radius_m / 111_320
@@ -840,18 +850,28 @@ def rail_stops_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
             WHERE lat BETWEEN {lat - dlat} AND {lat + dlat}
               AND lng BETWEEN {lng - dlng} AND {lng + dlng}
               AND lower(stop_name) NOT LIKE '%rail replacement bus%'
+              AND lower(stop_name) NOT LIKE '%bus station%'
+              AND lower(stop_name) NOT LIKE '%tram stop%'
+              AND stop_name NOT LIKE '%/%'
+              AND (lower(stop_name) LIKE '%railway station%'
+                   OR lower(stop_name) LIKE '%train station%'
+                   OR lower(stop_name) LIKE '%metro station%'
+                   OR lower(stop_name) LIKE '% station')
         )
         WHERE dist_m < {radius_m}
         ORDER BY dist_m
     """
-    return db.sql(sql).fetchall()
+    try:
+        return db.sql(sql).fetchall()
+    except Exception:
+        return None
 
 
 SPORTS_FIELDS_FILE = "au_sports_fields.parquet"
 
 
 def sports_fields_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
-                       radius_m: int = 1500, *, source: str | None = None) -> list[tuple]:
+                       radius_m: int = 1500, *, source: str | None = None) -> list[tuple] | None:
     """OSM leisure-polygon sports grounds near a point: same 5-tuple shape.
 
     Council ovals are OSM leisure polygons, not commercial POIs, so Overture
@@ -863,7 +883,7 @@ def sports_fields_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
     path = source or data_path(SPORTS_FIELDS_FILE)
     import os
     if not os.path.exists(str(path)):
-        return []
+        return None
     import math
     m_per_deg = 111_320 * math.cos(math.radians(lat))
     dlat = radius_m / 111_320
@@ -881,11 +901,14 @@ def sports_fields_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
         WHERE dist_m < {radius_m}
         ORDER BY dist_m
     """
-    return db.sql(sql).fetchall()
+    try:
+        return db.sql(sql).fetchall()
+    except Exception:
+        return None
 
 
 def transit_stops_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
-                       radius_m: int = 1500, *, source: str | None = None) -> list[tuple]:
+                       radius_m: int = 1500, *, source: str | None = None) -> list[tuple] | None:
     """GTFS bus/tram stops near a point: (category, dist_m, lng, lat, name).
 
     Overture places have essentially no Australian bus stops (2026-06-10:
@@ -898,7 +921,7 @@ def transit_stops_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
     path = source or data_path(BUS_STOPS_FILE)
     import os
     if not os.path.exists(str(path)):
-        return []
+        return None
     import math
     m_per_deg = 111_320 * math.cos(math.radians(lat))
     dlat = radius_m / 111_320
@@ -916,4 +939,7 @@ def transit_stops_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
         WHERE dist_m < {radius_m}
         ORDER BY dist_m
     """
-    return db.sql(sql).fetchall()
+    try:
+        return db.sql(sql).fetchall()
+    except Exception:
+        return None

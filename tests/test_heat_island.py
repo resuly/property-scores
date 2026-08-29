@@ -361,6 +361,78 @@ def test_normal_score_keeps_its_uhi_delta_and_disclaimer(monkeypatch):
     assert out["score"] == 54
 
 
+def test_neighbourhood_contract_separates_temperature_and_land_cover(monkeypatch,
+                                                                    tmp_path):
+    monkeypatch.setattr(hs, "_building_density_proxy", lambda lat, lng: 0.5)
+    monkeypatch.setattr(hs, "_greenspace_proxy", lambda lat, lng: 0.35)
+    monkeypatch.setattr(hs, "_modis_lst", lambda lat, lng: {
+        "point_lst_c": 33.0, "area_lst_c": 32.0, "uhi_delta_c": 1.0,
+        "night_lst_c": 20.0, "samples": 1, "lst_source": "pixel"})
+    from property_scores.common import landcover as lc
+    monkeypatch.setattr(lc, "fractions",
+                        lambda lat, lng, radius_m=500: {80: 0.0, 10: 0.0})
+    monkeypatch.setattr(hs, "_MOSAIC_METADATA",
+                        str(tmp_path / "missing-metadata.json"))
+    monkeypatch.setattr(hs, "_mosaic_metadata_cache", None)
+
+    out = hs.heat_island_score(*SURFERS)
+
+    assert out["product"] == "neighbourhood_heat"
+    assert out["assessment_level"] == "neighbourhood_context"
+    assert out["temperature_resolution_m"] == 1000
+    assert out["temperature_native_grid_step_m"] == hs._MODIS_PIXEL_M
+    assert out["land_cover_resolution_m"] == 10
+    assert out["day_night_cooling_c"] == 13.0
+    assert out["temperature_vintage"]["status"] == "unverified"
+    assert {source["source"] for source in out["sources"]} == {
+        "NASA MOD11A2 Version 6.1", "ESA WorldCover",
+        "Overture Maps buildings",
+    }
+
+
+def test_mosaic_manifest_is_the_only_vintage_truth(monkeypatch, tmp_path):
+    releases = tmp_path / "releases"
+    release = releases / "summer-2023-2024-2025-median-test"
+    release.mkdir(parents=True)
+    active = tmp_path / "current"
+    active.symlink_to(release)
+    manifest = release / "modis_lst_metadata.json"
+    manifest.write_text(
+        '{"collection":"modis-11A2-061","seasons":[2023,2024,2025],'
+        '"stat":"median","generated_at":"2026-08-30T00:00:00+00:00",'
+        '"release_id":"summer-2023-2024-2025-median-test",'
+        '"tile_count":12}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(hs, "_ACTIVE_MOSAIC_DIR", str(active))
+    monkeypatch.setattr(hs, "_MOSAIC_RELEASES_DIR", str(releases))
+    monkeypatch.setattr(hs, "_mosaic_metadata_cache", None)
+
+    out = hs._mosaic_vintage()
+
+    assert out["status"] == "verified"
+    assert out["seasons"] == [2023, 2024, 2025]
+    assert out["stat"] == "median"
+
+
+def test_legacy_top_level_manifest_cannot_claim_verified_vintage(monkeypatch,
+                                                                 tmp_path):
+    manifest = tmp_path / "modis_lst_metadata.json"
+    manifest.write_text(
+        '{"collection":"modis-11A2-061","seasons":[2023,2024,2025],'
+        '"stat":"median","generated_at":"2026-08-30T00:00:00+00:00"}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(hs, "_ACTIVE_MOSAIC_DIR", str(tmp_path / "missing"))
+    monkeypatch.setattr(hs, "_MOSAIC_METADATA", str(manifest))
+    monkeypatch.setattr(hs, "_mosaic_metadata_cache", None)
+
+    out = hs._mosaic_vintage()
+
+    assert out["status"] == "unverified"
+    assert "not an atomically published generation" in out["note"]
+
+
 def test_cli_prints_a_borrowed_pixel_result_without_crashing(modis_stub, capsys):
     """`python -m property_scores.heat_island.score` indexed result['modis_area_c']
     directly, which is a KeyError on exactly the addresses this path exists for

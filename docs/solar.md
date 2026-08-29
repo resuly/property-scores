@@ -1,66 +1,56 @@
-# Solar Score — Technical Specification
+# Solar Resource
 
-> ⚠️ 部分过时 (2026-07-19):现役锚点为 750→2000(非 800-1800)且乘 ORIENTATION_FACTOR(朝向因子);kWh 已去掉 ×0.80 PR。评分公式以 solar/score.py:98-103 为准。对外硬约束:禁称有 shading/太阳位置模型。
+## Product boundary
 
-## Status: v1 Stable
+`solar_score` is a regional, open-horizon resource screen. It is not a
+rooftop-design model.
 
-| Item | Status |
-|------|--------|
-| Global Solar Atlas API | Done |
-| Basic scoring (GHI/DNI/PVout) | Done |
-| Roof area estimation | Done (default 50m2) |
-| Product page | Done (solar.html) |
-| Validation vs BOM gridded data | TODO |
+- GHI, DNI and GTI: approximately 250 m.
+- PVOUT and air temperature: approximately 1 km.
+- Optimum tilt: approximately 4 km.
+- No roof planes, usable-area calculation, tree/building shading, obstructions,
+  existing-system detection, tariff, self-consumption or battery dispatch.
 
-## Data Source
+The API retains the legacy `estimated_annual_kwh` field only when a caller
+supplies `roof_area_m2`. The result is also returned as
+`generation_scenario.status=gross_open_horizon_scenario`, with the area labelled
+as an unvalidated panel-area proxy and every unmodelled input listed. The batch
+`/scores` path no longer feeds an Overture building footprint into that
+calculation. It returns the footprint separately as building context because a
+ground footprint is not usable roof area.
 
-**Global Solar Atlas** (World Bank / Solargis)
-- API: `https://api.globalsolaratlas.info/data/lta`
-- Coverage: Global, ~1km resolution
-- Parameters: GHI, DNI, DIF, GTI, PVOUT, OPTA, temperature, elevation
-- License: CC BY 4.0
+## Source and rights
 
-## Scoring Method
+Source: Global Solar Atlas 2.0, developed and operated by Solargis on behalf of
+the World Bank Group with ESMAP funding.
 
-```
-PVout range: 800 (poor) to 1800 (excellent) kWh/kWp/year
-Score = clamp((pvout - 800) / (1800 - 800) * 100, 0, 100)
-```
+- Licence: CC BY 4.0.
+- Terms: <https://globalsolaratlas.info/support/terms-of-use>.
+- Required attribution is returned in every successful and unavailable
+  response.
+- Field-level source update, version and period metadata from the live response
+  are passed through in `source_metadata.vintage`.
 
-Labels:
-- 80+: Excellent Solar Potential
-- 60-79: Good Solar Potential
-- 40-59: Moderate Solar Potential
-- 20-39: Below Average
-- 0-19: Poor Solar Potential
+The location score is derived only from PVOUT using the current 750 to 2000
+kWh/kWp anchors. A scenario orientation changes generation, not the regional
+resource score.
 
-## Output Fields
+## Output contract
 
-- score (0-100)
-- label
-- ghi_kwh_m2_year
-- dni_kwh_m2_year
-- pvout_kwh_kwp_year
-- optimal_tilt_deg
-- temp_avg_c
-- elevation_m
-- estimated_annual_kwh (if roof_area provided)
+The compatible legacy measures remain, with these truth fields added:
 
-## Validation Plan
+- `product=solar_resource`
+- `assessment_level=regional_resource`
+- `spatial_resolution_m` per returned measure
+- `open_horizon=true`
+- `roof_model` explicit false flags
+- `generation_scenario` or null
+- `source`, `licence`, `attribution`, `source_metadata`
 
-Compare against:
-1. **BOM Solar Exposure gridded data** (Australia): monthly mean daily solar exposure
-2. **PVGIS** (EU Joint Research Centre): independent PV estimation tool
-3. **Actual rooftop PV production data** (if available via Solar Analytics or similar)
+## Validation and readiness
 
-Target: within 10% of BOM/PVGIS values.
-
-## Accuracy Assessment
-
-Estimated accuracy: **90%** — Global Solar Atlas is well-validated, satellite-derived data. Main limitation is no local shading (trees, buildings), which would require 3D analysis.
-
-## Future Improvements
-
-- 3D shadow analysis using building/vegetation data (high effort)
-- Roof orientation detection from building footprint (medium effort)
-- Integration with electricity pricing for financial return estimate
+Current tests pin score anchors, per-field resolution, provenance, invalid
+inputs, and the rule that orientation cannot move the resource score. A
+standalone Rooftop Solar product remains a different project and requires roof
+segmentation, usable area, 3D shading and installer validation before it can be
+named or sold as such.

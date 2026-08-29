@@ -34,13 +34,13 @@
 
       <!-- Navigation pills -->
       <div class="flex flex-wrap gap-1.5 mb-5">
-        <a href="/solar" class="px-2.5 py-1 rounded-md text-xs font-medium border border-slate-200 bg-white text-amber-600 hover:bg-amber-50 transition-colors">Solar</a>
+        <a href="/solar" class="px-2.5 py-1 rounded-md text-xs font-medium border border-slate-200 bg-white text-amber-600 hover:bg-amber-50 transition-colors">Solar Resource</a>
         <a href="/noise" class="px-2.5 py-1 rounded-md text-xs font-medium border border-slate-200 bg-white text-violet-600 hover:bg-violet-50 transition-colors">Noise</a>
         <a href="/walkability" class="px-2.5 py-1 rounded-md text-xs font-medium border border-slate-200 bg-white text-blue-600 hover:bg-blue-50 transition-colors">Walkability</a>
         <a href="/flood" class="px-2.5 py-1 rounded-md text-xs font-medium border border-slate-200 bg-white text-cyan-600 hover:bg-cyan-50 transition-colors">Flood</a>
         <a href="/bushfire" class="px-2.5 py-1 rounded-md text-xs font-medium border border-slate-200 bg-white text-orange-600 hover:bg-orange-50 transition-colors">Bushfire</a>
-        <a href="/heat-island" class="px-2.5 py-1 rounded-md text-xs font-medium border border-slate-200 bg-white text-red-600 hover:bg-red-50 transition-colors">Heat Island</a>
-        <a href="/view-quality" class="px-2.5 py-1 rounded-md text-xs font-medium border border-slate-200 bg-white text-violet-600 hover:bg-violet-50 transition-colors">View Quality</a>
+        <a href="/heat-island" class="px-2.5 py-1 rounded-md text-xs font-medium border border-slate-200 bg-white text-red-600 hover:bg-red-50 transition-colors">Neighbourhood Heat</a>
+        <a href="/landscape-openness" class="px-2.5 py-1 rounded-md text-xs font-medium border border-slate-200 bg-white text-violet-600 hover:bg-violet-50 transition-colors">Landscape Openness</a>
         <a href="/contamination" class="px-2.5 py-1 rounded-md text-xs font-medium border border-slate-200 bg-white text-emerald-600 hover:bg-emerald-50 transition-colors">Contamination</a>
       </div>
 
@@ -151,18 +151,18 @@ function renderResults(lat, lng, scores) {
   const el = document.getElementById('results');
   let html = '';
 
-  // Solar
+  // Solar Resource
   if (scores.solar && !scores.solar.error && scores.solar.score != null) {
     const s = scores.solar;
-    html += scoreCard('Solar Potential', s.score, s.label, 'bar-solar', 'badge-solar', `
+    html += scoreCard('Solar Resource', s.score, s.label, 'bar-solar', 'badge-solar', `
       <dt>GHI</dt><dd>${s.ghi_kwh_m2_year ?? 'N/A'} kWh/m&sup2;/year</dd>
       <dt>DNI</dt><dd>${s.dni_kwh_m2_year ?? 'N/A'} kWh/m&sup2;/year</dd>
       <dt>PV Output</dt><dd>${s.pvout_kwh_kwp_year} kWh/kWp/year</dd>
       <dt>Optimal Tilt</dt><dd>${s.optimal_tilt_deg}&deg;</dd>
       <dt>Avg Temperature</dt><dd>${s.temp_avg_c}&deg;C</dd>
       <dt>Elevation</dt><dd>${s.elevation_m}m</dd>
-      ${s.estimated_annual_kwh ? `<dt>Est. Annual (50m&sup2;)</dt><dd>${s.estimated_annual_kwh.toLocaleString()} kWh</dd>` : ''}`);
-  } else { html += errorCard('Solar Potential', scores.solar); }
+      <dt>Assessment</dt><dd>Regional open horizon; no roof or shading model</dd>`);
+  } else { html += errorCard('Solar Resource', scores.solar); }
 
   // Noise
   if (scores.noise && !scores.noise.error && scores.noise.score != null) {
@@ -223,31 +223,32 @@ function renderResults(lat, lng, scores) {
     html += scoreCard('Bushfire Risk', s.score, `${s.label}${s.category ? ' — ' + s.category : ''}`, 'bar-bushfire', 'badge-fire', d);
   } else { html += errorCard('Bushfire Risk', scores.bushfire); }
 
-  // Heat Island
+  // Neighbourhood Heat
   if (scores.heat_island && !scores.heat_island.error && scores.heat_island.score != null) {
     const s = scores.heat_island;
     let d = '';
     if (s.modis_lst_c) d += `<dt>Surface Temp</dt><dd>${s.modis_lst_c}°C</dd>`;
     if (s.uhi_delta_c != null) d += `<dt>UHI Delta</dt><dd>${s.uhi_delta_c > 0 ? '+' : ''}${s.uhi_delta_c}°C</dd>`;
-    if (s.summer_mean_c) d += `<dt>ERA5 Summer Mean</dt><dd>${s.summer_mean_c}°C</dd>`;
-    if (s.summer_p90_c) d += `<dt>ERA5 P90</dt><dd>${s.summer_p90_c}°C</dd>`;
     if (s.building_density != null) d += `<dt>Building Density</dt><dd>${s.building_density}</dd>`;
     if (s.greenspace_factor != null) d += `<dt>Green Space</dt><dd>${s.greenspace_factor}</dd>`;
-    html += scoreCard('Heat Island', s.score, s.label, 'bar-heat', 'badge-heat', d);
-  } else { html += errorCard('Heat Island', scores.heat_island); }
+    d += `<dt>Temperature Scale</dt><dd>Approximately ${s.temperature_resolution_m || 1000}m</dd>`;
+    d += `<dt>Land-cover Scale</dt><dd>${s.land_cover_resolution_m || 10}m context</dd>`;
+    html += scoreCard('Neighbourhood Heat', s.score, s.label, 'bar-heat', 'badge-heat', d);
+  } else { html += errorCard('Neighbourhood Heat', scores.heat_island); }
 
-  // View Quality
+  // Landscape Openness (legacy API key: view_quality)
   if (scores.view_quality && !scores.view_quality.error && scores.view_quality.score != null) {
     const s = scores.view_quality;
-    let d = `<dt>Active Factors</dt><dd>${s.active_factors}/5</dd>`;
+    let d = `<dt>Active Factors</dt><dd>${s.active_factors}/6</dd>`;
     const f = s.factors || {};
     if (f.ocean_proximity) d += `<dt>Ocean</dt><dd>${f.ocean_proximity.distance_m}m (${(f.ocean_proximity.value*100).toFixed(0)}%)</dd>`;
     if (f.inland_water) d += `<dt>Inland Water</dt><dd>${f.inland_water.distance_m}m (${(f.inland_water.value*100).toFixed(0)}%)</dd>`;
     if (f.elevation_advantage) d += `<dt>Elevation</dt><dd>${f.elevation_advantage.elevation_m}m (+${f.elevation_advantage.advantage_m}m)</dd>`;
     if (f.green_space) d += `<dt>Green Space</dt><dd>${f.green_space.count} POIs, nearest ${f.green_space.nearest_m}m</dd>`;
     if (f.building_openness) d += `<dt>Buildings 300m</dt><dd>${f.building_openness.buildings_300m} (${f.building_openness.tall_buildings} tall)</dd>`;
-    html += scoreCard('View Quality', s.score, s.label, 'bar-view', 'badge-view', d);
-  } else { html += errorCard('View Quality', scores.view_quality); }
+    d += `<dt>Line of sight</dt><dd>Not modelled</dd>`;
+    html += scoreCard('Landscape Openness', s.score, s.label, 'bar-view', 'badge-view', d);
+  } else { html += errorCard('Landscape Openness', scores.view_quality); }
 
   // Contamination
   if (scores.contamination && !scores.contamination.error && scores.contamination.score != null) {
@@ -260,7 +261,7 @@ function renderResults(lat, lng, scores) {
     html += scoreCard('Contamination', s.score, `${s.label} (${s.state})`, 'bar-contam', 'badge-contam', d);
   } else { html += errorCard('Contamination', scores.contamination); }
 
-  html += `<div class="mt-4 px-3 py-2 border-l-2 border-slate-200 text-[11px] text-slate-400 leading-relaxed">Scores are estimates based on open data and satellite imagery. They are not professional assessments and should not be used for insurance, legal, or financial decisions. View Quality is based on proximity, not actual line-of-sight.</div>`;
+  html += `<div class="mt-4 px-3 py-2 border-l-2 border-slate-200 text-[11px] text-slate-400 leading-relaxed">Scores are screening estimates from source-specific public data and satellite imagery, not professional assessments. Solar Resource is not a roof model, Neighbourhood Heat is approximately 1km thermal context, and Landscape Openness is not actual line-of-sight.</div>`;
 
   el.innerHTML = html;
 }

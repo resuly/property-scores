@@ -12,8 +12,8 @@ lat,lng,expected,why,ref_lat,ref_lng,min_margin
 -42.8985,147.3258,score>=70 label Cool/Very Cool,Sandy Bay Hobart coolest capital; model 70 Cool = OK
 -33.6839,150.8290,greenspace_factor must NOT be ~1.0 (vintage tracker; no score gate),Marsden Park Elara estate built 2021-2026; WorldCover 2021 still shows grass paddock -> green 1.0 + density 0.0 + uhi -0.4 so the SCORE follows stale inputs (68 under 2026-06 scale); the gate here is the landcover vintage not the scale
 -27.5658,153.0704,score<=40 label Hot,Upper Mount Gravatt QLD genuine urban heat island: uhi_delta +3.7C / LST 37.4 (350-pt sweep 2026-06-11); replacement data-driven hot anchor; new scale: 31 Hot
--32.9802,115.8642,score<=40 label Hot,Manning-area WA LST 43.8 / uhi +1.5 (350-pt sweep); replacement data-driven hot anchor; new scale: 26 Hot
+-32.9802,115.8642,score<=40,Manning-area WA LST 43.8 / uhi +1.5 (350-pt sweep); Hot or Extreme Heat are both valid hot-end labels
 -33.6905,150.8377,n/a bushland control,old Marsden Park probe point is remnant bushland (tree 0.82) NOT the estate; do not use as hot anchor
--33.8950,151.2900,MODIS returns null (water pixel),1km offshore Bondi; waterfront addresses whose 1km sinusoidal pixel centers on water silently switch to ERA5 scale (+19pts at Bondi)
--33.9500,151.4500,MODIS returns null (open ocean),ocean LST is fill; 5x5 neighborhood excludes water so coastal points compare only against sea-breeze-cooled land -> positive uhi_delta penalty for beaches
+-33.8950,151.2900,Data unavailable (water pixel),1km offshore Bondi; a true water point must fail closed now that the non-commercial ERA5 fallback is removed
+-33.9500,151.4500,Data unavailable (open ocean),ocean LST is fill and must not borrow a land temperature or use the removed ERA5 fallback
 -33.7535,150.6943,building_density 1.0 (true) not 0.67 (cached),600m from Penrith anchor; same round(2) ~1.1km cache cell serves neighbor's 500m-scale factors

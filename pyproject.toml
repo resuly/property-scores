@@ -23,6 +23,13 @@ api = ["fastapi>=0.110", "uvicorn>=0.29", "gunicorn>=26.2", "uvicorn-worker>=0.4
 ml = ["xgboost>=2.0", "scikit-learn>=1.4"]
 dev = ["pytest>=8.0", "ruff>=0.4"]
 
+[tool.setuptools.packages.find]
+include = ["property_scores", "property_scores.*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+"property_scores.api" = ["static/*.html", "static/css/styles.css"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"

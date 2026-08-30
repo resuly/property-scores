@@ -13,6 +13,9 @@ KNOWN POSITIVE. This runner closes that class:
    live score API per domain and evaluates the machine-parseable expectations
    (score<N, label X, foo<=Nm, *_mapped / official_* flags). Unparseable rows
    are listed as MANUAL, never silently dropped.
+3. Source probes: direct, read-only checks that share the production adapter
+   contract. VIC Environmental Audit checks cover WFS shape, schema, publisher
+   counts, extraction freshness/skew and known positive/negative locations.
 
 Only NEW failures (vs the state file) alert, so a long-known gap doesn't spam
 while a regression pings Telegram the day it lands. The cost of that, found
@@ -28,6 +31,7 @@ Usage:
   python scripts/score_truth_probes.py                  # full run, alert on new failures
   python scripts/score_truth_probes.py --base http://127.0.0.1:8099
   python scripts/score_truth_probes.py --domain bushfire --no-alert
+  python scripts/score_truth_probes.py --domain contamination --source-only --no-alert
 Cron: daily on Oracle (see limon-ops/bin/install_daleads_cron.sh).
 """
 import argparse
@@ -42,6 +46,10 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+# The sentinel is also run directly as ``scripts/score_truth_probes.py``. Put
+# its own checkout ahead of any editable install in the venv so source probes
+# cannot silently inspect a different worktree's adapter.
+sys.path.insert(0, str(ROOT))
 ANCHOR_DIR = ROOT / "data" / "truth_anchors"
 CANARIES = ROOT / "data" / "truth_anchors" / "canaries.json"
 STATE_FILE = Path(os.environ.get("TRUTH_PROBE_STATE",
@@ -309,6 +317,109 @@ def run_canaries() -> list[dict]:
     return out
 
 
+def _source_probe_result(key: str, ok: bool, note: str, expected: str) -> dict:
+    return {
+        "domain": "contamination_source",
+        "key": key,
+        "status": "PASS" if ok else "FAIL",
+        "note": note,
+        "expected": expected,
+    }
+
+
+def run_contamination_source_probes(only_domain: str | None = None) -> list[dict]:
+    """Direct VIC Environmental Audit source checks for the existing sentinel."""
+    if only_domain and only_domain != "contamination":
+        return []
+    try:
+        from property_scores.contamination.sources import vic_wfs
+    except Exception as exc:
+        return [_source_probe_result(
+            "vic_audit_probe_import", False,
+            f"adapter import failed: {type(exc).__name__}", "adapter imports")]
+
+    snapshots = {}
+    results = []
+    for label, layer in (
+        ("point", vic_wfs.LAYER_ENV_AUDIT_POINT),
+        ("polygon", vic_wfs.LAYER_ENV_AUDIT_POLYGON),
+    ):
+        try:
+            snapshot = vic_wfs.environmental_audit_layer_probe(layer)
+        except Exception as exc:
+            snapshot = None
+            failure_note = f"probe raised {type(exc).__name__}"
+        else:
+            failure_note = "HTTP/error shape/schema/freshness check failed"
+        snapshots[layer] = snapshot
+        if snapshot is None:
+            results.append(_source_probe_result(
+                f"vic_audit_{label}_wfs", False, failure_note,
+                "HTTP ok, 13-field schema, non-empty fresh global anchor"))
+        else:
+            results.append(_source_probe_result(
+                f"vic_audit_{label}_wfs", True,
+                (f"count={snapshot['publisher_count']} "
+                 f"max_data_extracted_on={snapshot['max_data_extracted_on']} "
+                 f"schema_fields={snapshot['schema_field_count']}"),
+                "HTTP ok, 13-field schema, non-empty fresh global anchor"))
+
+    counts_ok = all(
+        snapshots.get(layer) is not None
+        and snapshots[layer]["publisher_count"] >= minimum
+        for layer, minimum in vic_wfs._AUDIT_PUBLISHER_MIN_COUNTS.items()
+    )
+    count_note = ", ".join(
+        f"{layer.rsplit(':', 1)[-1]}="
+        f"{snapshots[layer]['publisher_count'] if snapshots.get(layer) else None}"
+        for layer in vic_wfs._AUDIT_PUBLISHER_MIN_COUNTS
+    )
+    results.append(_source_probe_result(
+        "vic_audit_publisher_counts", counts_ok, count_note,
+        "point>=5000 and polygon>=2500"))
+
+    point_snapshot = snapshots.get(vic_wfs.LAYER_ENV_AUDIT_POINT)
+    polygon_snapshot = snapshots.get(vic_wfs.LAYER_ENV_AUDIT_POLYGON)
+    if point_snapshot and polygon_snapshot:
+        skew_s = abs(point_snapshot["timestamp"] - polygon_snapshot["timestamp"])
+        skew_ok = skew_s <= vic_wfs._AUDIT_LAYER_SKEW_MAX_S
+        skew_note = f"point_polygon_skew_s={skew_s:.0f}"
+    else:
+        skew_ok = False
+        skew_note = "point_polygon_skew_s=unavailable"
+    results.append(_source_probe_result(
+        "vic_audit_point_polygon_skew", skew_ok, skew_note,
+        "skew<=86400s internal threshold"))
+
+    try:
+        fitzroy = vic_wfs.environmental_audits_near(-37.7925, 144.9855, 250)
+    except Exception as exc:
+        fitzroy = None
+        fitzroy_note = f"query raised {type(exc).__name__}"
+    else:
+        fitzroy_note = (
+            f"refs={[row.get('reference_number') for row in (fitzroy or [])]}"
+            if fitzroy is not None else "query failed")
+    fitzroy_ok = bool(fitzroy) and any(
+        row.get("reference_number") == "0008005706" for row in fitzroy)
+    results.append(_source_probe_result(
+        "vic_audit_fitzroy_0008005706", fitzroy_ok, fitzroy_note,
+        "250m result contains reference 0008005706"))
+
+    try:
+        carlton = vic_wfs.environmental_audits_near(-37.8003, 144.9633, 25)
+    except Exception as exc:
+        carlton = None
+        carlton_note = f"query raised {type(exc).__name__}"
+    else:
+        carlton_note = (
+            f"entries={len(carlton)}" if carlton is not None else "query failed")
+    results.append(_source_probe_result(
+        "vic_audit_carlton_25m_empty", carlton == [], carlton_note,
+        "checked-empty [] (not failure and not a hit)"))
+    return results
+
+
 def reminder_due_seconds(result: dict) -> float:
     """Per-anchor reminder cadence; known external blockers may be quieter."""
     try:
@@ -322,10 +433,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default=os.environ.get("SCORES_BASE", "http://127.0.0.1:8099"))
     ap.add_argument("--domain", default=None)
+    ap.add_argument("--source-only", action="store_true")
     ap.add_argument("--no-alert", action="store_true")
     args = ap.parse_args()
 
-    results = run_canaries() + run_anchors(args.base, args.domain)
+    results = run_contamination_source_probes(args.domain)
+    if not args.source_only:
+        results += run_canaries() + run_anchors(args.base, args.domain)
 
     fails = [r for r in results if r["status"] == "FAIL"]
     manual = [r for r in results if r["status"] == "MANUAL"]

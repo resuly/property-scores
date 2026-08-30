@@ -77,15 +77,17 @@ _SANDS_MAX_FEATURES = 16000
 
 # The full publisher layers currently contain 5,434 point and 2,616 polygon
 # features (2026-08-30). GeoServer advertises paging but explicitly says it is
-# not transaction-safe, so every page is sorted by the stable, required
-# reference number and reconciled against numberMatched, numberReturned,
-# schema, monotonic order and cross-page identity. These checks cannot turn a
-# changing mirror into a snapshot; they make any drift we can observe fail
-# closed rather than look like an empty audit layer.
-_AUDIT_PAGE = 250
+# not transaction-safe. The 250m runtime query therefore never pages: one
+# stable-sorted page must be below its cap and exactly reconcile
+# numberMatched == numberReturned == len(features), or the source fails closed.
+_AUDIT_LOCAL_COUNT = 250
 _AUDIT_MAX_FEATURES = 10_000
 _AUDIT_SORT_BY = "reference_number"
 _AUDIT_FRESHNESS_SORT_BY = "data_extracted_on D"
+_AUDIT_PUBLISHER_MIN_COUNTS = {
+    LAYER_ENV_AUDIT_POINT: 5_000,
+    LAYER_ENV_AUDIT_POLYGON: 2_500,
+}
 _AUDIT_PROPERTY_FIELDS = frozenset({
     "reference_number", "file_number", "suburb", "council", "address",
     "latitude", "longitude", "report_links", "date_completed",
@@ -475,6 +477,15 @@ def _parse_environmental_audit_timestamp(value, *, now: float) -> float | None:
     return timestamp
 
 
+def _environmental_audit_counts(data: dict) -> tuple[int, int] | None:
+    """WFS counts are exact plain integers; never coerce bool/float/string."""
+    matched = data.get("numberMatched")
+    returned = data.get("numberReturned")
+    if type(matched) is not int or type(returned) is not int:
+        return None
+    return matched, returned
+
+
 def _environmental_audit_layer_freshness(type_names: str) -> float | None:
     """Latest global extraction timestamp for one WFS layer, cached for 1h.
 
@@ -495,6 +506,20 @@ def _environmental_audit_layer_freshness(type_names: str) -> float | None:
             if timestamp <= now and now - timestamp <= _AUDIT_FRESHNESS_MAX_AGE_S:
                 return timestamp
 
+    snapshot = _fetch_environmental_audit_layer_snapshot(type_names, now=now)
+    if snapshot is None:
+        return None
+    timestamp = snapshot["timestamp"]
+    with _audit_freshness_lock:
+        _audit_freshness_cache[type_names] = (timestamp, now)
+    return timestamp
+
+
+def _fetch_environmental_audit_layer_snapshot(
+    type_names: str, *, now: float | None = None
+) -> dict | None:
+    """Uncached global source snapshot used by freshness and daily probes."""
+    now = _time.time() if now is None else now
     data = fetch_json(WFS_URL, {
         "service": "WFS",
         "version": "2.0.0",
@@ -507,11 +532,10 @@ def _environmental_audit_layer_freshness(type_names: str) -> float | None:
     features = geojson_features_or_none(data)
     if features is None or not isinstance(data, dict) or len(features) != 1:
         return None
-    try:
-        matched = int(data["numberMatched"])
-        returned = int(data["numberReturned"])
-    except (KeyError, TypeError, ValueError):
+    counts = _environmental_audit_counts(data)
+    if counts is None:
         return None
+    matched, returned = counts
     if not (1 <= matched <= _AUDIT_MAX_FEATURES) or returned != 1:
         return None
     feature = features[0]
@@ -532,90 +556,87 @@ def _environmental_audit_layer_freshness(type_names: str) -> float | None:
         props.get("data_extracted_on"), now=now)
     if timestamp is None:
         return None
-    with _audit_freshness_lock:
-        _audit_freshness_cache[type_names] = (timestamp, now)
-    return timestamp
+    return {
+        "layer": type_names,
+        "publisher_count": matched,
+        "max_data_extracted_on": props["data_extracted_on"],
+        "timestamp": timestamp,
+        "schema_field_count": len(_AUDIT_PROPERTY_FIELDS) + 1,
+    }
+
+
+def environmental_audit_layer_probe(type_names: str) -> dict | None:
+    """Bypass the runtime cache for one monitoring observation."""
+    return _fetch_environmental_audit_layer_snapshot(type_names)
 
 
 def _environmental_audit_features(
     type_names: str, lat: float, lng: float, radius_m: int,
     *, freshness_anchor: float | None = None,
 ) -> list[dict] | None:
-    """Read a stable, exactly reconciled WFS page sequence for one audit layer."""
-    collected: list[dict] = []
+    """Read one sparse local WFS page, refusing truncation or count drift."""
     seen_feature_ids: set[str] = set()
     seen_reference_numbers: set[str] = set()
-    expected_total: int | None = None
     previous_reference: str | None = None
-    start_index = 0
+    data = _get_feature(
+        type_names=type_names,
+        lat=lat,
+        lng=lng,
+        radius_m=radius_m,
+        count=_AUDIT_LOCAL_COUNT,
+        sort_by=_AUDIT_SORT_BY,
+    )
+    features = geojson_features_or_none(data)
+    if features is None or not isinstance(data, dict):
+        return None
+    counts = _environmental_audit_counts(data)
+    if counts is None:
+        return None
+    matched, returned = counts
+    # This query is intentionally single-page. A 250m audit neighbourhood is
+    # sparse; reaching the cap or disagreeing counts means the response was
+    # truncated or changed shape, so pagination is not attempted against a
+    # publisher that declares it is not transaction-safe.
+    if matched < 0 or returned < 0:
+        return None
+    if not (matched == returned == len(features)):
+        return None
+    if len(features) >= _AUDIT_LOCAL_COUNT:
+        return None
 
-    while True:
-        data = _get_feature(
-            type_names=type_names,
-            lat=lat,
-            lng=lng,
-            radius_m=radius_m,
-            count=_AUDIT_PAGE,
-            start_index=start_index,
-            sort_by=_AUDIT_SORT_BY,
-        )
-        features = geojson_features_or_none(data)
-        if features is None or not isinstance(data, dict):
+    for feature in features:
+        if not isinstance(feature, dict):
             return None
-        try:
-            matched = int(data["numberMatched"])
-            returned = int(data["numberReturned"])
-        except (KeyError, TypeError, ValueError):
+        feature_id = _clean(feature.get("id"))
+        props = feature.get("properties")
+        if not feature_id or not isinstance(props, dict):
             return None
-        if matched < 0 or matched > _AUDIT_MAX_FEATURES:
+        # DescribeFeatureType exposes 12 properties plus geom = 13 fields
+        # on both layers. Unknown additions are reviewed before delivery;
+        # missing nullable keys still indicate a response-shape change.
+        if set(props) != _AUDIT_PROPERTY_FIELDS:
             return None
-        if returned != len(features):
+        if freshness_anchor is not None:
+            record_timestamp = _parse_environmental_audit_timestamp(
+                props.get("data_extracted_on"), now=_time.time())
+            if (record_timestamp is None
+                    or abs(record_timestamp - freshness_anchor)
+                    > _AUDIT_LAYER_SKEW_MAX_S):
+                return None
+        reference_number = _clean(props.get("reference_number"))
+        if not reference_number:
             return None
-        if expected_total is None:
-            expected_total = matched
-        elif matched != expected_total:
+        if feature_id in seen_feature_ids:
             return None
-        if not features and len(collected) < expected_total:
+        if reference_number in seen_reference_numbers:
             return None
+        if previous_reference is not None and reference_number <= previous_reference:
+            return None
+        seen_feature_ids.add(feature_id)
+        seen_reference_numbers.add(reference_number)
+        previous_reference = reference_number
 
-        for feature in features:
-            if not isinstance(feature, dict):
-                return None
-            feature_id = _clean(feature.get("id"))
-            props = feature.get("properties")
-            if not feature_id or not isinstance(props, dict):
-                return None
-            # DescribeFeatureType exposes 12 properties plus geom = 13 fields
-            # on both layers. Unknown additions are reviewed before delivery;
-            # missing nullable keys still indicate a response-shape change.
-            if set(props) != _AUDIT_PROPERTY_FIELDS:
-                return None
-            if freshness_anchor is not None:
-                record_timestamp = _parse_environmental_audit_timestamp(
-                    props.get("data_extracted_on"), now=_time.time())
-                if (record_timestamp is None
-                        or abs(record_timestamp - freshness_anchor)
-                        > _AUDIT_LAYER_SKEW_MAX_S):
-                    return None
-            reference_number = _clean(props.get("reference_number"))
-            if not reference_number:
-                return None
-            if feature_id in seen_feature_ids:
-                return None
-            if reference_number in seen_reference_numbers:
-                return None
-            if previous_reference is not None and reference_number <= previous_reference:
-                return None
-            seen_feature_ids.add(feature_id)
-            seen_reference_numbers.add(reference_number)
-            previous_reference = reference_number
-            collected.append(feature)
-
-        if len(collected) == expected_total:
-            return collected
-        if len(collected) > expected_total:
-            return None
-        start_index = len(collected)
+    return features
 
 
 def environmental_audits_near(

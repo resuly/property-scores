@@ -9,7 +9,6 @@ import importlib.util
 import json
 import os
 import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -45,6 +44,7 @@ def harness(tmp_path, monkeypatch):
         monkeypatch.setattr(probes, "run_canaries", lambda: [
             {"domain": d, "key": k, "status": "FAIL", "note": "dead"}
             for d, k in fails])
+        monkeypatch.setattr(probes, "run_contamination_source_probes", lambda *_: [])
         monkeypatch.setattr(probes, "run_anchors", lambda *a, **k: [])
         sent.clear()
         try:
@@ -320,5 +320,3 @@ def test_the_truncation_notice_points_at_a_path_that_holds_the_log(harness):
     _code, sent, _ = harness(many, t0 + 7 * DAY)
     msg = [s for s in sent if "持续失败" in s["title"]][0]["message"]
     assert probes.LOG_PATH in msg, msg
-
-

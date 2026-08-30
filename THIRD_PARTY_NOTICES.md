@@ -55,8 +55,9 @@ certificate, statement, recommendation, no-recommendation result or a record
 marked `EPA Processing`; its existence or date is not represented as proof of
 contamination, completed remediation or implementation of report conditions.
 The WFS is a mirror that may lag EPA's public register, and its paging is not a
-transaction-safe snapshot. Observed count, order, overlap and schema drift
-therefore fail closed. DA Leads' 72-hour maximum mirror age and 24-hour
+transaction-safe snapshot. Runtime lookups therefore use one bounded page;
+count mismatch, saturation, bad order, duplicates and schema drift fail closed.
+DA Leads' 72-hour maximum mirror age and 24-hour
 point/polygon coherence tolerance are internal alert/refusal thresholds, not
 an EPA or DataVic service-level promise. EPA's overnight public-register
 update description is not represented as a WFS mirror SLA.

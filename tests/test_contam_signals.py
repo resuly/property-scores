@@ -134,7 +134,7 @@ def test_environmental_audit_is_evidence_only_context_with_explicit_coverage(
     assert signal["coverage"] == "vic_epa_environmental_audit_locations"
     assert "does not by itself prove contamination" in signal["coverage_note"]
     assert "EPA Processing" in signal["coverage_note"]
-    assert "not a transaction-safe snapshot" in signal["coverage_note"]
+    assert "paging is not transaction-safe" in signal["coverage_note"]
     assert "internal 72-hour" in signal["coverage_note"]
     assert "not an EPA or DataVic service-level promise" in signal["coverage_note"]
     assert signal["entries"][0]["source"] == "VIC EPA Environmental Audits"

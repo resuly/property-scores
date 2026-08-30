@@ -987,6 +987,39 @@ def test_environmental_audit_freshness_anchor_cache_and_ttl(monkeypatch):
     assert len(calls) == 2
 
 
+def test_environmental_audit_layer_probe_reports_uncached_source_metrics(monkeypatch):
+    monkeypatch.setattr(vic_wfs._time, "time", lambda: AUDIT_TEST_NOW)
+    payload = _audit_anchor_response(vic_wfs.LAYER_ENV_AUDIT_POINT)
+    calls = install_responses(monkeypatch, [FakeResponse(payload)])
+
+    snapshot = vic_wfs.environmental_audit_layer_probe(
+        vic_wfs.LAYER_ENV_AUDIT_POINT)
+
+    assert snapshot == {
+        "layer": vic_wfs.LAYER_ENV_AUDIT_POINT,
+        "publisher_count": 5434,
+        "max_data_extracted_on": "2026-08-29T08:25:00Z",
+        "timestamp": datetime(
+            2026, 8, 29, 8, 25, tzinfo=timezone.utc).timestamp(),
+        "schema_field_count": 13,
+    }
+    assert len(calls) == 1
+    assert calls[0]["params"]["sortBy"] == vic_wfs._AUDIT_FRESHNESS_SORT_BY
+
+
+@pytest.mark.parametrize("field", ["numberMatched", "numberReturned"])
+@pytest.mark.parametrize("bad_count", [True, 1.0, "1"])
+def test_environmental_audit_global_counts_require_plain_int(
+        monkeypatch, field, bad_count):
+    monkeypatch.setattr(vic_wfs._time, "time", lambda: AUDIT_TEST_NOW)
+    payload = _audit_anchor_response(vic_wfs.LAYER_ENV_AUDIT_POINT)
+    payload[field] = bad_count
+    install_responses(monkeypatch, [FakeResponse(payload)])
+
+    assert vic_wfs.environmental_audit_layer_probe(
+        vic_wfs.LAYER_ENV_AUDIT_POINT) is None
+
+
 def test_environmental_audits_parse_real_fitzroy_point_and_polygon(monkeypatch):
     calls = install_audit_responses(monkeypatch, _fitzroy_audit_responses())
 
@@ -1100,7 +1133,7 @@ def test_environmental_audit_timeout_and_empty_are_distinguishable(monkeypatch):
     assert vic_wfs.environmental_audits_near(*FITZROY_GASWORKS, 250) == []
 
 
-def test_environmental_audit_paging_is_sorted_exact_and_overlap_safe(monkeypatch):
+def test_environmental_audit_local_query_is_one_exact_sorted_page(monkeypatch):
     first = copy.deepcopy(load_fixture("vic_enviro_audit_point_fitzroy.json"))
     second = copy.deepcopy(first)
     first_feature = first["features"][0]
@@ -1109,19 +1142,15 @@ def test_environmental_audit_paging_is_sorted_exact_and_overlap_safe(monkeypatch
     second_feature["properties"]["reference_number"] = "0008005706"
     second_feature["properties"]["file_number"] = "75730-1"
     second_feature["properties"]["address"] = "433 SMITH STREET"
-    pages = {
-        0: {"type": "FeatureCollection", "features": [first_feature],
-            "numberMatched": 2, "numberReturned": 1},
-        1: {"type": "FeatureCollection", "features": [second_feature],
-            "numberMatched": 2, "numberReturned": 1},
-    }
+    payload = {"type": "FeatureCollection",
+               "features": [first_feature, second_feature],
+               "numberMatched": 2, "numberReturned": 2}
     calls = []
 
-    def get_feature(*, start_index=0, sort_by=None, **kwargs):
-        calls.append((start_index, sort_by))
-        return pages[start_index]
+    def get_feature(*, count=None, start_index=0, sort_by=None, **kwargs):
+        calls.append((count, start_index, sort_by))
+        return payload
 
-    monkeypatch.setattr(vic_wfs, "_AUDIT_PAGE", 1)
     monkeypatch.setattr(vic_wfs, "_get_feature", get_feature)
 
     features = vic_wfs._environmental_audit_features(
@@ -1130,36 +1159,46 @@ def test_environmental_audit_paging_is_sorted_exact_and_overlap_safe(monkeypatch
     assert [f["properties"]["reference_number"] for f in features] == [
         "0008003012", "0008005706",
     ]
-    assert calls == [(0, vic_wfs._AUDIT_SORT_BY),
-                     (1, vic_wfs._AUDIT_SORT_BY)]
+    assert calls == [(vic_wfs._AUDIT_LOCAL_COUNT, 0, vic_wfs._AUDIT_SORT_BY)]
 
-    # Non-transaction-safe paging can repeat the page boundary. The overlap
-    # must fail the whole read instead of silently de-duplicating a partial
-    # publisher view.
-    pages[1]["features"] = [first_feature]
+    payload["features"].reverse()
     assert vic_wfs._environmental_audit_features(
         vic_wfs.LAYER_ENV_AUDIT_POINT, *FITZROY_GASWORKS, 250) is None
 
 
-@pytest.mark.parametrize("drift", [
-    {"numberMatched": 3},
-    {"numberReturned": 2},
+@pytest.mark.parametrize("matched,returned", [
+    (2, 1),
+    (1, 2),
+    (0, 1),
 ])
-def test_environmental_audit_paging_count_drift_fails_closed(monkeypatch, drift):
+def test_environmental_audit_single_page_count_mismatch_fails_closed(
+        monkeypatch, matched, returned):
     payload = copy.deepcopy(load_fixture("vic_enviro_audit_point_fitzroy.json"))
-    feature = payload["features"][0]
-    first = {"type": "FeatureCollection", "features": [feature],
-             "numberMatched": 2, "numberReturned": 1}
-    second_feature = copy.deepcopy(feature)
-    second_feature["id"] = "enviro_audit_point.4107"
-    second_feature["properties"]["reference_number"] = "0008005706"
-    second = {"type": "FeatureCollection", "features": [second_feature],
-              "numberMatched": 2, "numberReturned": 1, **drift}
-    monkeypatch.setattr(vic_wfs, "_AUDIT_PAGE", 1)
-    monkeypatch.setattr(
-        vic_wfs, "_get_feature",
-        lambda *, start_index=0, **kwargs: first if start_index == 0 else second,
-    )
+    payload["numberMatched"] = matched
+    payload["numberReturned"] = returned
+    monkeypatch.setattr(vic_wfs, "_get_feature", lambda **kwargs: payload)
+
+    assert vic_wfs._environmental_audit_features(
+        vic_wfs.LAYER_ENV_AUDIT_POINT, *FITZROY_GASWORKS, 250) is None
+
+
+def test_environmental_audit_single_page_saturation_fails_closed(monkeypatch):
+    payload = copy.deepcopy(load_fixture("vic_enviro_audit_point_fitzroy.json"))
+    payload["numberMatched"] = payload["numberReturned"] = 1
+    monkeypatch.setattr(vic_wfs, "_AUDIT_LOCAL_COUNT", 1)
+    monkeypatch.setattr(vic_wfs, "_get_feature", lambda **kwargs: payload)
+
+    assert vic_wfs._environmental_audit_features(
+        vic_wfs.LAYER_ENV_AUDIT_POINT, *FITZROY_GASWORKS, 250) is None
+
+
+@pytest.mark.parametrize("field", ["numberMatched", "numberReturned"])
+@pytest.mark.parametrize("bad_count", [True, 1.0, "1"])
+def test_environmental_audit_local_counts_require_plain_int(
+        monkeypatch, field, bad_count):
+    payload = copy.deepcopy(load_fixture("vic_enviro_audit_point_fitzroy.json"))
+    payload[field] = bad_count
+    monkeypatch.setattr(vic_wfs, "_get_feature", lambda **kwargs: payload)
 
     assert vic_wfs._environmental_audit_features(
         vic_wfs.LAYER_ENV_AUDIT_POINT, *FITZROY_GASWORKS, 250) is None

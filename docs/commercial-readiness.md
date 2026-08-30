@@ -68,10 +68,38 @@ Every score now returns a `disclaimer` or `caveat` field in the API response.
   point/polygon WFS at runtime. Fitzroy Gasworks now returns explicit audit
   evidence and a `Mapped Context - Review` headline, while the audit remains
   evidence-only and contributes no numeric risk score. The mirror's freshness
-  and non-transaction-safe paging limitations are disclosed and fail closed on
-  observed count/order/overlap/schema drift.
+  and non-transaction-safe paging limitations are disclosed; runtime lookup is
+  one bounded page and fails closed on count mismatch, saturation, bad order,
+  duplicates or schema drift.
+- Candidate monitoring is implemented locally inside the existing
+  `scripts/score_truth_probes.py` sentinel, not as a parallel monitor. It checks
+  both WFS layers' HTTP/error shape, 13-field schema, publisher counts and
+  maximum `data_extracted_on`; the 72-hour internal age limit and 24-hour
+  point/polygon skew; Fitzroy reference `0008005706`; and a checked-empty
+  Carlton 25m control. This is a local candidate contract only: it has not been
+  deployed, run from production cron or shown to deliver an alert.
 - Self-Serve checkout remains blocked until the remaining truth failures have
   an authorised source or the public product coverage is deliberately narrowed.
+
+### Candidate monitoring commands (not executed)
+
+Read-only live dry-run after the candidate exists on the target host:
+
+```bash
+cd /var/www/property-scores
+NOISE_TRANSFER=1 NOISE_QUIET_RECAL=1 \
+  .venv/bin/python scripts/score_truth_probes.py \
+  --domain contamination --source-only --no-alert
+```
+
+The existing managed DA Leads cron already runs the full truth sentinel daily
+at 20:00 UTC, so no second scheduler entry is required. To reconcile/install
+that existing managed block after deployment, from the Limon Ops checkout:
+
+```bash
+bash bin/install_daleads_cron.sh
+# Inspect the printed diff and confirm. Use --apply only with deployment approval.
+```
 
 ## Remaining Items (prioritized)
 

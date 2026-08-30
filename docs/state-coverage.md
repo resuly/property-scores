@@ -33,7 +33,11 @@ Scores use different data sources depending on the state. This document explains
 | Terrain slope (contour) | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ |
 | Fire history (local) | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Contamination** | | | | | | | | |
-| EPA register | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| Official contaminated-sites register | ✅ | ✅ | ❌ | ❌ | 🔒 | ❌ | ❌ | ✅ |
+| EPA Environmental Audit location context | ✅ evidence-only | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Historical-use signal | ✅ | ❌ | ⚠️ licensed activity only | ⚠️ licensed activity only | ❌ | ⚠️ regulated/UPSS context | ❌ | ❌ |
+| Statutory contaminated-groundwater restriction | ✅ | ⚠️ vulnerability only | ❌ | ✅ | 🔒 depth layer | ❌ | ❌ | ❌ |
+| Known/operating landfill context | ✅ | ⚠️ national operating only | ⚠️ national operating only | ⚠️ national operating only | ⚠️ national operating only | ⚠️ national operating only | ⚠️ national operating only | ⚠️ national operating only |
 | Industrial POI proxy | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Universal (all states)** | | | | | | | | |
 | Overture roads/buildings/POIs | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -46,19 +50,22 @@ Scores use different data sources depending on the state. This document explains
 ## Accuracy Implications
 
 ### Best accuracy: VIC
-Victoria has the richest data coverage: VicRoads AADT for noise, full planning overlays for flood/bushfire, EPA register for contamination, and GTFS rail. Noise model validated at 83% against known locations.
+Victoria has the richest data coverage: VicRoads AADT for noise, full planning overlays for flood/bushfire, an EPA priority-sites register plus evidence-only Environmental Audit locations for contamination, and GTFS rail. An audit location is not a contamination finding and the DataVic mirror may lag EPA's public register. Noise model validated at 83% against known locations.
 
-### Good accuracy: NSW, WA
-Planning overlays for flood/bushfire, EPA contamination registers, GTFS rail, NFDH traffic counts. Missing VicRoads-equivalent granular AADT.
+### Good accuracy: NSW
+Planning overlays for flood/bushfire, an official contamination register, GTFS rail and NFDH traffic counts. Missing VicRoads-equivalent granular AADT.
 
 ### Moderate accuracy: SA, TAS
 Planning overlays for some scores, NFDH traffic counts, but no EPA register and limited ANEF data.
 
-### Lower accuracy: QLD, NT, ACT
-No planning overlays for flood (QLD) or bushfire (QLD, NT, ACT). No EPA registers. Limited ANEF. Scores rely heavily on satellite data (JRC, WorldCover, MODIS) and Overture POIs which provide national coverage but at lower confidence.
+### Uneven coverage: QLD, WA, NT, ACT
+ACT now has an official contaminated-sites register joined to the official
+block cadastre. QLD, WA and NT do not have an authorised register integrated;
+WA is specifically rights-blocked. Other score families have their own
+coverage. Never transfer one family's state rating to another.
 
 ## How to Interpret
 
-When a score includes data from official planning overlays (flood zones, bushfire overlays, EPA registers), it carries higher confidence. When it relies solely on satellite/open data, it should be treated as an indicative estimate.
+When a score includes data from official planning overlays or registers, it carries higher confidence. When contamination coverage is incomplete, optimistic numeric scores are withheld; `score_status` and each component status must be read before ranking.
 
 The API response includes a `disclaimer` field for every score. Risk-related scores (flood, bushfire, contamination) explicitly state they are not professional assessments.

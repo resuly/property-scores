@@ -19,10 +19,12 @@ exactly how a dropped connection once turned a contaminated site into
 Licensing note: the public-source set is Creative Commons Attribution or
 equivalent and requires attribution on every delivery surface that exposes the
 records. NSW's licence version is still being confirmed for paid API
-redistribution; TAS EPA Regulated Premises and UPSS are CC BY 3.0 AU.
+redistribution; TAS EPA Regulated Premises and UPSS are CC BY 3.0 AU; the
+DataVic EPA Environmental Audit point/polygon metadata is CC BY 4.0.
 """
 
 from property_scores.contamination.sources import (  # noqa: F401
+    act_register,
     ga_waste,
     nsw_groundwater,
     nsw_sites,
@@ -34,6 +36,6 @@ from property_scores.contamination.sources import (  # noqa: F401
 )
 
 __all__ = [
-    "nsw_sites", "nsw_groundwater", "vic_wfs", "sa_gpa", "sa_licensed",
+    "act_register", "nsw_sites", "nsw_groundwater", "vic_wfs", "sa_gpa", "sa_licensed",
     "qld_ea", "ga_waste", "tas_epa",
 ]

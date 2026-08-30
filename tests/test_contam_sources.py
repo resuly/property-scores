@@ -12,11 +12,14 @@ if those two collapse into each other.
 import copy
 import json
 import os
+from datetime import datetime, timezone
 
 import pytest
+import requests
 
 from property_scores.contamination.sources import (
     _common,
+    act_register,
     ga_waste,
     nsw_groundwater,
     nsw_sites,
@@ -37,6 +40,166 @@ SHIPPED_RETRY_SLEEP_S = _common._RETRY_SLEEP_S
 MELBOURNE = (-37.8136, 144.9631)
 BOTANY = (-33.9500, 151.2000)
 EDWARDSTOWN = (-34.9800, 138.5700)
+ACT_BRADDON_BP = (-35.27582, 149.13277)
+FITZROY_GASWORKS = (-37.7925, 144.9855)
+CARLTON_GRATTAN_CONTROL = (-37.8003, 144.9633)
+GLEN_WAVERLEY_CONTROL = (-37.8800, 145.1640)
+AUDIT_TEST_NOW = datetime(2026, 8, 30, 0, 0, tzinfo=timezone.utc).timestamp()
+
+
+def _act_rows():
+    return [
+        {
+            "id": "42",
+            "district_notified": "Canberra Central",
+            "division_notified": "Braddon",
+            "section_notified": "29",
+            "block_notified": "12",
+            "notified_under_section": "76A(1)",
+            "site_description": "Active BP Service Station",
+            "owner_name": "must not ship",
+        },
+        {
+            "id": "99",
+            "district_current": "Canberra Central",
+            "division_current": "Kingston",
+            "section_current": "62",
+            "block_current": "14+15+16+17+18",
+            "notified_under_section": "91D(1)",
+            "site_description": "Kingston Foreshore audit area",
+        },
+    ]
+
+
+def _act_block(*, division="BRADDON", section=29, block=12,
+               lifecycle="REGISTERED"):
+    return {"features": [{"attributes": {
+        "OBJECTID": 305387,
+        "DISTRICT_NAME": "CANBERRA CENTRAL",
+        "DIVISION_NAME": division,
+        "SECTION_NUMBER": section,
+        "BLOCK_NUMBER": block,
+        "CURRENT_LIFECYCLE_STAGE": lifecycle,
+    }}]}
+
+
+def test_act_register_exact_count_and_parcel_join(monkeypatch):
+    calls = []
+
+    def fake_fetch(url, params):
+        calls.append((url, params))
+        if url == act_register.BLOCK_QUERY_URL:
+            return _act_block()
+        if params == {"$select": "count(*)"}:
+            return [{"count": "2"}]
+        return _act_rows()
+
+    monkeypatch.setattr(act_register, "fetch_json", fake_fetch)
+    hits = act_register.sites_at(*ACT_BRADDON_BP)
+
+    assert len(hits) == 1
+    assert hits[0] == {
+        "site_id": "42",
+        "name": "Active BP Service Station",
+        "issue": (
+            "ACT Register of contaminated sites, notified under section 76A(1)"
+        ),
+        "activity_type": "ACT contaminated sites register",
+        "management_class": "76A(1)",
+        "distance_m": 0,
+        "geom": "polygon",
+        "source": "ACT EPA Register of contaminated sites",
+    }
+    assert "owner_name" not in str(hits)
+    block_params = calls[0][1]
+    assert block_params["geometry"] == "149.13277,-35.27582"
+    assert block_params["returnGeometry"] == "false"
+
+
+def test_act_register_composite_blocks_match_but_divisions_do_not(monkeypatch):
+    monkeypatch.setattr(
+        act_register, "all_rows",
+        lambda: act_register._parse_register_rows(_act_rows(), 2),
+    )
+    monkeypatch.setattr(
+        act_register, "_subject_blocks",
+        lambda *a: [{"district": "CANBERRA CENTRAL", "division": "KINGSTON",
+                     "section": "62", "block": "16"}],
+    )
+    assert [row["site_id"] for row in act_register.sites_at(-35.3, 149.1)] == ["99"]
+
+    monkeypatch.setattr(
+        act_register, "_subject_blocks",
+        lambda *a: [{"district": "CANBERRA CENTRAL", "division": "GRIFFITH",
+                     "section": "62", "block": "16"}],
+    )
+    assert act_register.sites_at(-35.3, 149.1) == []
+
+
+def test_act_register_count_schema_and_block_fail_closed(monkeypatch):
+    monkeypatch.setattr(act_register, "fetch_json", lambda url, params: (
+        [{"count": "3"}] if params == {"$select": "count(*)"} else _act_rows()))
+    assert act_register.fetch_all_rows() is None
+
+    monkeypatch.setattr(act_register, "_subject_blocks", lambda *a: None)
+    monkeypatch.setattr(
+        act_register, "all_rows",
+        lambda: act_register._parse_register_rows(_act_rows(), 2),
+    )
+    assert act_register.sites_at(*ACT_BRADDON_BP) is None
+
+    retired = _act_block(lifecycle="RETIRED")
+    monkeypatch.setattr(act_register, "fetch_json", lambda *a, **k: retired)
+    assert act_register._subject_blocks(*ACT_BRADDON_BP) is None
+
+
+def test_act_register_handles_publisher_optional_fields_and_one_reversed_row():
+    rows = act_register._parse_register_rows([{
+        "district_notified": "Fyshwick",
+        "division_notified": "Canberra Central",
+        "section_notified": "2",
+        "block_notified": "38",
+        "notified_under_section": "76A(1)",
+        "site_description": "Former Newcastle House",
+    }, {
+        "id": "10071",
+        "district_notified": "Jerrabomberra",
+        "division_notified": "Beard",
+        "section_notified": "8",
+        "block_notified": "24",
+    }], 2)
+
+    assert rows is not None
+    assert rows[0]["district"] == "CANBERRA CENTRAL"
+    assert rows[0]["division"] == "FYSHWICK"
+    assert rows[0]["site_id"].startswith("derived-")
+    assert rows[1]["notified_under_section"] == "Not specified"
+    assert rows[1]["site_description"] == "ACT contaminated sites register entry"
+
+
+def test_act_register_refresh_failure_serves_last_good(monkeypatch):
+    act_register.clear_cache()
+    clock = [1000.0]
+    monkeypatch.setattr(act_register._time, "time", lambda: clock[0])
+    monkeypatch.setattr(act_register, "fetch_all_rows", lambda: act_register._parse_register_rows(
+        _act_rows(), 2))
+    first = act_register.all_rows()
+    clock[0] += act_register.REGISTER_CACHE_TTL_S + 1
+    monkeypatch.setattr(act_register, "fetch_all_rows", lambda: None)
+    assert act_register.all_rows() == first
+
+
+def test_act_register_refresh_failure_rejects_expired_last_good(monkeypatch):
+    act_register.clear_cache()
+    clock = [1_700_000_000.0]
+    monkeypatch.setattr(act_register._time, "time", lambda: clock[0])
+    monkeypatch.setattr(act_register, "fetch_all_rows", lambda: act_register._parse_register_rows(
+        _act_rows(), 2))
+    assert act_register.all_rows()
+
+    clock[0] += act_register.REGISTER_MAX_STALE_S + 1
+    monkeypatch.setattr(act_register, "fetch_all_rows", lambda: None)
+    assert act_register.all_rows() is None
 
 
 def load_fixture(name: str):
@@ -68,14 +231,17 @@ def _isolate(monkeypatch):
 
     monkeypatch.setattr(_common.requests, "get", _forbidden)
     nsw_sites.clear_cache()
+    act_register.clear_cache()
     sa_gpa.clear_cache()
     sa_licensed.clear_cache()
     tas_epa.clear_cache()
+    vic_wfs.clear_environmental_audit_freshness_cache()
     yield
     nsw_sites.clear_cache()
     sa_gpa.clear_cache()
     sa_licensed.clear_cache()
     tas_epa.clear_cache()
+    vic_wfs.clear_environmental_audit_freshness_cache()
 
 
 def test_tas_epa_adapters_are_evidence_only_and_privacy_slim(monkeypatch):
@@ -624,6 +790,418 @@ def test_sands_empty_intermediate_page_fails_closed(monkeypatch):
     install_responses(monkeypatch, [FakeResponse(page1), FakeResponse(page2)])
     base = features[0]["geometry"]["coordinates"]
     assert vic_wfs.sands_near(base[1], base[0], 200) is None
+
+
+# ---------------------------------------------------------------------------
+# VIC WFS: EPA Environmental Audits
+# ---------------------------------------------------------------------------
+
+def _fitzroy_audit_responses():
+    return {
+        vic_wfs.LAYER_ENV_AUDIT_POINT: FakeResponse(
+            load_fixture("vic_enviro_audit_point_fitzroy.json")),
+        vic_wfs.LAYER_ENV_AUDIT_POLYGON: FakeResponse(
+            load_fixture("vic_enviro_audit_polygon_fitzroy.json")),
+    }
+
+
+def _audit_anchor_response(layer, timestamp="2026-08-29T08:25:00Z"):
+    if layer == vic_wfs.LAYER_ENV_AUDIT_POINT:
+        payload = copy.deepcopy(load_fixture("vic_enviro_audit_point_fitzroy.json"))
+        payload["numberMatched"] = 5434
+    else:
+        payload = copy.deepcopy(load_fixture("vic_enviro_audit_polygon_fitzroy.json"))
+        payload["numberMatched"] = 2616
+    payload["numberReturned"] = 1
+    payload["features"][0]["properties"]["data_extracted_on"] = timestamp
+    return payload
+
+
+def install_audit_responses(monkeypatch, local_by_layer, anchor_by_layer=None):
+    """Separate the cached global freshness call from the local bbox call."""
+    monkeypatch.setattr(vic_wfs._time, "time", lambda: AUDIT_TEST_NOW)
+    anchor_by_layer = anchor_by_layer or {
+        layer: FakeResponse(_audit_anchor_response(layer))
+        for layer in (
+            vic_wfs.LAYER_ENV_AUDIT_POINT,
+            vic_wfs.LAYER_ENV_AUDIT_POLYGON,
+        )
+    }
+    calls = []
+
+    def _get(url, params=None, timeout=None, headers=None):
+        params = params or {}
+        calls.append({"url": url, "params": params,
+                      "timeout": timeout, "headers": headers or {}})
+        layer = params.get("typeNames")
+        is_anchor = params.get("sortBy") == vic_wfs._AUDIT_FRESHNESS_SORT_BY
+        item = (anchor_by_layer if is_anchor else local_by_layer)[layer]
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    monkeypatch.setattr(_common.requests, "get", _get)
+    return calls
+
+
+def _empty_audit_response():
+    return {"type": "FeatureCollection", "features": [],
+            "numberMatched": 0, "numberReturned": 0}
+
+
+def test_environmental_audit_describe_feature_contract_has_13_fields():
+    # Official DescribeFeatureType: 12 metadata properties plus geom on both
+    # point and polygon layers (captured 2026-08-30).
+    assert len(vic_wfs._AUDIT_PROPERTY_FIELDS) == 12
+    assert len(vic_wfs._AUDIT_PROPERTY_FIELDS | {"geom"}) == 13
+    assert vic_wfs._AUDIT_FRESHNESS_MAX_AGE_S == 72 * 60 * 60
+    assert vic_wfs._AUDIT_LAYER_SKEW_MAX_S == 24 * 60 * 60
+    assert vic_wfs._AUDIT_FRESHNESS_CACHE_TTL_S == 60 * 60
+
+
+def test_environmental_audit_stale_2020_global_anchor_fails_closed(monkeypatch):
+    stale = "2020-08-29T08:25:00Z"
+    install_audit_responses(
+        monkeypatch,
+        {
+            vic_wfs.LAYER_ENV_AUDIT_POINT: FakeResponse(_empty_audit_response()),
+            vic_wfs.LAYER_ENV_AUDIT_POLYGON: FakeResponse(_empty_audit_response()),
+        },
+        {
+            layer: FakeResponse(_audit_anchor_response(layer, stale))
+            for layer in (
+                vic_wfs.LAYER_ENV_AUDIT_POINT,
+                vic_wfs.LAYER_ENV_AUDIT_POLYGON,
+            )
+        },
+    )
+
+    assert vic_wfs.environmental_audits_near(*FITZROY_GASWORKS, 250) is None
+
+
+@pytest.mark.parametrize("bad_timestamp", [
+    True,
+    "not-a-timestamp",
+    "2026-08-30T00:00:01Z",  # one second in the future against AUDIT_TEST_NOW
+])
+def test_environmental_audit_bad_or_future_anchor_fails_closed(
+        monkeypatch, bad_timestamp):
+    bad = _audit_anchor_response(vic_wfs.LAYER_ENV_AUDIT_POINT)
+    bad["features"][0]["properties"]["data_extracted_on"] = bad_timestamp
+    install_audit_responses(
+        monkeypatch,
+        {
+            vic_wfs.LAYER_ENV_AUDIT_POINT: FakeResponse(_empty_audit_response()),
+            vic_wfs.LAYER_ENV_AUDIT_POLYGON: FakeResponse(_empty_audit_response()),
+        },
+        {
+            vic_wfs.LAYER_ENV_AUDIT_POINT: FakeResponse(bad),
+            vic_wfs.LAYER_ENV_AUDIT_POLYGON: FakeResponse(
+                _audit_anchor_response(vic_wfs.LAYER_ENV_AUDIT_POLYGON)),
+        },
+    )
+
+    assert vic_wfs.environmental_audits_near(*FITZROY_GASWORKS, 250) is None
+
+
+def test_environmental_audit_cross_layer_freshness_skew_fails_closed(monkeypatch):
+    # Both anchors are under the 72-hour age limit, but more than the
+    # internal 24h coherence tolerance apart.
+    install_audit_responses(
+        monkeypatch,
+        {
+            vic_wfs.LAYER_ENV_AUDIT_POINT: FakeResponse(_empty_audit_response()),
+            vic_wfs.LAYER_ENV_AUDIT_POLYGON: FakeResponse(_empty_audit_response()),
+        },
+        {
+            vic_wfs.LAYER_ENV_AUDIT_POINT: FakeResponse(_audit_anchor_response(
+                vic_wfs.LAYER_ENV_AUDIT_POINT, "2026-08-29T08:25:00Z")),
+            vic_wfs.LAYER_ENV_AUDIT_POLYGON: FakeResponse(_audit_anchor_response(
+                vic_wfs.LAYER_ENV_AUDIT_POLYGON, "2026-08-28T07:24:59Z")),
+        },
+    )
+
+    assert vic_wfs.environmental_audits_near(*FITZROY_GASWORKS, 250) is None
+
+
+@pytest.mark.parametrize("anchor_failure", ["http", "empty", "schema"])
+def test_environmental_audit_global_anchor_upstream_failure_fails_closed(
+        monkeypatch, anchor_failure):
+    if anchor_failure == "http":
+        broken = FakeResponse({}, status_code=503)
+    elif anchor_failure == "empty":
+        broken = FakeResponse(_empty_audit_response())
+    else:
+        payload = _audit_anchor_response(vic_wfs.LAYER_ENV_AUDIT_POINT)
+        payload["features"][0]["properties"].pop("data_extracted_on")
+        broken = FakeResponse(payload)
+    install_audit_responses(
+        monkeypatch,
+        {
+            vic_wfs.LAYER_ENV_AUDIT_POINT: FakeResponse(_empty_audit_response()),
+            vic_wfs.LAYER_ENV_AUDIT_POLYGON: FakeResponse(_empty_audit_response()),
+        },
+        {
+            vic_wfs.LAYER_ENV_AUDIT_POINT: broken,
+            vic_wfs.LAYER_ENV_AUDIT_POLYGON: FakeResponse(
+                _audit_anchor_response(vic_wfs.LAYER_ENV_AUDIT_POLYGON)),
+        },
+    )
+
+    assert vic_wfs.environmental_audits_near(*FITZROY_GASWORKS, 250) is None
+
+
+def test_environmental_audit_stale_local_row_fails_against_fresh_anchor(monkeypatch):
+    local = _fitzroy_audit_responses()
+    stale_point = copy.deepcopy(local[vic_wfs.LAYER_ENV_AUDIT_POINT]._payload)
+    stale_point["features"][0]["properties"]["data_extracted_on"] = (
+        "2020-08-29T08:25:00Z")
+    local[vic_wfs.LAYER_ENV_AUDIT_POINT] = FakeResponse(stale_point)
+    install_audit_responses(monkeypatch, local)
+
+    assert vic_wfs.environmental_audits_near(*FITZROY_GASWORKS, 250) is None
+
+
+def test_environmental_audit_freshness_anchor_cache_and_ttl(monkeypatch):
+    clock = [AUDIT_TEST_NOW]
+    monkeypatch.setattr(vic_wfs._time, "time", lambda: clock[0])
+    payload = _audit_anchor_response(vic_wfs.LAYER_ENV_AUDIT_POINT)
+    calls = install_responses(monkeypatch, [FakeResponse(payload)])
+    vic_wfs.clear_environmental_audit_freshness_cache()
+
+    first = vic_wfs._environmental_audit_layer_freshness(
+        vic_wfs.LAYER_ENV_AUDIT_POINT)
+    second = vic_wfs._environmental_audit_layer_freshness(
+        vic_wfs.LAYER_ENV_AUDIT_POINT)
+    clock[0] += vic_wfs._AUDIT_FRESHNESS_CACHE_TTL_S - 1
+    third = vic_wfs._environmental_audit_layer_freshness(
+        vic_wfs.LAYER_ENV_AUDIT_POINT)
+
+    assert first == second == third
+    assert len(calls) == 1
+
+    clock[0] += 2
+    refreshed = vic_wfs._environmental_audit_layer_freshness(
+        vic_wfs.LAYER_ENV_AUDIT_POINT)
+    assert refreshed == first
+    assert len(calls) == 2
+
+
+def test_environmental_audit_layer_probe_reports_uncached_source_metrics(monkeypatch):
+    monkeypatch.setattr(vic_wfs._time, "time", lambda: AUDIT_TEST_NOW)
+    payload = _audit_anchor_response(vic_wfs.LAYER_ENV_AUDIT_POINT)
+    calls = install_responses(monkeypatch, [FakeResponse(payload)])
+
+    snapshot = vic_wfs.environmental_audit_layer_probe(
+        vic_wfs.LAYER_ENV_AUDIT_POINT)
+
+    assert snapshot == {
+        "layer": vic_wfs.LAYER_ENV_AUDIT_POINT,
+        "publisher_count": 5434,
+        "max_data_extracted_on": "2026-08-29T08:25:00Z",
+        "timestamp": datetime(
+            2026, 8, 29, 8, 25, tzinfo=timezone.utc).timestamp(),
+        "schema_field_count": 13,
+    }
+    assert len(calls) == 1
+    assert calls[0]["params"]["sortBy"] == vic_wfs._AUDIT_FRESHNESS_SORT_BY
+
+
+@pytest.mark.parametrize("field", ["numberMatched", "numberReturned"])
+@pytest.mark.parametrize("bad_count", [True, 1.0, "1"])
+def test_environmental_audit_global_counts_require_plain_int(
+        monkeypatch, field, bad_count):
+    monkeypatch.setattr(vic_wfs._time, "time", lambda: AUDIT_TEST_NOW)
+    payload = _audit_anchor_response(vic_wfs.LAYER_ENV_AUDIT_POINT)
+    payload[field] = bad_count
+    install_responses(monkeypatch, [FakeResponse(payload)])
+
+    assert vic_wfs.environmental_audit_layer_probe(
+        vic_wfs.LAYER_ENV_AUDIT_POINT) is None
+
+
+def test_environmental_audits_parse_real_fitzroy_point_and_polygon(monkeypatch):
+    calls = install_audit_responses(monkeypatch, _fitzroy_audit_responses())
+
+    audits = vic_wfs.environmental_audits_near(*FITZROY_GASWORKS, 250)
+
+    assert audits is not None
+    assert {row["reference_number"] for row in audits} == {
+        "0008003012", "0008005706",
+    }
+    former_gasworks = next(
+        row for row in audits if row["reference_number"] == "0008003012")
+    statement = next(
+        row for row in audits if row["reference_number"] == "0008005706")
+    assert former_gasworks["address"] == "FORMER FITZROY GASWORKS 111 QUEENS RD"
+    assert former_gasworks["audit_category"] == "EPA Processing"
+    assert former_gasworks["geom"] == "point"
+    assert statement["audit_category"] == "53X Statement"
+    assert statement["geom"] == "polygon"
+    assert statement["distance_m"] < former_gasworks["distance_m"] <= 250
+    assert all(row["report_available"] is True for row in audits)
+    assert all("report_links" not in row and "council" not in row for row in audits)
+    local_calls = [call for call in calls if "bbox" in call["params"]]
+    assert {call["params"]["typeNames"] for call in local_calls} == {
+        vic_wfs.LAYER_ENV_AUDIT_POINT,
+        vic_wfs.LAYER_ENV_AUDIT_POLYGON,
+    }
+    assert all(call["params"]["sortBy"] == vic_wfs._AUDIT_SORT_BY
+               for call in local_calls)
+    south, west, north, east, crs = local_calls[0]["params"]["bbox"].split(",")
+    assert float(south) < FITZROY_GASWORKS[0] < float(north)
+    assert float(west) < FITZROY_GASWORKS[1] < float(east)
+    assert crs == "urn:ogc:def:crs:EPSG::4326"
+
+
+def test_environmental_audits_filter_bbox_only_polygon_from_negative_control(
+        monkeypatch):
+    # This is a real official WFS response: a long level-crossing audit's bbox
+    # intersects the Glen Waverley search envelope, but its actual geometry is
+    # kilometres away. The bbox is only a prefilter; the 250m circle wins.
+    install_audit_responses(monkeypatch, {
+        vic_wfs.LAYER_ENV_AUDIT_POINT: FakeResponse(_empty_audit_response()),
+        vic_wfs.LAYER_ENV_AUDIT_POLYGON: FakeResponse(
+            load_fixture("vic_enviro_audit_polygon_glen_waverley_bbox.json")),
+    })
+
+    assert vic_wfs.environmental_audits_near(
+        *GLEN_WAVERLEY_CONTROL, 250) == []
+
+
+def test_environmental_audits_real_carlton_25m_negative(monkeypatch):
+    # Captured 2026-08-30 from both official WFS layers around the 163 Grattan
+    # Street control. It pins checked-empty separately from a failed query.
+    install_audit_responses(monkeypatch, {
+        vic_wfs.LAYER_ENV_AUDIT_POINT: FakeResponse(load_fixture(
+            "vic_enviro_audit_point_carlton_25m_empty.json")),
+        vic_wfs.LAYER_ENV_AUDIT_POLYGON: FakeResponse(load_fixture(
+            "vic_enviro_audit_polygon_carlton_25m_empty.json")),
+    })
+
+    assert vic_wfs.environmental_audits_near(
+        *CARLTON_GRATTAN_CONTROL, 25) == []
+
+
+def test_environmental_audit_polygon_wins_duplicate_map_pin(monkeypatch):
+    point = copy.deepcopy(load_fixture("vic_enviro_audit_point_fitzroy.json"))
+    polygon = load_fixture("vic_enviro_audit_polygon_fitzroy.json")
+    point["features"][0]["properties"]["reference_number"] = "0008005706"
+    install_audit_responses(monkeypatch, {
+        vic_wfs.LAYER_ENV_AUDIT_POINT: FakeResponse(point),
+        vic_wfs.LAYER_ENV_AUDIT_POLYGON: FakeResponse(polygon),
+    })
+
+    audits = vic_wfs.environmental_audits_near(*FITZROY_GASWORKS, 250)
+
+    assert len(audits) == 1
+    assert audits[0]["reference_number"] == "0008005706"
+    assert audits[0]["geom"] == "polygon"
+    assert audits[0]["address"].startswith("433 SMITH STREET")
+
+
+@pytest.mark.parametrize("required_field", ["reference_number", "audit_category"])
+def test_environmental_audit_required_schema_drift_fails_closed(
+        monkeypatch, required_field):
+    point = copy.deepcopy(load_fixture("vic_enviro_audit_point_fitzroy.json"))
+    point["features"][0]["properties"].pop(required_field)
+    install_audit_responses(monkeypatch, {
+        vic_wfs.LAYER_ENV_AUDIT_POINT: FakeResponse(point),
+        vic_wfs.LAYER_ENV_AUDIT_POLYGON: FakeResponse(_empty_audit_response()),
+    })
+
+    assert vic_wfs.environmental_audits_near(*FITZROY_GASWORKS, 250) is None
+
+
+def test_environmental_audit_timeout_and_empty_are_distinguishable(monkeypatch):
+    calls = install_audit_responses(monkeypatch, {
+        vic_wfs.LAYER_ENV_AUDIT_POINT: FakeResponse(_empty_audit_response()),
+        vic_wfs.LAYER_ENV_AUDIT_POLYGON: requests.Timeout("publisher timed out"),
+    })
+    assert vic_wfs.environmental_audits_near(*FITZROY_GASWORKS, 250) is None
+    polygon_calls = [
+        call for call in calls
+        if call["params"].get("typeNames") == vic_wfs.LAYER_ENV_AUDIT_POLYGON
+        and "bbox" in call["params"]
+    ]
+    assert len(polygon_calls) == 2, "transport timeout must get exactly one retry"
+
+    install_audit_responses(monkeypatch, {
+        vic_wfs.LAYER_ENV_AUDIT_POINT: FakeResponse(_empty_audit_response()),
+        vic_wfs.LAYER_ENV_AUDIT_POLYGON: FakeResponse(_empty_audit_response()),
+    })
+    assert vic_wfs.environmental_audits_near(*FITZROY_GASWORKS, 250) == []
+
+
+def test_environmental_audit_local_query_is_one_exact_sorted_page(monkeypatch):
+    first = copy.deepcopy(load_fixture("vic_enviro_audit_point_fitzroy.json"))
+    second = copy.deepcopy(first)
+    first_feature = first["features"][0]
+    second_feature = second["features"][0]
+    second_feature["id"] = "enviro_audit_point.4107"
+    second_feature["properties"]["reference_number"] = "0008005706"
+    second_feature["properties"]["file_number"] = "75730-1"
+    second_feature["properties"]["address"] = "433 SMITH STREET"
+    payload = {"type": "FeatureCollection",
+               "features": [first_feature, second_feature],
+               "numberMatched": 2, "numberReturned": 2}
+    calls = []
+
+    def get_feature(*, count=None, start_index=0, sort_by=None, **kwargs):
+        calls.append((count, start_index, sort_by))
+        return payload
+
+    monkeypatch.setattr(vic_wfs, "_get_feature", get_feature)
+
+    features = vic_wfs._environmental_audit_features(
+        vic_wfs.LAYER_ENV_AUDIT_POINT, *FITZROY_GASWORKS, 250)
+
+    assert [f["properties"]["reference_number"] for f in features] == [
+        "0008003012", "0008005706",
+    ]
+    assert calls == [(vic_wfs._AUDIT_LOCAL_COUNT, 0, vic_wfs._AUDIT_SORT_BY)]
+
+    payload["features"].reverse()
+    assert vic_wfs._environmental_audit_features(
+        vic_wfs.LAYER_ENV_AUDIT_POINT, *FITZROY_GASWORKS, 250) is None
+
+
+@pytest.mark.parametrize("matched,returned", [
+    (2, 1),
+    (1, 2),
+    (0, 1),
+])
+def test_environmental_audit_single_page_count_mismatch_fails_closed(
+        monkeypatch, matched, returned):
+    payload = copy.deepcopy(load_fixture("vic_enviro_audit_point_fitzroy.json"))
+    payload["numberMatched"] = matched
+    payload["numberReturned"] = returned
+    monkeypatch.setattr(vic_wfs, "_get_feature", lambda **kwargs: payload)
+
+    assert vic_wfs._environmental_audit_features(
+        vic_wfs.LAYER_ENV_AUDIT_POINT, *FITZROY_GASWORKS, 250) is None
+
+
+def test_environmental_audit_single_page_saturation_fails_closed(monkeypatch):
+    payload = copy.deepcopy(load_fixture("vic_enviro_audit_point_fitzroy.json"))
+    payload["numberMatched"] = payload["numberReturned"] = 1
+    monkeypatch.setattr(vic_wfs, "_AUDIT_LOCAL_COUNT", 1)
+    monkeypatch.setattr(vic_wfs, "_get_feature", lambda **kwargs: payload)
+
+    assert vic_wfs._environmental_audit_features(
+        vic_wfs.LAYER_ENV_AUDIT_POINT, *FITZROY_GASWORKS, 250) is None
+
+
+@pytest.mark.parametrize("field", ["numberMatched", "numberReturned"])
+@pytest.mark.parametrize("bad_count", [True, 1.0, "1"])
+def test_environmental_audit_local_counts_require_plain_int(
+        monkeypatch, field, bad_count):
+    payload = copy.deepcopy(load_fixture("vic_enviro_audit_point_fitzroy.json"))
+    payload[field] = bad_count
+    monkeypatch.setattr(vic_wfs, "_get_feature", lambda **kwargs: payload)
+
+    assert vic_wfs._environmental_audit_features(
+        vic_wfs.LAYER_ENV_AUDIT_POINT, *FITZROY_GASWORKS, 250) is None
 
 
 # ---------------------------------------------------------------------------

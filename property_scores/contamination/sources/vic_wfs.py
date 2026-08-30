@@ -1,6 +1,6 @@
 """VIC adapters over the single DEECA/EPA GeoServer WFS endpoint.
 
-Three layers, three different meanings:
+Four source families, four different meanings:
 
 * ``sands_mcdougall_public`` - Sands & McDougall trade directories 1896-1974,
   ~500k geocoded points. A HISTORICAL LAND USE SIGNAL, never a contamination
@@ -12,6 +12,11 @@ Three layers, three different meanings:
 * ``gqruz_polygon`` - Groundwater Quality Restricted Use Zones. An official
   restriction area, i.e. contamination that has reached groundwater; the
   migration amplifier in the scoring model.
+* ``enviro_audit_point`` / ``enviro_audit_polygon`` - EPA environmental-audit
+  records and locations. Categories include certificates, statements,
+  recommendations and ``EPA Processing``; neither the layer nor a completion
+  date may be reworded as a contamination finding or completed remediation.
+  It is evidence-only due-diligence context.
 
 Two measured upstream traps, both 2026-08-27:
 
@@ -33,7 +38,10 @@ the licence audit in limon-ops docs/contamination-data-sources-tracker.md.
 """
 
 import logging
+import threading
+import time as _time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 
 from property_scores.contamination.sources._common import (
     _distance_m,
@@ -54,6 +62,8 @@ LAYER_SANDS = "open-data-platform:sands_mcdougall_public"
 LAYER_VLR_POINT = "open-data-platform:vlr_point"
 LAYER_VLR_POLYGON = "open-data-platform:vlr_polygon"
 LAYER_GQRUZ_POLYGON = "open-data-platform:gqruz_polygon"
+LAYER_ENV_AUDIT_POINT = "open-data-platform:enviro_audit_point"
+LAYER_ENV_AUDIT_POLYGON = "open-data-platform:enviro_audit_polygon"
 
 # Page size for the paged Sands reader, and the total feature ceiling for a
 # single sands_near() call. Melbourne CBD is the national worst case: a 200m
@@ -64,6 +74,35 @@ LAYER_GQRUZ_POLYGON = "open-data-platform:gqruz_polygon"
 _SANDS_PAGE = 2000
 _SANDS_SORT_BY = "vdpid"
 _SANDS_MAX_FEATURES = 16000
+
+# The full publisher layers currently contain 5,434 point and 2,616 polygon
+# features (2026-08-30). GeoServer advertises paging but explicitly says it is
+# not transaction-safe. The 250m runtime query therefore never pages: one
+# stable-sorted page must be below its cap and exactly reconcile
+# numberMatched == numberReturned == len(features), or the source fails closed.
+_AUDIT_LOCAL_COUNT = 250
+_AUDIT_MAX_FEATURES = 10_000
+_AUDIT_SORT_BY = "reference_number"
+_AUDIT_FRESHNESS_SORT_BY = "data_extracted_on D"
+_AUDIT_PUBLISHER_MIN_COUNTS = {
+    LAYER_ENV_AUDIT_POINT: 5_000,
+    LAYER_ENV_AUDIT_POLYGON: 2_500,
+}
+_AUDIT_PROPERTY_FIELDS = frozenset({
+    "reference_number", "file_number", "suburb", "council", "address",
+    "latitude", "longitude", "report_links", "date_completed",
+    "ep_act_year", "audit_category", "data_extracted_on",
+})
+# Internal operational thresholds, not publisher promises. EPA's public
+# register may update overnight, but DataVic explicitly describes this WFS as
+# a mirror and publishes no equivalent SLA for it. The organisation-wide
+# checklist sets a 72-hour internal alert/refusal threshold; point and polygon
+# mirrors more than 24 hours apart are not one coherent source view.
+_AUDIT_FRESHNESS_MAX_AGE_S = 72 * 60 * 60
+_AUDIT_LAYER_SKEW_MAX_S = 24 * 60 * 60
+_AUDIT_FRESHNESS_CACHE_TTL_S = 60 * 60
+_audit_freshness_cache: dict[str, tuple[float, float]] = {}
+_audit_freshness_lock = threading.Lock()
 
 # The VLR and GQRUZ layers are sparse (single/double digit hits per query), so
 # one request each is enough. Saturating this cap means the layer changed
@@ -379,6 +418,308 @@ def landfills_near(lat: float, lng: float, radius_m: int = 2000) -> list[dict] |
         order.append(key)
 
     return sorted(by_number.values(), key=lambda s: s["distance_m"])
+
+
+def _environmental_audit_record(
+    props: dict, distance_m: float, geom: str
+) -> dict | None:
+    """Privacy-slim public shape for one EPA Environmental Audit layer record.
+
+    ``reference_number`` and ``audit_category`` are the stable identity and
+    semantic fields shared by both publisher layers. Missing either means the
+    schema changed, so the entire query fails closed instead of emitting an
+    unidentifiable or semantically ambiguous record.
+    """
+    reference_number = _clean(props.get("reference_number"))
+    audit_category = _clean(props.get("audit_category"))
+    if not reference_number or not audit_category or geom not in {"point", "polygon"}:
+        return None
+    return {
+        "reference_number": reference_number,
+        "file_number": _clean(props.get("file_number")),
+        "address": _clean(props.get("address")),
+        "suburb": _clean(props.get("suburb")),
+        "audit_category": audit_category,
+        "date_completed": _clean(props.get("date_completed")),
+        # The score response does not redistribute the publisher's nested
+        # document URLs. It only says whether the official record links a
+        # report, leaving document retrieval to the official register.
+        "report_available": bool(_clean(props.get("report_links"))),
+        "inside": distance_m == 0.0,
+        "distance_m": round(distance_m),
+        "geom": geom,
+    }
+
+
+def clear_environmental_audit_freshness_cache() -> None:
+    """Clear the per-layer freshness anchors (tests and explicit operators)."""
+    with _audit_freshness_lock:
+        _audit_freshness_cache.clear()
+
+
+def _parse_environmental_audit_timestamp(value, *, now: float) -> float | None:
+    """Strict UTC publisher timestamp, bounded by our internal age policy."""
+    # bool is an int in Python and datetime helpers can accidentally accept
+    # numeric-like values. The WFS schema says xsd:date-time; anything else is
+    # schema drift, not a timestamp to coerce.
+    if isinstance(value, bool) or not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    timestamp = parsed.timestamp()
+    if timestamp > now:
+        return None
+    if now - timestamp > _AUDIT_FRESHNESS_MAX_AGE_S:
+        return None
+    return timestamp
+
+
+def _environmental_audit_counts(data: dict) -> tuple[int, int] | None:
+    """WFS counts are exact plain integers; never coerce bool/float/string."""
+    matched = data.get("numberMatched")
+    returned = data.get("numberReturned")
+    if type(matched) is not int or type(returned) is not int:
+        return None
+    return matched, returned
+
+
+def _environmental_audit_layer_freshness(type_names: str) -> float | None:
+    """Latest global extraction timestamp for one WFS layer, cached for 1h.
+
+    A local bbox can legitimately return no rows, so local features cannot be
+    the freshness anchor. This one-record global query proves that the layer
+    is non-empty, shaped as documented and recent enough before an empty local
+    result is allowed to mean checked-empty.
+    """
+    now = _time.time()
+    with _audit_freshness_lock:
+        cached = _audit_freshness_cache.get(type_names)
+    if cached is not None:
+        timestamp, fetched_at = cached
+        cache_age = now - fetched_at
+        if 0 <= cache_age < _AUDIT_FRESHNESS_CACHE_TTL_S:
+            # Re-check age/future against today's clock even while the network
+            # anchor itself is cached.
+            if timestamp <= now and now - timestamp <= _AUDIT_FRESHNESS_MAX_AGE_S:
+                return timestamp
+
+    snapshot = _fetch_environmental_audit_layer_snapshot(type_names, now=now)
+    if snapshot is None:
+        return None
+    timestamp = snapshot["timestamp"]
+    with _audit_freshness_lock:
+        _audit_freshness_cache[type_names] = (timestamp, now)
+    return timestamp
+
+
+def _fetch_environmental_audit_layer_snapshot(
+    type_names: str, *, now: float | None = None
+) -> dict | None:
+    """Uncached global source snapshot used by freshness and daily probes."""
+    now = _time.time() if now is None else now
+    data = fetch_json(WFS_URL, {
+        "service": "WFS",
+        "version": "2.0.0",
+        "request": "GetFeature",
+        "typeNames": type_names,
+        "outputFormat": "application/json",
+        "count": 1,
+        "sortBy": _AUDIT_FRESHNESS_SORT_BY,
+    })
+    features = geojson_features_or_none(data)
+    if features is None or not isinstance(data, dict) or len(features) != 1:
+        return None
+    counts = _environmental_audit_counts(data)
+    if counts is None:
+        return None
+    matched, returned = counts
+    if not (1 <= matched <= _AUDIT_MAX_FEATURES) or returned != 1:
+        return None
+    feature = features[0]
+    if not isinstance(feature, dict) or not _clean(feature.get("id")):
+        return None
+    props = feature.get("properties")
+    if not isinstance(props, dict) or set(props) != _AUDIT_PROPERTY_FIELDS:
+        return None
+    if type_names == LAYER_ENV_AUDIT_POINT:
+        geometry_ok = point_coords(feature) is not None
+    elif type_names == LAYER_ENV_AUDIT_POLYGON:
+        geometry_ok = polygon_rings(feature.get("geometry")) is not None
+    else:
+        return None
+    if not geometry_ok:
+        return None
+    timestamp = _parse_environmental_audit_timestamp(
+        props.get("data_extracted_on"), now=now)
+    if timestamp is None:
+        return None
+    return {
+        "layer": type_names,
+        "publisher_count": matched,
+        "max_data_extracted_on": props["data_extracted_on"],
+        "timestamp": timestamp,
+        "schema_field_count": len(_AUDIT_PROPERTY_FIELDS) + 1,
+    }
+
+
+def environmental_audit_layer_probe(type_names: str) -> dict | None:
+    """Bypass the runtime cache for one monitoring observation."""
+    return _fetch_environmental_audit_layer_snapshot(type_names)
+
+
+def _environmental_audit_features(
+    type_names: str, lat: float, lng: float, radius_m: int,
+    *, freshness_anchor: float | None = None,
+) -> list[dict] | None:
+    """Read one sparse local WFS page, refusing truncation or count drift."""
+    seen_feature_ids: set[str] = set()
+    seen_reference_numbers: set[str] = set()
+    previous_reference: str | None = None
+    data = _get_feature(
+        type_names=type_names,
+        lat=lat,
+        lng=lng,
+        radius_m=radius_m,
+        count=_AUDIT_LOCAL_COUNT,
+        sort_by=_AUDIT_SORT_BY,
+    )
+    features = geojson_features_or_none(data)
+    if features is None or not isinstance(data, dict):
+        return None
+    counts = _environmental_audit_counts(data)
+    if counts is None:
+        return None
+    matched, returned = counts
+    # This query is intentionally single-page. A 250m audit neighbourhood is
+    # sparse; reaching the cap or disagreeing counts means the response was
+    # truncated or changed shape, so pagination is not attempted against a
+    # publisher that declares it is not transaction-safe.
+    if matched < 0 or returned < 0:
+        return None
+    if not (matched == returned == len(features)):
+        return None
+    if len(features) >= _AUDIT_LOCAL_COUNT:
+        return None
+
+    for feature in features:
+        if not isinstance(feature, dict):
+            return None
+        feature_id = _clean(feature.get("id"))
+        props = feature.get("properties")
+        if not feature_id or not isinstance(props, dict):
+            return None
+        # DescribeFeatureType exposes 12 properties plus geom = 13 fields
+        # on both layers. Unknown additions are reviewed before delivery;
+        # missing nullable keys still indicate a response-shape change.
+        if set(props) != _AUDIT_PROPERTY_FIELDS:
+            return None
+        if freshness_anchor is not None:
+            record_timestamp = _parse_environmental_audit_timestamp(
+                props.get("data_extracted_on"), now=_time.time())
+            if (record_timestamp is None
+                    or abs(record_timestamp - freshness_anchor)
+                    > _AUDIT_LAYER_SKEW_MAX_S):
+                return None
+        reference_number = _clean(props.get("reference_number"))
+        if not reference_number:
+            return None
+        if feature_id in seen_feature_ids:
+            return None
+        if reference_number in seen_reference_numbers:
+            return None
+        if previous_reference is not None and reference_number <= previous_reference:
+            return None
+        seen_feature_ids.add(feature_id)
+        seen_reference_numbers.add(reference_number)
+        previous_reference = reference_number
+
+    return features
+
+
+def environmental_audits_near(
+    lat: float, lng: float, radius_m: int = 250
+) -> list[dict] | None:
+    """EPA environmental-audit records near a Victorian point.
+
+    The point and polygon layers describe the same source family. Records are
+    de-duplicated by ``reference_number`` with polygon geometry preferred,
+    because a real audit extent is stronger location evidence than its map
+    pin. Presence is evidence-only: an audit can result in a certificate,
+    statement, recommendations or no recommendations and therefore does not
+    by itself prove contamination or carry a numeric score.
+
+    ``None`` means either layer failed or changed schema; ``[]`` means both
+    layers completed and no audit location fell inside ``radius_m``.
+    """
+    if radius_m <= 0:
+        raise ValueError("radius_m must be positive")
+
+    def _fresh_layer(type_names: str):
+        anchor = _environmental_audit_layer_freshness(type_names)
+        if anchor is None:
+            return None, None
+        return (
+            _environmental_audit_features(
+                type_names, lat, lng, radius_m, freshness_anchor=anchor),
+            anchor,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_polygon = pool.submit(
+            child_context().run,
+            _fresh_layer,
+            LAYER_ENV_AUDIT_POLYGON,
+        )
+        f_point = pool.submit(
+            child_context().run,
+            _fresh_layer,
+            LAYER_ENV_AUDIT_POINT,
+        )
+        polygon_features, polygon_freshness = f_polygon.result()
+        point_features, point_freshness = f_point.result()
+    if (polygon_features is None or point_features is None
+            or polygon_freshness is None or point_freshness is None):
+        return None
+    if abs(polygon_freshness - point_freshness) > _AUDIT_LAYER_SKEW_MAX_S:
+        return None
+
+    by_reference: dict[str, dict] = {}
+    for feature in polygon_features:
+        if not isinstance(feature, dict):
+            return None
+        props = feature.get("properties")
+        rings = polygon_rings(feature.get("geometry"))
+        if not isinstance(props, dict) or rings is None:
+            return None
+        distance = polygon_distance_m(lat, lng, rings)
+        if distance > radius_m:
+            continue
+        record = _environmental_audit_record(props, distance, "polygon")
+        if record is None:
+            return None
+        by_reference[record["reference_number"]] = record
+
+    for feature in point_features:
+        coords = point_coords(feature)
+        props = feature.get("properties") if isinstance(feature, dict) else None
+        if coords is None or not isinstance(props, dict):
+            return None
+        feature_lat, feature_lng = coords
+        distance = _distance_m(lat, lng, feature_lat, feature_lng)
+        if distance > radius_m:
+            continue
+        record = _environmental_audit_record(props, distance, "point")
+        if record is None:
+            return None
+        by_reference.setdefault(record["reference_number"], record)
+
+    return sorted(
+        by_reference.values(),
+        key=lambda record: (record["distance_m"], record["reference_number"]),
+    )
 
 
 def gqruz_near(lat: float, lng: float, radius_m: int = 500) -> list[dict] | None:

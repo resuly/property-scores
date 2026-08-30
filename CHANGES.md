@@ -29,6 +29,14 @@ pong 线程被饿死超过 5s。被杀瞬间在手的请求直接断连，重启
 - `pyproject.toml`：`[api]` extra 要求 `gunicorn>=26.2`、`uvicorn-worker>=0.4`。
   实测组合：本地 gunicorn 26.2.0 + uvicorn-worker 0.4.0 + uvicorn 0.45.0；
   生产机隔离端口 uvicorn 0.47.0（回收行为在两个版本上都验证过）。
+- setuptools package discovery 显式只纳入 `property_scores` 与
+  `property_scores.*`（关闭namespace自动发现）；`data/`、`tests/`、`scripts/`
+  和`reg09_localtest/`均不进入发行包，避免flat-layout多顶层目录让
+  `pip install --dry-run --no-build-isolation '.[api]'`在metadata阶段失败。
+  API运行时真实读取的9个`property_scores/api/static/*.html`与
+  `property_scores/api/static/css/styles.css`显式列为package data；Tailwind
+  构建输入`input.css`不进wheel。仓库没有本地JS资产，其余脚本均内嵌在HTML
+  或来自外部CDN。
 - 更简单的替代方案存在且被权衡过：uvicorn 0.45+ 自带
   `--timeout-worker-healthcheck`（一个 flag 消灭 5s 误杀）+ systemd
   `RuntimeMaxSec` 低峰整体重启管内存。gunicorn 方案的真实增量是：回收无

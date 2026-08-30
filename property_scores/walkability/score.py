@@ -9,6 +9,8 @@ Uses straight-line distance as a baseline. Road-network distance (via Valhalla
 or OSRM) can be substituted for higher accuracy.
 """
 
+import math
+
 from property_scores.common.overture import (get_db, osm_amenities_near, pois_near,
                                               pois_near_detailed, rail_stops_near,
                                               road_crossings, sports_fields_near,
@@ -271,9 +273,14 @@ def _slope_penalty(lat: float, lng: float, *, return_status: bool = False):
     Samples elevation at 500m in 4 cardinal directions. Steep terrain
     makes walking harder — 10%+ grade roughly doubles effective distance.
     """
-    offset = 0.0045  # ~500m
-    coords = [(lat, lng), (lat + offset, lng), (lat - offset, lng),
-              (lat, lng + offset), (lat, lng - offset)]
+    north_offset = 500 / 111_320
+    metres_per_lng_degree = 111_320 * math.cos(math.radians(lat))
+    east_offset = 500 / metres_per_lng_degree
+    coords = [
+        (lat, lng),
+        (lat + north_offset, lng), (lat - north_offset, lng),
+        (lat, lng + east_offset), (lat, lng - east_offset),
+    ]
     elevs = _elevations(coords)
     if not elevs:
         result = (1.0, "unavailable_neutral", None)

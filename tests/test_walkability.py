@@ -4,6 +4,7 @@ Anchor (2026-06-10 Simon Kean verification): zero bus stops within 1500 m of
 Turramurra station's bus interchange because Overture places lack AU public
 transport stops. GTFS stops now feed the tram_bus scenario.
 """
+import math
 import os
 import tempfile
 
@@ -316,6 +317,26 @@ def test_missing_slope_coverage_is_neutral_but_explicit(monkeypatch):
     assert result["coverage"]["slope"] == "unavailable_neutral"
     assert "no slope penalty was applied" in result["disclaimer"]
     assert "slope_grade_proxy_pct" not in result
+
+
+def test_slope_samples_are_500_ground_metres_in_all_directions(monkeypatch):
+    from property_scores.walkability import score as walk
+
+    captured = {}
+
+    def elevations(coords):
+        captured["coords"] = coords
+        return [100.0] * len(coords)
+
+    monkeypatch.setattr(walk, "_elevations", elevations)
+    lat, lng = -37.8136, 144.9631
+    walk._slope_penalty(lat, lng)
+
+    for sample_lat, sample_lng in captured["coords"][1:]:
+        north_m = (sample_lat - lat) * 111_320
+        east_m = ((sample_lng - lng) * 111_320
+                  * math.cos(math.radians(lat)))
+        assert math.hypot(north_m, east_m) == pytest.approx(500, abs=0.2)
 
 
 def test_missing_auxiliary_amenity_artifact_is_partial_not_clear(monkeypatch):

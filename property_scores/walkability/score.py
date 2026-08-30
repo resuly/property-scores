@@ -533,16 +533,21 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
     essentials = ["supermarket", "train", "primary_school", "gp_clinic", "park", "tram_bus"]
     close = [SCENARIO_CONFIG[s]["label"] for s in essentials
              if s in nearest and nearest[s] < 400]
+    missing = [SCENARIO_CONFIG[s]["label"] for s in essentials
+               if s not in nearest]
     far = [SCENARIO_CONFIG[s]["label"] for s in essentials
-           if s not in nearest or nearest[s] >= 1000]
+           if s in nearest and nearest[s] >= 1000]
     summary_parts = []
     if close:
         summary_parts.append(
             f"{', '.join(close[:3])} within 400 m straight-line")
+    if missing:
+        summary_parts.append(
+            f"no {' or '.join(missing[:2])} within {radius_m} m straight-line "
+            "screening radius")
     if far:
         summary_parts.append(
-            f"no {' or '.join(far[:2])} within {radius_m} m straight-line "
-            "screening radius")
+            f"{', '.join(far[:2])} over 1 km away straight-line")
     summary = '. '.join(summary_parts) + '.' if summary_parts else None
 
     screening_label = (

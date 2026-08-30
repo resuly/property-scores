@@ -233,11 +233,12 @@ def test_road_query_failure_is_conservative_and_disclosed(monkeypatch):
 
 
 def _one_market_walkability(monkeypatch, *, water_result=set(),
+                            market_distance=300,
                             slope_result=(1.0, "data_returned", 1.5),
                             missing_stream: str | None = None):
     from property_scores.walkability import score as walk
 
-    rows = [("supermarket", 300, 145.0, -37.8, "Market")]
+    rows = [("supermarket", market_distance, 145.0, -37.8, "Market")]
     monkeypatch.setattr(walk, "get_db", lambda: object())
     monkeypatch.setattr(walk, "pois_near_detailed", lambda *a, **k: rows)
     for name in ("transit_stops_near", "sports_fields_near",
@@ -291,6 +292,13 @@ def test_named_trail_segments_keep_only_the_nearest_facility_row():
     assert len(out) == 3
     merri = next(row for row in out if row[4] == "Merri Creek Trail")
     assert merri[1] == 180
+
+
+def test_far_but_present_amenity_is_not_reported_missing(monkeypatch):
+    result = _one_market_walkability(monkeypatch, market_distance=1200)
+
+    assert "no Supermarket" not in result["summary"]
+    assert "Supermarket over 1 km away straight-line" in result["summary"]
 
 
 def test_water_query_failure_is_not_silently_reported_clear(monkeypatch):

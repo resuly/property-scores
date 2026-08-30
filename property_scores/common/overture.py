@@ -281,8 +281,10 @@ def walking_trails_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
                 SELECT names.primary AS name,
                        {_closest_point_sql('geometry', lng, lat)} AS cp
                 FROM {table}
-                WHERE bbox.xmin BETWEEN {lng - delta} AND {lng + delta}
-                  AND bbox.ymin BETWEEN {lat - delta} AND {lat + delta}
+                WHERE bbox.xmax >= {lng - delta}
+                  AND bbox.xmin <= {lng + delta}
+                  AND bbox.ymax >= {lat - delta}
+                  AND bbox.ymin <= {lat + delta}
                   AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
                   AND class IN ('path', 'footway', 'cycleway')
                   AND names.primary IS NOT NULL

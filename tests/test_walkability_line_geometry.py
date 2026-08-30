@@ -51,6 +51,32 @@ def test_named_trail_uses_nearest_point_on_line(tmp_path):
     assert abs(lat - (-33.8696)) < 0.00001
 
 
+def test_long_trail_bbox_overlap_reaches_exact_distance_filter(tmp_path):
+    path = tmp_path / "long-trail.parquet"
+    db = duckdb.connect()
+    db.install_extension("spatial")
+    db.load_extension("spatial")
+    db.execute("""
+        CREATE TABLE roads AS SELECT
+          struct_pack("primary" := 'Long Creek Trail') AS names,
+          'road' AS subtype,
+          'footway' AS class,
+          NULL::VARCHAR AS subclass,
+          ST_GeomFromText(
+            'LINESTRING(151.1000 -33.8696,151.1460 -33.8696)') AS geometry,
+          struct_pack(xmin := 151.1000, xmax := 151.1460,
+                      ymin := -33.8696, ymax := -33.8696) AS bbox
+    """)
+    db.execute("COPY roads TO ? (FORMAT PARQUET)", [str(path)])
+
+    rows = walking_trails_near(
+        db, -33.86877, 151.14501, 1500, source=str(path))
+
+    assert rows
+    assert rows[0][4] == "Long Creek Trail"
+    assert rows[0][1] < 100
+
+
 def test_road_barrier_requires_actual_property_to_poi_intersection(tmp_path):
     path = _roads_parquet(tmp_path)
     db = duckdb.connect()

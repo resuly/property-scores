@@ -1,6 +1,8 @@
 # Commercial Readiness Assessment (2026-04-24, contamination updated 2026-08-30)
 
-> ⚠️ 补充 (2026-07-19):walkability 坡度惩罚已完成(commit 23cd101),本文 line16「no slope penalty」及 remaining #7 均已过时。仍准确的剩余项 = auth/rate-limit(#3)+ DA Leads /map 集成(#4)。
+> 2026-08-30 更新：Walkability Screening v1 已使用区域DEM坡度调整并明确披露；距离基础仍是直线米，
+> 不包含路网时间或isochrone。Contamination的ACT/VIC fail-closed来源与现有monitoring已进入生产代码，
+> 但Self-Serve仍受WA/QLD truth与rights等硬门约束。
 
 > ⚠️ **2026-04-24 snapshot, several items now stale — code is the source of truth**
 > (reconciled 2026-07-02). Known inaccuracies: heat-island latency 18s → now a
@@ -14,13 +16,13 @@
 | Score | Readiness | Key Improvements | Remaining Gap |
 |-------|-----------|-----------------|---------------|
 | Noise | **85%** | ANEF national, rail fix, terrain DEM, confidence ±dB, joint AADT, cache 0.87ms | QLD/NT AADT sparse; vegetation screening |
-| Walkability | **70%** | Highway barrier penalty with direction check | Still straight-line base; no slope penalty |
+| Walkability | **Pilot** | Highway/water barrier checks, named-trail dedup, regional DEM slope adjustment | Still straight-line base; no route time or isochrone |
 | Flood | **60%** | Overlay+JRC+HAND+P95, cache pipeline, disclaimer | 10s latency; no depth estimation |
 | View Quality | **55%** | 6 factors incl. 8-dir horizon angle analysis | No building-level occlusion; no floor level |
 | Solar | 50% | Caveat added | Pure API passthrough; no roof analysis |
 | Bushfire | **55%** | Overlay+Veg+Slope (FireHistory local, VIC/NSW only) | latency figure below unreliable; remote MODIS fire is dead code |
 | Heat Island | **50%** | MODIS day+night LST (local median mosaic 2026-07), night heat retention | 1km coarse; ~1.2s latency (was 18s) |
-| Contamination | **NOT READY for Self-Serve** | VIC/NSW register adapters; ACT register + official block join locally complete; VIC Environmental Audit/history/landfill/groundwater, SA GPA/licensed, QLD/TAS context; fail-closed status and monitoring | Known WA/QLD truth anchors still lack authorised register coverage; WA rights pending; QLD/SA/TAS/NT official register coverage absent; live production does not yet contain this candidate |
+| Contamination | **NOT READY for Self-Serve** | Production code includes VIC/NSW adapters, ACT register + official block join, VIC Environmental Audit evidence and fail-closed monitoring | Known WA/QLD truth anchors still lack authorised register coverage; WA rights pending; QLD/SA/TAS/NT official register coverage remains incomplete |
 
 ## All Disclaimers Present: 8/8 ✅
 
@@ -60,28 +62,27 @@ Every score now returns a `disclaimer` or `caveat` field in the API response.
   the pre-fix production service it exposes known WA remediation sites, QLD
   Newstead Gasworks and VIC Fitzroy Gasworks as failures rather than burying
   them in manual notes.
-- Local code adds the CC BY 4.0 ACT register joined to ACTGOV Block, removes
+- Production code adds the CC BY 4.0 ACT register joined to ACTGOV Block, removes
   Clean/Very Clean labels, and withholds optimistic 70-100 scores when required
-  coverage is incomplete. These changes are not production evidence until
-  independently reviewed and deployed.
-- The candidate also queries the CC BY 4.0 EPA Victoria Environmental Audit
+  coverage is incomplete. Self-Serve remains blocked despite this fail-closed delivery.
+- The production implementation also queries the CC BY 4.0 EPA Victoria Environmental Audit
   point/polygon WFS at runtime. Fitzroy Gasworks now returns explicit audit
   evidence and a `Mapped Context - Review` headline, while the audit remains
   evidence-only and contributes no numeric risk score. The mirror's freshness
   and non-transaction-safe paging limitations are disclosed; runtime lookup is
   one bounded page and fails closed on count mismatch, saturation, bad order,
   duplicates or schema drift.
-- Candidate monitoring is implemented locally inside the existing
+- Monitoring is implemented inside the existing production
   `scripts/score_truth_probes.py` sentinel, not as a parallel monitor. It checks
   both WFS layers' HTTP/error shape, 13-field schema, publisher counts and
   maximum `data_extracted_on`; the 72-hour internal age limit and 24-hour
   point/polygon skew; Fitzroy reference `0008005706`; and a checked-empty
-  Carlton 25m control. This is a local candidate contract only: it has not been
-  deployed, run from production cron or shown to deliver an alert.
+  Carlton 25m control. The existing managed truth sentinel remains the one
+  scheduled monitoring surface; do not install a second Contamination cron.
 - Self-Serve checkout remains blocked until the remaining truth failures have
   an authorised source or the public product coverage is deliberately narrowed.
 
-### Candidate monitoring commands (not executed)
+### Monitoring verification commands (do not execute without deployment approval)
 
 Read-only live dry-run after the candidate exists on the target host:
 
@@ -112,7 +113,7 @@ bash bin/install_daleads_cron.sh
 ### Should-do
 5. Noise: 100+ ground-truth validation
 6. Flood: historical flood event validation (Lismore, Maribyrnong)
-7. Walkability: slope penalty using existing DEM
+7. Walkability: route-network time / isochrone capability spike while preserving straight-line fallback
 8. ERA5 P95 grid completion (running in background)
 
 ### Nice-to-have

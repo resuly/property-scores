@@ -258,16 +258,39 @@ def test_walkability_contract_never_claims_route_time(monkeypatch):
     assert contract["distance_basis"] == "straight_line_metres"
     assert contract["route_network_time"] == "not_computed"
     assert contract["scenario_count"] == 24
-    assert "legacy source-row counts" in contract["count_contract"]
+    assert "named OSM trails" in contract["count_contract"]
     assert "route_type" in contract["transit_mode_boundary"]
     assert "400 m straight-line" in result["summary"]
+    assert "1500 m straight-line screening radius" in result["summary"]
+    assert "walking distance" not in result["summary"]
     assert "5 min walk" not in result["summary"]
     assert result["screening_label"] == "Very low amenity proximity"
     assert result["unique_facility_count"] == 1
-    assert result["poi_count_basis"] == "source_rows_before_general_deduplication_legacy"
+    assert result["poi_count_basis"] == \
+        "source_rows_with_named_trail_segments_deduplicated"
     assert result["amenity_source_categories"] == {
         "overture_places": ["supermarket"],
     }
+
+
+def test_named_trail_segments_keep_only_the_nearest_facility_row():
+    from property_scores.walkability import score as walk
+
+    rows = [
+        ("hiking_trail", 420, 145.0, -37.8, "Merri Creek Trail",
+         "osm_named_trails"),
+        ("hiking_trail", 180, 145.001, -37.801, "Merri Creek Trail",
+         "osm_named_trails"),
+        ("hiking_trail", 300, 145.002, -37.802, "Capital City Trail",
+         "osm_named_trails"),
+        ("cafe", 90, 145.003, -37.803, "Example Cafe", "overture_places"),
+    ]
+
+    out = walk._dedupe_named_trail_segments(rows)
+
+    assert len(out) == 3
+    merri = next(row for row in out if row[4] == "Merri Creek Trail")
+    assert merri[1] == 180
 
 
 def test_water_query_failure_is_not_silently_reported_clear(monkeypatch):

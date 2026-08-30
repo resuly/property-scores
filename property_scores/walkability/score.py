@@ -215,6 +215,26 @@ def _match_category(poi_category: str | None, poi_name: str | None = None) -> st
     return scenario
 
 
+def _dedupe_named_trail_segments(items: list[tuple]) -> list[tuple]:
+    """Keep the nearest segment for each named OSM trail facility."""
+    out: list[tuple] = []
+    positions: dict[tuple[str, str], int] = {}
+    for item in items:
+        poi_cat, dist_m, _lng, _lat, pname, source_id = item
+        name = str(pname or "").strip().casefold()
+        if source_id != "osm_named_trails" or not name:
+            out.append(item)
+            continue
+        key = (str(poi_cat or "").strip().casefold(), name)
+        position = positions.get(key)
+        if position is None:
+            positions[key] = len(out)
+            out.append(item)
+        elif float(dist_m) < float(out[position][1]):
+            out[position] = item
+    return out
+
+
 def _decay(distance_m: float) -> float:
     if distance_m >= MAX_WALK_DISTANCE_M:
         return 0.0
@@ -354,6 +374,7 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
     unique_facilities: set[tuple] = set()
     items = (pois_full if detailed else
              [(c, d, None, None, None, "custom_source") for c, d in pois])
+    items = _dedupe_named_trail_segments(items)
     seen_names: dict[str, set] = {}
     for poi_cat, dist_m, plng, plat, pname, source_id in items:
         matched = _match_category(poi_cat, pname)
@@ -457,7 +478,11 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
                 "distance_m": round(raw_dist),
                 "decay": round(d, 2),
                 "count": count,
-                "count_basis": "source_rows_before_general_deduplication",
+                "count_basis": (
+                    "named_facilities_nearest_segment"
+                    if scenario == "walking_trail"
+                    else "source_rows_before_general_deduplication"
+                ),
                 "barrier": eff_dist > raw_dist,
                 "water_barrier": scenario in water_blocked,
                 "icon": cfg["icon"],
@@ -515,7 +540,9 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
         summary_parts.append(
             f"{', '.join(close[:3])} within 400 m straight-line")
     if far:
-        summary_parts.append(f"no {' or '.join(far[:2])} within walking distance")
+        summary_parts.append(
+            f"no {' or '.join(far[:2])} within {radius_m} m straight-line "
+            "screening radius")
     summary = '. '.join(summary_parts) + '.' if summary_parts else None
 
     screening_label = (
@@ -558,8 +585,8 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
             "slope checks are adjustments with their status disclosed below."
         ),
         "category_scores": category_scores,
-        "poi_count": len(pois),
-        "poi_count_basis": "source_rows_before_general_deduplication_legacy",
+        "poi_count": len(items),
+        "poi_count_basis": "source_rows_with_named_trail_segments_deduplicated",
         "unique_facility_count": len(unique_facilities),
         "amenity_source_categories": source_categories,
         "screening_contract": {
@@ -570,7 +597,8 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
             "search_radius_m": radius_m,
             "scenario_count": len(SCENARIO_CONFIG),
             "count_contract": (
-                "category count and poi_count are legacy source-row counts; "
+                "category count and poi_count use source rows except named OSM "
+                "trails, which keep the nearest segment per named facility; "
                 "unique_facility_count deduplicates name/coordinate across scenarios"
             ),
             "transit_mode_boundary": (

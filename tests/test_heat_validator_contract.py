@@ -34,6 +34,15 @@ def test_refresh_has_no_unfingerprinted_skip_existing_mode():
         downloader.build_parser().parse_args(["--skip-existing"])
 
 
+def test_default_summer_ranges_use_real_february_end_dates():
+    assert downloader.season_datetime_range(2023) == (
+        "2023-12-01/2024-02-29")
+    assert downloader.season_datetime_range(2024) == (
+        "2024-12-01/2025-02-28")
+    assert downloader.season_datetime_range(2025) == (
+        "2025-12-01/2026-02-28")
+
+
 def test_day_and_night_tile_identity_must_both_be_complete():
     downloader.validate_tile_sets(
         {"h29v12", "h30v12"},

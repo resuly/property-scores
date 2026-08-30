@@ -407,14 +407,19 @@ def _horizon_openness_factor(lat: float, lng: float) -> dict | None:
     downhill_dirs = 0
     max_angles = {}
     missing_directions = []
+    partial_directions = []
     valid_directions = 0
+    valid_samples = 0
 
     for label, _bearing in _HORIZON_DIRECTIONS:
         max_angle = -90
+        direction_samples = 0
         for d in distances:
             e = elevs[idx]
             idx += 1
             if e is not None:
+                direction_samples += 1
+                valid_samples += 1
                 angle = math.degrees(math.atan2(e - center_elev, d))
                 if angle > max_angle:
                     max_angle = angle
@@ -422,6 +427,8 @@ def _horizon_openness_factor(lat: float, lng: float) -> dict | None:
             max_angles[label] = None
             missing_directions.append(label)
             continue
+        if direction_samples < len(distances):
+            partial_directions.append(label)
         valid_directions += 1
         max_angles[label] = round(max_angle, 1)
         if max_angle < 3:
@@ -448,9 +455,11 @@ def _horizon_openness_factor(lat: float, lng: float) -> dict | None:
         "downhill_directions": downhill_dirs,
         "sampled_directions": valid_directions,
         "coverage_fraction": round(
-            valid_directions / len(_HORIZON_DIRECTIONS), 3),
+            valid_samples
+            / (len(_HORIZON_DIRECTIONS) * len(distances)), 3),
         "missing_directions": missing_directions,
-        "degraded": bool(missing_directions),
+        "partial_directions": partial_directions,
+        "degraded": bool(missing_directions or partial_directions),
         "horizon_angles": max_angles,
     }
 
@@ -574,12 +583,15 @@ def view_quality_score(lat: float, lng: float) -> dict:
     if active_weight == 0:
         return {
             "product": "landscape_openness",
+            "legacy_score_key": "view_quality",
             "assessment_level": "location_context",
             "score": None,
             "label": "Data unavailable",
             "factors": {},
             "active_factors": 0,
             "missing_factors": sorted(FACTORS),
+            "partial_factors": [],
+            "factor_weight_completeness": 0.0,
             "degraded": True,
             "line_of_sight": {
                 "modelled": False,
@@ -587,6 +599,7 @@ def view_quality_score(lat: float, lng: float) -> dict:
                 "window_orientation_modelled": False,
                 "building_occlusion_modelled": False,
             },
+            "sources": [],
         }
 
     score = max(0, min(100, round(weighted_sum / active_weight * 100)))

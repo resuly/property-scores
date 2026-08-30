@@ -51,11 +51,17 @@ SESSION.headers.update({"User-Agent": "limon-heat-local/1.0"})
 _sign_cache: dict[str, tuple[str, float]] = {}
 
 
+def season_datetime_range(year: int) -> str:
+    """Return a valid Dec-Feb STAC interval for leap and common years."""
+    february_last_day = calendar.monthrange(year + 1, 2)[1]
+    return f"{year}-12-01/{year + 1}-02-{february_last_day:02d}"
+
+
 def stac_search_all(seasons):
     """搜索所有夏季 composite(POST 分页), 按 (h,v) tile 分组返回。"""
     by_tile = defaultdict(list)
     for yr in seasons:
-        dt = f"{yr}-12-01/{yr + 1}-02-29"
+        dt = season_datetime_range(yr)
         body = {"collections": ["modis-11A2-061"], "bbox": AU_BBOX,
                 "datetime": dt, "limit": 500}
         url = f"{PC_STAC}/search"

@@ -47,18 +47,18 @@ def _solar_with_footprint(lat: float, lng: float) -> dict:
     except Exception:
         logger.warning("building footprint lookup failed", exc_info=True)
     result = solar_score(lat, lng)
-    if roof_m2:
-        result["building_context"] = {
-            "building_footprint_m2": round(roof_m2),
-            "source": "Overture Maps buildings",
-            "licence": "mixed CC BY 4.0 and ODbL-1.0 inputs; derived scalar only",
-            "attribution": (
-                "Overture Maps Foundation and contributing data providers"),
-            "semantics": (
-                "whole-building ground footprint containing or nearest the "
-                "point; not a per-unit share or usable roof area"),
-            "used_in_generation_estimate": False,
-        }
+    result["building_context"] = {
+        "status": "available" if roof_m2 else "unavailable",
+        "building_footprint_m2": round(roof_m2) if roof_m2 else None,
+        "source": "Overture Maps buildings",
+        "licence": "mixed CC BY 4.0 and ODbL-1.0 inputs; derived scalar only",
+        "attribution": (
+            "Overture Maps Foundation and contributing data providers"),
+        "semantics": (
+            "whole-building ground footprint containing or nearest the "
+            "point; not a per-unit share or usable roof area"),
+        "used_in_generation_estimate": False,
+    }
     return result
 
 

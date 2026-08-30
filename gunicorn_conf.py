@@ -7,12 +7,14 @@
 # 内核 direct-reclaim 限速（拿着 GIL 卡顿），pong 线程被饿死 >5s，于是
 # 生产上 worker 每 ~7.4h 被误杀一次，正好落在 noise 请求高峰。
 # gunicorn 的 arbiter 用 worker 主动 notify + 宽 timeout，超时先报
-# `WORKER TIMEOUT (pid:N)` 再 SIGABRT（有定性与 pid；worker 信号被重置为
-# SIG_DFL，无 Python traceback，faulthandler 补现场已入队），且 max_requests
+# `WORKER TIMEOUT (pid:N)` 再 SIGABRT（有定性与 pid；post_worker_init 在
+# Gunicorn 重置信号后启用 faulthandler，补全线程现场），且 max_requests
 # 让内存回收发生在计划内的请求间隙（graceful，先答完在手请求）。
 #
 # 生产 ExecStart（unit 文件不入库，改动记录见 CHANGES.md）：
 #   .venv/bin/gunicorn property_scores.api.main:app -c gunicorn_conf.py
+
+import faulthandler
 
 bind = "127.0.0.1:8099"
 workers = 2
@@ -39,3 +41,19 @@ graceful_timeout = 30
 # 与 uvicorn 时代一致：不 preload。rf.pkl(114MB) 本就是首个 noise 请求
 # 才懒加载，preload 共享不到它，反而让 fork 与 GDAL/rasterio 线程状态纠缠。
 preload_app = False
+
+# Gunicorn 25.1+ otherwise creates its control socket by default. This service
+# is managed exclusively through systemd signals and does not use gunicornc;
+# keep the unused local control plane closed.
+control_socket_disable = True
+
+
+def post_worker_init(worker):
+    """Install fatal-signal traceback capture after Gunicorn resets signals.
+
+    Gunicorn 26.2 Worker.init_process() runs init_signals(), loads the app, then
+    invokes this hook. Enabling earlier is ineffective because init_signals
+    replaces SIGABRT; enabling here preserves a Python all-thread dump when the
+    arbiter aborts a timed-out worker.
+    """
+    faulthandler.enable(all_threads=True)

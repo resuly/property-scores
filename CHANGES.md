@@ -21,10 +21,12 @@ pong 线程被饿死超过 5s。被杀瞬间在手的请求直接断连，重启
   500-600 请求即约 16.7-20h graceful 回收一次，两 worker 相位错开）、
   `accesslog "-"`（gunicorn 默认丢弃请求行，而 journal 请求行正是本次
   破案的证据链）、`timeout 60`（超时 arbiter 报 `WORKER TIMEOUT` + SIGABRT，
-  有定性与 pid，但 worker 信号被重置为 SIG_DFL，不产生 Python traceback；
-  要现场可后续加 post_worker_init + faulthandler，已入队）、不 preload
+  有定性与 pid；`post_worker_init` 在 Gunicorn 重置信号后启用
+  `faulthandler(all_threads=True)`，SIGABRT 会留下所有 Python 线程现场）、
+  `control_socket_disable=True`（systemd-only 管理，不开放未使用的 gunicornc
+  control socket）、不 preload
   （rf.pkl 是懒加载，preload 共享不到）。参数依据全部写在该文件注释里。
-- `pyproject.toml`：`[api]` extra 加 `gunicorn>=23`、`uvicorn-worker>=0.2`。
+- `pyproject.toml`：`[api]` extra 要求 `gunicorn>=26.2`、`uvicorn-worker>=0.4`。
   实测组合：本地 gunicorn 26.2.0 + uvicorn-worker 0.4.0 + uvicorn 0.45.0；
   生产机隔离端口 uvicorn 0.47.0（回收行为在两个版本上都验证过）。
 - 更简单的替代方案存在且被权衡过：uvicorn 0.45+ 自带
@@ -38,7 +40,7 @@ pong 线程被饿死超过 5s。被杀瞬间在手的请求直接断连，重启
 - 生产 unit `ExecStart` 需改为
   `/var/www/property-scores/.venv/bin/gunicorn property_scores.api.main:app -c /var/www/property-scores/gunicorn_conf.py`（conf 用绝对路径，不依赖 WorkingDirectory）
   （unit 不入库；改前备份已存在 `~/property-scores.service.bak-20260825`）。
-- 服务器 venv 需 `pip install gunicorn uvicorn-worker`。
+- 服务器 venv 需 `pip install 'gunicorn>=26.2' 'uvicorn-worker>=0.4'`。
 - 输出数值零变化：不动模型、不动 env、不动版本串，restart 后 model_stamp 只随
   code hash 变（本改动不改 python 评分代码，code hash 不变）。
 - 回滚：unit 恢复备份 + restart 即回到 uvicorn。

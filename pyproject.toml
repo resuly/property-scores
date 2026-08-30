@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-api = ["fastapi>=0.110", "uvicorn>=0.29", "gunicorn>=23", "uvicorn-worker>=0.2"]
+api = ["fastapi>=0.110", "uvicorn>=0.29", "gunicorn>=26.2", "uvicorn-worker>=0.4"]
 ml = ["xgboost>=2.0", "scikit-learn>=1.4"]
 dev = ["pytest>=8.0", "ruff>=0.4"]
 

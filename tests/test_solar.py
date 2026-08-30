@@ -137,6 +137,22 @@ def test_batch_footprint_is_context_not_fake_usable_roof(monkeypatch):
         out["building_context"]["semantics"]
 
 
+def test_missing_footprint_keeps_explicit_building_context_contract(monkeypatch):
+    from property_scores.api import main
+
+    monkeypatch.setattr(main, "building_footprint_m2", lambda *_: None)
+    monkeypatch.setattr(main, "get_db", lambda: object())
+    monkeypatch.setattr(main, "solar_score", lambda *_args, **_kwargs: {
+        "score": 50, "estimated_annual_kwh": None,
+    })
+
+    out = main._solar_with_footprint(-37.81, 144.96)
+
+    assert out["building_context"]["status"] == "unavailable"
+    assert out["building_context"]["building_footprint_m2"] is None
+    assert out["building_context"]["used_in_generation_estimate"] is False
+
+
 @pytest.mark.parametrize(
     "query",
     [
@@ -162,6 +178,27 @@ def test_malformed_gsa_annual_block_degrades_to_unavailable(monkeypatch):
 
         def json(self):
             return {"annual": None}
+
+    monkeypatch.setattr(ss.requests, "get", lambda *_args, **_kwargs: Response())
+
+    out = ss.solar_score(-37.81, 144.96)
+
+    assert out["score"] is None
+    assert out["label"] == "Data unavailable"
+
+
+def test_malformed_gsa_layer_metadata_degrades_to_unavailable(monkeypatch):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "annual": {
+                    "data": {"GHI": 1600.0, "PVOUT_csi": 1500.0},
+                    "metadata": {"layers": ["not", "an", "object"]},
+                },
+            }
 
     monkeypatch.setattr(ss.requests, "get", lambda *_args, **_kwargs: Response())
 

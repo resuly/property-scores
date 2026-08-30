@@ -83,8 +83,9 @@ def _fetch_solar_data(lat: float, lng: float) -> dict | None:
         annual_block = data.get("annual") or {}
         annual = annual_block.get("data") or {}
         metadata = annual_block.get("metadata") or {}
+        layers = metadata.get("layers") or {}
         if not all(isinstance(row, dict)
-                   for row in (annual_block, annual, metadata)):
+                   for row in (annual_block, annual, metadata, layers)):
             return None
         result = {
             "ghi_kwh_m2": _finite_metric(annual.get("GHI")),
@@ -97,7 +98,7 @@ def _fetch_solar_data(lat: float, lng: float) -> dict | None:
             "source_metadata": {
                 "retrieved_at_ms": metadata.get("ts"),
                 "dataset_version": (metadata.get("version") or {}).get("data"),
-                "layers": metadata.get("layers") or {},
+                "layers": layers,
             },
         }
     except (requests.RequestException, AttributeError, KeyError, TypeError,

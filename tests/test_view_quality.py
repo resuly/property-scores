@@ -146,3 +146,36 @@ def test_partial_horizon_scales_its_weight_by_directional_coverage(monkeypatch):
     assert out["sampled_directions"] == 6
     assert out["coverage_fraction"] == 0.75
     assert out["degraded"] is True
+
+
+def test_horizon_partial_samples_do_not_claim_complete_coverage(monkeypatch):
+    # One valid point and four gaps in every direction: all eight directions
+    # exist, but the factor has only 8/40 samples and must shrink its weight.
+    direction = [100.0, None, None, None, None]
+    elevations = [100.0] + direction * 8
+    monkeypatch.setattr(vs, "_sample_elevations", lambda *_: elevations)
+
+    out = vs._horizon_openness_factor(-37.81, 144.96)
+
+    assert out["sampled_directions"] == 8
+    assert out["coverage_fraction"] == 0.2
+    assert len(out["partial_directions"]) == 8
+    assert out["degraded"] is True
+
+
+def test_all_missing_landscape_factors_keep_the_contract_shape(monkeypatch):
+    vs._vq_cache.clear()
+    monkeypatch.setattr(vs, "get_db", lambda: object())
+    for name in (
+        "_ocean_proximity_factor", "_inland_water_factor",
+        "_elevation_advantage_factor", "_green_space_factor",
+        "_building_openness_factor", "_horizon_openness_factor",
+    ):
+        monkeypatch.setattr(vs, name, lambda *_: None)
+
+    out = vs.view_quality_score(-37.81, 144.96)
+
+    assert out["legacy_score_key"] == "view_quality"
+    assert out["partial_factors"] == []
+    assert out["factor_weight_completeness"] == 0.0
+    assert out["degraded"] is True

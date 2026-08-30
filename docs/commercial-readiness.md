@@ -20,7 +20,7 @@
 | Solar | 50% | Caveat added | Pure API passthrough; no roof analysis |
 | Bushfire | **55%** | Overlay+Veg+Slope (FireHistory local, VIC/NSW only) | latency figure below unreliable; remote MODIS fire is dead code |
 | Heat Island | **50%** | MODIS day+night LST (local median mosaic 2026-07), night heat retention | 1km coarse; ~1.2s latency (was 18s) |
-| Contamination | **NOT READY for Self-Serve** | VIC/NSW register adapters; ACT register + official block join locally complete; VIC history/landfill/groundwater, SA GPA/licensed, QLD/TAS context; fail-closed status and monitoring | Known WA/QLD/VIC truth anchors still fail; WA rights pending; QLD/SA/TAS/NT official register coverage absent; live production does not yet contain ACT or the label/score-status fixes |
+| Contamination | **NOT READY for Self-Serve** | VIC/NSW register adapters; ACT register + official block join locally complete; VIC Environmental Audit/history/landfill/groundwater, SA GPA/licensed, QLD/TAS context; fail-closed status and monitoring | Known WA/QLD truth anchors still lack authorised register coverage; WA rights pending; QLD/SA/TAS/NT official register coverage absent; live production does not yet contain this candidate |
 
 ## All Disclaimers Present: 8/8 ✅
 
@@ -64,6 +64,12 @@ Every score now returns a `disclaimer` or `caveat` field in the API response.
   Clean/Very Clean labels, and withholds optimistic 70-100 scores when required
   coverage is incomplete. These changes are not production evidence until
   independently reviewed and deployed.
+- The candidate also queries the CC BY 4.0 EPA Victoria Environmental Audit
+  point/polygon WFS at runtime. Fitzroy Gasworks now returns explicit audit
+  evidence and a `Mapped Context - Review` headline, while the audit remains
+  evidence-only and contributes no numeric risk score. The mirror's freshness
+  and non-transaction-safe paging limitations are disclosed and fail closed on
+  observed count/order/overlap/schema drift.
 - Self-Serve checkout remains blocked until the remaining truth failures have
   an authorised source or the public product coverage is deliberately narrowed.
 

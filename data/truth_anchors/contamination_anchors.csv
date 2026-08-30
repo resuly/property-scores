@@ -18,7 +18,8 @@ lat,lng,expected,why,id,reminder_days,blocker
 -33.963353,151.217106,score<=14,"Exact register point: Caltex Terminal Botany, NSW EPA CLR."
 -33.7620,151.1580,label Mapped Context / Review,"Killara NSW has nearby register evidence but no on-site finding; the headline must request review rather than say Clean."
 -37.7973,144.9879,score<=45,"VIC PSR positive near Keele Street Collingwood; also an outage-conflation anchor."
--37.7925,144.9855,score<=55,"Fitzroy Gasworks precinct is a major VIC remediation site absent from the narrow PSR source. This stays red until an authorised source catches it."
+-37.7925,144.9855,environmental_audit_entries_count>=1,"Fitzroy Gasworks is machine-covered by the CC BY 4.0 EPA Environmental Audit point/polygon WFS. The 433 Smith Street 53X Statement polygon (reference 0008005706) is within the 250m evidence radius; an audit location is context, not proof of contamination.",vic_fitzroy_audit_evidence,,
+-37.7925,144.9855,label Mapped Context / Review,"The Fitzroy Gasworks audit evidence must structurally block a reassuring headline without inventing a contamination score from the existence of an audit.",vic_fitzroy_audit_headline,,
 -37.8800,145.1640,score>=70,"Glen Waverley VIC residential control."
 -28.1690,153.5350,state=QLD,"Coolangatta QLD must route to QLD rather than NSW."
 -35.27582,149.13277,score<=14,"ACT Register of contaminated sites row 42, Active BP Service Station, exactly joined to Braddon block 12 section 29."

@@ -34,6 +34,7 @@ Scores use different data sources depending on the state. This document explains
 | Fire history (local) | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Contamination** | | | | | | | | |
 | Official contaminated-sites register | ✅ | ✅ | ❌ | ❌ | 🔒 | ❌ | ❌ | ✅ |
+| EPA Environmental Audit location context | ✅ evidence-only | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | Historical-use signal | ✅ | ❌ | ⚠️ licensed activity only | ⚠️ licensed activity only | ❌ | ⚠️ regulated/UPSS context | ❌ | ❌ |
 | Statutory contaminated-groundwater restriction | ✅ | ⚠️ vulnerability only | ❌ | ✅ | 🔒 depth layer | ❌ | ❌ | ❌ |
 | Known/operating landfill context | ✅ | ⚠️ national operating only | ⚠️ national operating only | ⚠️ national operating only | ⚠️ national operating only | ⚠️ national operating only | ⚠️ national operating only | ⚠️ national operating only |
@@ -49,7 +50,7 @@ Scores use different data sources depending on the state. This document explains
 ## Accuracy Implications
 
 ### Best accuracy: VIC
-Victoria has the richest data coverage: VicRoads AADT for noise, full planning overlays for flood/bushfire, EPA register for contamination, and GTFS rail. Noise model validated at 83% against known locations.
+Victoria has the richest data coverage: VicRoads AADT for noise, full planning overlays for flood/bushfire, an EPA priority-sites register plus evidence-only Environmental Audit locations for contamination, and GTFS rail. An audit location is not a contamination finding and the DataVic mirror may lag EPA's public register. Noise model validated at 83% against known locations.
 
 ### Good accuracy: NSW
 Planning overlays for flood/bushfire, an official contamination register, GTFS rail and NFDH traffic counts. Missing VicRoads-equivalent granular AADT.

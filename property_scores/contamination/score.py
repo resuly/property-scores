@@ -1,9 +1,10 @@
 """
 Contamination risk score for Australian properties.
 
-Two signal layers:
-1. Official EPA registers — VIC (WFS), NSW (ArcGIS), WA (ArcGIS)
-2. Industrial proximity — Overture POI fuel stations, factories, dry cleaners
+Signal families include official registers, evidence-only environmental-audit
+and historical-use context, landfill/groundwater context, and Overture
+industrial proximity. Every source keeps failure distinct from a checked-empty
+result so incomplete coverage cannot produce a reassuring score.
 
 Score 0-100 where 100 = cleanest / lowest contamination risk.
 """
@@ -628,6 +629,7 @@ def _contamination_label(score: int | None, epa_status: str, ind_failed: bool,
 # (the exact failure the on-site rework removed).
 _SANDS_ONSITE_M = 30
 _TAS_EVIDENCE_RADIUS_M = 500
+_VIC_AUDIT_CONTEXT_RADIUS_M = 250
 _TAS_SOURCE_RIGHTS = {
     "TAS EPA Regulated Sites": {
         "attribution": "EPA Regulated Sites [Documents] from theLIST © State of Tasmania",
@@ -646,6 +648,13 @@ _TAS_SOURCE_RIGHTS = {
 _ACT_SOURCE_RIGHTS = {
     "ACT EPA Register of contaminated sites": {
         "attribution": "Register of contaminated sites © Australian Capital Territory",
+        "licence": "CC BY 4.0",
+        "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+    },
+}
+_VIC_AUDIT_SOURCE_RIGHTS = {
+    "VIC EPA Environmental Audits": {
+        "attribution": "EPA Victoria Environmental Audit Reports © State of Victoria",
         "licence": "CC BY 4.0",
         "licence_url": "https://creativecommons.org/licenses/by/4.0/",
     },
@@ -857,6 +866,84 @@ def _historical_use_signal(lat: float, lng: float, state: str | None) -> dict:
             "entries": entries[:10]}
 
 
+def _environmental_audit_signal(
+    lat: float, lng: float, state: str | None
+) -> dict:
+    """Victorian EPA environmental-audit records as evidence-only context.
+
+    An environmental audit can report contamination, clean-up, management
+    conditions, a certificate, or no recommendations. The location therefore
+    never carries a numeric contamination score by itself. It does make a
+    reassuring headline inappropriate, and failure to query the official
+    point/polygon layers makes Victorian coverage incomplete.
+    """
+    coverage = "vic_epa_environmental_audit_locations"
+    coverage_note = (
+        "EPA environmental-audit locations include certificates, statements, "
+        "recommendations and records marked EPA Processing. A location or "
+        "date does not by itself prove contamination, completed remediation "
+        "or that report conditions were implemented. The DataVic WFS is a "
+        "mirror that may lag the EPA public register; its paging is not a "
+        "transaction-safe snapshot, so observed count, order, overlap and "
+        "schema drift fail closed. DA Leads applies an internal 72-hour "
+        "maximum mirror age and 24-hour point/polygon coherence tolerance. "
+        "Those are internal alert/refusal thresholds, not an EPA or DataVic "
+        "service-level promise; the public register's overnight update "
+        "description is not transferred to this WFS mirror. This is not a "
+        "complete contaminated-land register."
+    )
+    if state != "VIC":
+        return {
+            "status": "not_integrated",
+            "score": None,
+            "entries": [],
+            "entries_total": 0,
+            "entries_returned": 0,
+            "evidence_radius_m": _VIC_AUDIT_CONTEXT_RADIUS_M,
+            "evidence_only": True,
+            "coverage": coverage,
+            "coverage_note": coverage_note,
+        }
+
+    from property_scores.contamination.sources import _common, vic_wfs
+    try:
+        with _common.budget(_SIGNAL_BUDGET_S):
+            rows = vic_wfs.environmental_audits_near(
+                lat, lng, radius_m=_VIC_AUDIT_CONTEXT_RADIUS_M)
+    except _common.BudgetExceeded:
+        rows = None
+    if rows is None:
+        return {
+            "status": "error",
+            "score": None,
+            "entries": [],
+            "entries_total": 0,
+            "entries_returned": 0,
+            "evidence_radius_m": _VIC_AUDIT_CONTEXT_RADIUS_M,
+            "evidence_only": True,
+            "coverage": coverage,
+            "coverage_note": coverage_note,
+        }
+
+    entries = [{
+        **row,
+        "source": "VIC EPA Environmental Audits",
+        "evidence_only": True,
+    } for row in rows]
+    returned_entries = entries[:10]
+    return {
+        "status": "ok",
+        "score": None,
+        "entries": returned_entries,
+        "entries_total": len(entries),
+        "entries_returned": len(returned_entries),
+        "evidence_radius_m": _VIC_AUDIT_CONTEXT_RADIUS_M,
+        "evidence_only": True,
+        "coverage": coverage,
+        "coverage_note": coverage_note,
+    }
+
+
 def _landfill_signal(lat: float, lng: float, state: str | None) -> dict:
     """Legacy and operating landfills. Landfills are the exception to the
     stays-with-the-site rule: gas and leachate do move, so nearby carries a
@@ -998,10 +1085,11 @@ def contamination_score(lat: float, lng: float) -> dict:
         # public score until DWER grants that permission.
         return []
 
-    with ThreadPoolExecutor(max_workers=5) as pool:
+    with ThreadPoolExecutor(max_workers=6) as pool:
         f_epa = pool.submit(_fetch_epa)
         f_ind = pool.submit(_industrial_proximity, lat, lng)
         f_hist = pool.submit(_historical_use_signal, lat, lng, state)
+        f_audit = pool.submit(_environmental_audit_signal, lat, lng, state)
         f_lf = pool.submit(_landfill_signal, lat, lng, state)
         f_gw = pool.submit(_groundwater_signal, lat, lng, state)
 
@@ -1029,15 +1117,17 @@ def contamination_score(lat: float, lng: float) -> dict:
     ind_score = None if ind_failed else _industrial_to_score(industrial)
 
     historical = f_hist.result()
+    environmental_audit = f_audit.result()
     landfill = f_lf.result()
     groundwater = f_gw.result()
-    # A failed OR partial history/landfill/groundwater check is a partial
+    # A failed OR partial history/audit/landfill/groundwater check is a partial
     # check, same as an EPA outage: the score may stand but a reassuring
     # label may not, and the result must not be cached (review P0-1: VIC
     # legacy landfills live in VLR alone, so VLR-down + GA-ok = "partial"
     # WAS producing a cached Very Clean, the Keele St failure shape again).
     aux_failed = any(sig["status"] in ("error", "partial")
-                     for sig in (historical, landfill, groundwater))
+                     for sig in (historical, environmental_audit,
+                                 landfill, groundwater))
     # Dense-precinct tier-A evidence that cannot be attributed to this parcel
     # blocks reassuring labels too, but is cacheable (it is stable data, not
     # an outage).
@@ -1062,6 +1152,7 @@ def contamination_score(lat: float, lng: float) -> dict:
         epa_sites
         or industrial.get("sites")
         or historical.get("entries")
+        or environmental_audit.get("entries")
         or landfill.get("entries")
         or groundwater.get("entries")
     )
@@ -1103,6 +1194,13 @@ def contamination_score(lat: float, lng: float) -> dict:
         # attributed tier-A directory trade at this address
         "historical_use": historical.get(
             "on_site", historical.get("score") is not None),
+        # This says the query point falls in an audit extent; it does not say
+        # contamination was found. The evidence-only block below owns that
+        # distinction and the official audit category.
+        "environmental_audit": any(
+            entry.get("inside")
+            for entry in environmental_audit.get("entries", [])
+        ),
         "landfill": bool(lf_entries) and (
             (lf_entries[0].get("distance_m") or 10**9) <= _ON_SITE_M),
         # inside an official restricted-groundwater zone
@@ -1121,7 +1219,10 @@ def contamination_score(lat: float, lng: float) -> dict:
                        "No groundwater-plume data is included. Most "
                        "contamination stems from past on-site uses that no "
                        "register captures, so a clean screen is not a clean "
-                       "site. Not a substitute for site contamination "
+                       "site. An environmental-audit record is due-diligence "
+                       "context; it does not by itself prove contamination, "
+                       "completed remediation or implementation of report "
+                       "conditions. Not a substitute for site contamination "
                        "assessment."),
         "state": state,
         "on_site": on_site,
@@ -1130,18 +1231,31 @@ def contamination_score(lat: float, lng: float) -> dict:
         "epa_sites_returned": min(len(epa_sites), 10),
         "industrial": industrial,
         "historical_use": historical,
+        "environmental_audit": environmental_audit,
         "landfill": landfill,
         "groundwater": groundwater,
     }
     result["epa_status"] = epa_status
     result["industrial_status"] = industrial.get("industrial_status", "ok")
+    result["environmental_audit_status"] = environmental_audit.get(
+        "status", "unavailable")
+    result["environmental_audit_entries_count"] = environmental_audit.get(
+        "entries_total", len(environmental_audit.get("entries", [])))
+    rights = {
+        **_TAS_SOURCE_RIGHTS,
+        **_ACT_SOURCE_RIGHTS,
+        **_VIC_AUDIT_SOURCE_RIGHTS,
+    }
     delivered_rights_sources = {
         entry.get("source")
-        for entry in [*epa_sites, *historical.get("entries", [])]
-        if entry.get("source") in {**_TAS_SOURCE_RIGHTS, **_ACT_SOURCE_RIGHTS}
+        for entry in [
+            *epa_sites,
+            *historical.get("entries", []),
+            *environmental_audit.get("entries", []),
+        ]
+        if entry.get("source") in rights
     }
     if delivered_rights_sources:
-        rights = {**_TAS_SOURCE_RIGHTS, **_ACT_SOURCE_RIGHTS}
         result["attribution"] = [
             {"source": source, **rights[source]}
             for source in sorted(delivered_rights_sources)
@@ -1158,6 +1272,9 @@ def contamination_score(lat: float, lng: float) -> dict:
     if ind_failed:
         notes.append("The industrial land use data could not be reached for "
                      "this check.")
+    if environmental_audit.get("status") == "error":
+        notes.append("The VIC EPA Environmental Audit location layers could "
+                     "not be reached for this check.")
     if notes:
         if score is None:
             notes.append("No score could be produced for this address. Try again later.")

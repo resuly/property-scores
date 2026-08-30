@@ -22,8 +22,8 @@ def _neutral_new_signals(monkeypatch):
     out of legacy tests: they hit live endpoints and would make every
     contamination_score() call network-dependent. Signal-specific behaviour
     is tested with its own stubs in tests/test_contam_signals.py."""
-    for name in ("_historical_use_signal", "_landfill_signal",
-                 "_groundwater_signal"):
+    for name in ("_historical_use_signal", "_environmental_audit_signal",
+                 "_landfill_signal", "_groundwater_signal"):
         monkeypatch.setattr(cs, name, lambda *a, **k: dict(_NEUTRAL_SIGNAL))
 
 
@@ -357,6 +357,97 @@ def test_nearby_industrial_context_blocks_clean_headline(monkeypatch):
 
     assert result["score"] == 85
     assert result["label"] == cs.LABEL_MAPPED_CONTEXT
+
+
+def test_fitzroy_anchor_depends_on_official_environmental_audit_context(
+        monkeypatch):
+    """Mutation guard for the exact commercial truth anchor.
+
+    With every other context source neutral, the real 433 Smith Street audit
+    polygon is the only reason this known Fitzroy Gasworks point may not carry
+    a reassuring headline. Removing the audit block or its context wiring
+    makes the second assertion's clean control indistinguishable from the
+    first result and turns this test red.
+    """
+    fitzroy = (-37.7925, 144.9855)
+    monkeypatch.setattr(cs, "_detect_state", lambda *a: "VIC")
+    monkeypatch.setattr(cs, "_vic_epa_sites", lambda *a, **k: [])
+    _patch_industrial(monkeypatch, ok=True)
+    audit_entry = {
+        "reference_number": "0008005706",
+        "file_number": "75730-1",
+        "address": "433 SMITH STREET, FITZROY NORTH VIC 3068 433 SMITH ST",
+        "suburb": "Fitzroy North",
+        "audit_category": "53X Statement",
+        "date_completed": "2020-12-22T00:00:00Z",
+        "report_available": True,
+        "inside": False,
+        "distance_m": 70,
+        "geom": "polygon",
+        "source": "VIC EPA Environmental Audits",
+        "evidence_only": True,
+    }
+    audit_block = {
+        "status": "ok",
+        "score": None,
+        "entries": [audit_entry],
+        "evidence_only": True,
+        "coverage": "vic_epa_environmental_audit_locations",
+        "coverage_note": "Audit location context; not proof of contamination.",
+    }
+    monkeypatch.setattr(cs, "_environmental_audit_signal",
+                        lambda *a, **k: audit_block)
+
+    result = cs.contamination_score(*fitzroy)
+
+    assert result["score"] == 95
+    assert result["score_status"] == "available"
+    assert result["label"] == cs.LABEL_MAPPED_CONTEXT
+    assert "clean" not in result["label"].lower()
+    assert result["environmental_audit"]["entries"] == [audit_entry]
+    assert result["environmental_audit_status"] == "ok"
+    assert result["environmental_audit_entries_count"] == 1
+    assert result["on_site"]["environmental_audit"] is False
+    assert result["attribution"] == [{
+        "source": "VIC EPA Environmental Audits",
+        "attribution": "EPA Victoria Environmental Audit Reports © State of Victoria",
+        "licence": "CC BY 4.0",
+        "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+    }]
+
+    cs._contam_cache.clear()
+    monkeypatch.setattr(cs, "_environmental_audit_signal", lambda *a, **k: {
+        **audit_block, "entries": [],
+    })
+    control = cs.contamination_score(*fitzroy)
+    assert control["label"] == "No Mapped Red Flag"
+
+
+@pytest.mark.parametrize("control", [
+    (-37.8003, 144.9633),  # 163 Grattan Street / Carlton 25m WFS negative
+    (-37.8800, 145.1640),  # Glen Waverley truth control
+])
+def test_checked_empty_environmental_audit_does_not_degrade_controls(
+        monkeypatch, control):
+    monkeypatch.setattr(cs, "_detect_state", lambda *a: "VIC")
+    monkeypatch.setattr(cs, "_vic_epa_sites", lambda *a, **k: [])
+    _patch_industrial(monkeypatch, ok=True)
+    monkeypatch.setattr(cs, "_environmental_audit_signal", lambda *a, **k: {
+        "status": "ok",
+        "score": None,
+        "entries": [],
+        "evidence_only": True,
+        "coverage": "vic_epa_environmental_audit_locations",
+        "coverage_note": "checked-empty official audit context",
+    })
+
+    result = cs.contamination_score(*control)
+
+    assert result["environmental_audit_status"] == "ok"
+    assert result["environmental_audit_entries_count"] == 0
+    assert result["score"] == 95
+    assert result["score_status"] == "available"
+    assert result["label"] == "No Mapped Red Flag"
 
 
 @pytest.mark.parametrize("score", [10, 25, 45, 65])

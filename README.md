@@ -13,7 +13,7 @@ Built by [Limon Tech](https://limontech.net) as the scoring backend for [DA Lead
 | Solar Potential | Live | Global Solar Atlas API | GHI/DNI + orientation + tilt |
 | Flood Risk | Live | State government planning overlays (VIC/NSW/SA/TAS/ACT) | ArcGIS REST point-in-polygon |
 | Bushfire Risk | Live | State government overlays (VIC/NSW/WA/SA/TAS) | BMO/BPL severity classification + indicative BAL pre-screen (AS 3959 Method 1, see docs/bal-prescreen.md) |
-| Contamination Screening | Live map; Self-Serve API not ready | VIC/NSW/ACT official registers, VIC historical/landfill/groundwater, SA/QLD/TAS context, national landfill/industrial context | On-site-first evidence screen; optimistic scores withheld when required coverage is incomplete; not a clean-site certificate or environmental assessment |
+| Contamination Screening | Live map; Self-Serve API not ready | VIC/NSW/ACT official registers, VIC EPA Environmental Audit/history/landfill/groundwater context, SA/QLD/TAS context, national landfill/industrial context | On-site-first evidence screen; audit locations are evidence-only and never prove contamination; optimistic scores withheld when required coverage is incomplete; not a clean-site certificate or environmental assessment |
 | Heat Island | Live | Open-Meteo ERA5 + Overture buildings/POI | 5-year summer P90 + density + green space |
 
 ## Quick Start

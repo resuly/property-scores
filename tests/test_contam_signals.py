@@ -26,9 +26,11 @@ def _stub_epa_and_industrial(monkeypatch):
     cs._contam_cache.clear()
 
 
-def _stub_signals(monkeypatch, hist=None, lf=None, gw=None):
+def _stub_signals(monkeypatch, hist=None, audit=None, lf=None, gw=None):
     monkeypatch.setattr(cs, "_historical_use_signal",
                         lambda *a, **k: hist or dict(NEUTRAL))
+    monkeypatch.setattr(cs, "_environmental_audit_signal",
+                        lambda *a, **k: audit or dict(NEUTRAL))
     monkeypatch.setattr(cs, "_landfill_signal",
                         lambda *a, **k: lf or dict(NEUTRAL))
     monkeypatch.setattr(cs, "_groundwater_signal",
@@ -100,9 +102,80 @@ def test_signal_error_keeps_bad_bands(monkeypatch):
 def test_result_carries_new_blocks(monkeypatch):
     _stub_signals(monkeypatch)
     r = cs.contamination_score(*MELB)
-    for key in ("historical_use", "landfill", "groundwater"):
+    for key in ("historical_use", "environmental_audit", "landfill", "groundwater"):
         assert key in r
         assert set(r[key]) >= {"status", "score", "entries"}
+
+
+def test_environmental_audit_is_evidence_only_context_with_explicit_coverage(
+        monkeypatch):
+    from property_scores.contamination.sources import vic_wfs
+
+    monkeypatch.setattr(vic_wfs, "environmental_audits_near", lambda *a, **k: [{
+        "reference_number": "0008005706",
+        "file_number": "75730-1",
+        "address": "433 SMITH STREET, FITZROY NORTH VIC 3068 433 SMITH ST",
+        "suburb": "Fitzroy North",
+        "audit_category": "53X Statement",
+        "date_completed": "2020-12-22T00:00:00Z",
+        "report_available": True,
+        "inside": False,
+        "distance_m": 70,
+        "geom": "polygon",
+    }])
+
+    signal = cs._environmental_audit_signal(-37.7925, 144.9855, "VIC")
+
+    assert signal["status"] == "ok"
+    assert signal["score"] is None
+    assert signal["evidence_only"] is True
+    assert signal["evidence_radius_m"] == 250
+    assert signal["entries_total"] == signal["entries_returned"] == 1
+    assert signal["coverage"] == "vic_epa_environmental_audit_locations"
+    assert "does not by itself prove contamination" in signal["coverage_note"]
+    assert "EPA Processing" in signal["coverage_note"]
+    assert "not a transaction-safe snapshot" in signal["coverage_note"]
+    assert "internal 72-hour" in signal["coverage_note"]
+    assert "not an EPA or DataVic service-level promise" in signal["coverage_note"]
+    assert signal["entries"][0]["source"] == "VIC EPA Environmental Audits"
+    assert signal["entries"][0]["evidence_only"] is True
+
+
+def test_environmental_audit_not_integrated_outside_victoria():
+    signal = cs._environmental_audit_signal(-33.9, 151.2, "NSW")
+    assert signal["status"] == "not_integrated"
+    assert signal["entries"] == []
+    assert signal["score"] is None
+
+
+def test_environmental_audit_builder_propagates_freshness_failure(monkeypatch):
+    from property_scores.contamination.sources import vic_wfs
+
+    monkeypatch.setattr(vic_wfs, "environmental_audits_near", lambda *a, **k: None)
+    signal = cs._environmental_audit_signal(*MELB, "VIC")
+
+    assert signal["status"] == "error"
+    assert signal["entries"] == []
+    assert signal["score"] is None
+
+
+def test_environmental_audit_failure_withholds_reassuring_score_and_cache(
+        monkeypatch):
+    _stub_signals(monkeypatch, audit={
+        "status": "error", "score": None, "entries": [],
+        "evidence_only": True,
+        "coverage": "vic_epa_environmental_audit_locations",
+        "coverage_note": "official layer unavailable",
+    })
+
+    result = cs.contamination_score(*MELB)
+
+    assert result["environmental_audit"]["status"] == "error"
+    assert result["score"] is None
+    assert result["score_status"] == "unavailable_incomplete_coverage"
+    assert result["label"] == cs.LABEL_INCOMPLETE
+    assert "Environmental Audit location layers could not be reached" in result["note"]
+    assert cs._contam_cache == {}
 
 
 # ---- 信号构建函数自身(数据层 mock 在函数边界) ----

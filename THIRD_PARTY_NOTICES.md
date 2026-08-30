@@ -35,3 +35,28 @@ https://creativecommons.org/licenses/by/4.0/
 
 The register supplies no geometry. DA Leads performs the block join and does
 not imply endorsement by the ACT Government.
+
+## EPA Victoria Environmental Audit Reports - Location Points and Polygons
+
+Contamination Screening queries the DataVic WFS point and polygon layers for
+EPA Victoria Environmental Audit records within 250 metres of an address:
+
+- https://discover.data.vic.gov.au/dataset/epa-victoria-environmental-audit-reports-location-points
+- https://discover.data.vic.gov.au/dataset/epa-victoria-environmental-audit-reports-location-polygons
+
+EPA Victoria Environmental Audit Reports © State of Victoria. The DataVic
+datasets are licensed under Creative Commons Attribution 4.0 International:
+
+https://creativecommons.org/licenses/by/4.0/
+
+Only an allowlist of record metadata is returned. Geometry coordinates and
+report URLs/PDF contents are not redistributed. An audit record can be a
+certificate, statement, recommendation, no-recommendation result or a record
+marked `EPA Processing`; its existence or date is not represented as proof of
+contamination, completed remediation or implementation of report conditions.
+The WFS is a mirror that may lag EPA's public register, and its paging is not a
+transaction-safe snapshot. Observed count, order, overlap and schema drift
+therefore fail closed. DA Leads' 72-hour maximum mirror age and 24-hour
+point/polygon coherence tolerance are internal alert/refusal thresholds, not
+an EPA or DataVic service-level promise. EPA's overnight public-register
+update description is not represented as a WFS mirror SLA.

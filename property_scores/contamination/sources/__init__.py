@@ -19,7 +19,8 @@ exactly how a dropped connection once turned a contaminated site into
 Licensing note: the public-source set is Creative Commons Attribution or
 equivalent and requires attribution on every delivery surface that exposes the
 records. NSW's licence version is still being confirmed for paid API
-redistribution; TAS EPA Regulated Premises and UPSS are CC BY 3.0 AU.
+redistribution; TAS EPA Regulated Premises and UPSS are CC BY 3.0 AU; the
+DataVic EPA Environmental Audit point/polygon metadata is CC BY 4.0.
 """
 
 from property_scores.contamination.sources import (  # noqa: F401

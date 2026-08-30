@@ -1,3 +1,4 @@
+import csv
 import importlib.util
 import sys
 from pathlib import Path
@@ -75,3 +76,29 @@ def test_anchor_id_keeps_risk_and_coverage_contracts_independent(tmp_path, monke
     # The key selection itself is the invariant needed by state bookkeeping.
     assert (rows[0].get("id") or f"{rows[0]['lat']},{rows[0]['lng']}") == "-31.9,116.0"
     assert (rows[1].get("id") or f"{rows[1]['lat']},{rows[1]['lng']}") == "coverage_contract"
+
+
+def test_fitzroy_anchor_requires_audit_evidence_and_non_reassuring_headline():
+    path = (Path(__file__).resolve().parent.parent / "data" / "truth_anchors"
+            / "contamination_anchors.csv")
+    with path.open(newline="", encoding="utf-8") as handle:
+        rows = [row for row in csv.DictReader(handle)
+                if row["lat"] == "-37.7925" and row["lng"] == "144.9855"]
+
+    assert {row["id"] for row in rows} == {
+        "vic_fitzroy_audit_evidence", "vic_fitzroy_audit_headline",
+    }
+    assert {row["expected"] for row in rows} == {
+        "environmental_audit_entries_count>=1",
+        "label Mapped Context / Review",
+    }
+    payload = {
+        "score": 95,
+        "label": "Mapped Context - Review",
+        "environmental_audit_entries_count": 2,
+    }
+    assert all(probes.evaluate(row["expected"], payload)[0] == "PASS"
+               for row in rows)
+    assert probes.evaluate(rows[0]["expected"], {
+        **payload, "environmental_audit_entries_count": 0,
+    })[0] == "FAIL"

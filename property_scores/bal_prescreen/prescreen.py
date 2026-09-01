@@ -2,8 +2,8 @@
 
 Pipeline (all inputs automated from a coordinate):
   1. State + FDI region        -> tables.resolve_fdi  (AS 3959 Table 2.1)
-  2. Classify vegetation       -> ESA WorldCover 10m nearest classified patch
-  3. Distance to vegetation    -> geodesic distance to nearest >=1 ha woody patch
+  2. Classify vegetation       -> ESA WorldCover 10m qualifying patches, all classes
+  3. Distance to vegetation    -> geodesic distance per class to its nearest >=1 ha patch
   4. Effective slope + sign    -> local DEM/5m-LiDAR slope + site-vs-veg elevation
   5. Look up indicative BAL    -> tables.lookup_bal, worst across veg types
   6. Confidence band           -> vary formation (Forest<->Woodland) and slope
@@ -84,12 +84,22 @@ def _slope_band(slope_deg: float) -> str:
 
 
 def _nearest_vegetation(lat: float, lng: float) -> dict | None:
-    """Nearest classified-vegetation patch to the point, via ESA WorldCover 10m.
+    """Classified-vegetation patches around the point, via ESA WorldCover 10m.
 
-    Returns {distance_m, wc_class, in_vegetation, patch_pixels, veg_lat, veg_lng}
-    for the nearest woody/shrub (or grass) pixel that belongs to a >=1 ha patch,
-    or None if WorldCover is unavailable. distance_m is None when no qualifying
-    classified vegetation exists within the search window.
+    Returns {distance_m, wc_class, in_vegetation, patch_pixels, veg_lat, veg_lng,
+    pixels} or None if WorldCover is unavailable. distance_m/wc_class describe
+    the nearest qualifying vegetation pixel; pixels lists EVERY qualifying
+    vegetation pixel within the 100 m window so the caller can evaluate each
+    one (class, distance and slope direction) and keep the worst BAL, instead
+    of letting the nearest pixel shadow a worse one elsewhere. distance_m is
+    None when no qualifying classified vegetation exists within the window.
+
+    Patch qualification (>=1 ha) uses the connected area of ADJACENT CLASSIFIED
+    VEGETATION of any type: adjacent tree + shrub areas of 0.6 ha each form one
+    1.2 ha fuel patch, per the intent of the AS 3959 minimum-area exclusion.
+    Each pixel still carries its own class for the risk lookup. The area basis
+    is the visible portion inside the analysis window; a patch truncated by the
+    window edge is assessed on its visible connected pixels only.
     """
     from property_scores.bushfire.score import landcover_grid
 
@@ -122,13 +132,15 @@ def _nearest_vegetation(lat: float, lng: float) -> dict | None:
             if v in counts:
                 counts[v] += 1
 
+    # Connected components over ALL classified vegetation, not per class:
+    # adjacent mixed-type vegetation (e.g. tree next to shrub) burns as one
+    # fuel patch, so the >=1 ha qualification uses the combined area.
     component_size: dict[tuple[int, int], int] = {}
     visited: set[tuple[int, int]] = set()
     for start_r in range(nrows):
         for start_c in range(ncols):
             start = (start_r, start_c)
-            veg_class = classes[start_r][start_c]
-            if veg_class not in _CLASSIFIED_WC or start in visited:
+            if classes[start_r][start_c] not in _CLASSIFIED_WC or start in visited:
                 continue
             stack = [start]
             visited.add(start)
@@ -144,7 +156,7 @@ def _nearest_vegetation(lat: float, lng: float) -> dict | None:
                         neighbour = (nr, nc)
                         if not (0 <= nr < nrows and 0 <= nc < ncols):
                             continue
-                        if neighbour in visited or classes[nr][nc] != veg_class:
+                        if neighbour in visited or classes[nr][nc] not in _CLASSIFIED_WC:
                             continue
                         visited.add(neighbour)
                         stack.append(neighbour)
@@ -152,8 +164,13 @@ def _nearest_vegetation(lat: float, lng: float) -> dict | None:
             for cell in component:
                 component_size[cell] = size
 
-    nearest = None  # (distance, wc_class, plat, plng)
+    nearest = None  # (distance, wc_class, plat, plng, patch_size)
+    # every qualifying vegetation pixel within the 100 m assessment window
+    pixels: list[dict] = []
     center_r, center_c = nrows // 2, ncols // 2
+    center_qualifies = (
+        classes[center_r][center_c] in _CLASSIFIED_WC
+        and component_size.get((center_r, center_c), 0) >= min_patch_pixels)
     for r in range(nrows):
         plat = north - (r + 0.5) * dlat
         row = classes[r]
@@ -165,11 +182,17 @@ def _nearest_vegetation(lat: float, lng: float) -> dict | None:
             if patch_size < min_patch_pixels:
                 continue
             plng = west + (c + 0.5) * dlng
-            d = _haversine_m(lat, lng, plat, plng)
+            # the site itself sitting in a qualifying patch is distance 0
+            if r == center_r and c == center_c and center_qualifies:
+                d = 0.0
+            else:
+                d = _haversine_m(lat, lng, plat, plng)
             if d > MAX_VEG_M:
                 continue
             if nearest is None or d < nearest[0]:
                 nearest = (d, v, plat, plng, patch_size)
+            pixels.append({"wc_class": v, "distance_m": round(d, 1),
+                           "veg_lat": plat, "veg_lng": plng})
 
     in_veg = classes[center_r][center_c] in _CLASSIFIED_WC
     if nearest is None:
@@ -178,55 +201,54 @@ def _nearest_vegetation(lat: float, lng: float) -> dict | None:
                 "pixel_area_m2": round(pixel_area_m2, 1),
                 "veg_lat": None, "veg_lng": None}
     d, v, plat, plng, patch_size = nearest
-    # if the site itself sits in a qualifying patch, effective distance is ~0
-    if in_veg and classes[center_r][center_c] == v:
-        d = 0.0
     return {"distance_m": round(d, 1), "wc_class": v, "in_vegetation": in_veg,
             "patch_pixels": counts, "nearest_patch_pixels": patch_size,
             "min_patch_pixels": min_patch_pixels,
             "pixel_area_m2": round(pixel_area_m2, 1),
-            "veg_lat": plat, "veg_lng": plng}
+            "veg_lat": plat, "veg_lng": plng,
+            "pixels": pixels}
 
 
-def _effective_slope(lat, lng, veg_lat, veg_lng, *, slope_deg=None) -> dict:
-    """Effective slope magnitude + direction (upslope/flat vs downslope).
-
-    Downslope (site above the vegetation, land falling away toward the veg) is the
-    more dangerous case in AS 3959. We approximate direction from the elevation
-    difference between the site and the nearest-vegetation pixel, and magnitude
-    from the local terrain slope. Returns {band, deg, direction, basis, measured}.
+def _slope_magnitude(lat, lng, *, slope_deg=None) -> tuple[float | None, bool]:
+    """Local terrain slope magnitude in degrees, and whether it was measured.
 
     slope_deg may be injected by a caller that has already measured the local
     terrain slope (e.g. bushfire_score), to avoid a redundant DEM read.
     """
-    from property_scores.common import terrain
+    if slope_deg is not None:
+        return slope_deg, True
+    from property_scores.bushfire.score import _terrain_slope
+    slope = _terrain_slope(lat, lng)
+    if slope is None:
+        return None, False
+    return slope["mean_slope_deg"], True
 
-    if slope_deg is None:
-        from property_scores.bushfire.score import _terrain_slope
-        slope = _terrain_slope(lat, lng)
-        if slope is None:
-            return {"band": "flat", "deg": None, "direction": "unknown",
-                    "basis": "slope not measurable (outside DEM coverage), "
-                             "assumed flat (0 deg)", "measured": False}
-        mag = slope["mean_slope_deg"]
-    else:
-        mag = slope_deg
+
+def _pixel_slope(mag, measured, e_site, e_veg) -> dict:
+    """Effective slope for ONE vegetation pixel: magnitude + direction.
+
+    Downslope (site above the vegetation, land falling away toward the veg) is
+    the more dangerous case in AS 3959. Direction comes from the elevation
+    difference between the site and THIS pixel, so vegetation on opposite
+    sides of the site gets its own direction instead of inheriting the nearest
+    pixel's. Returns {band, deg, direction, basis, measured}.
+    """
+    if not measured:
+        return {"band": "flat", "deg": None, "direction": "unknown",
+                "basis": "slope not measurable (outside DEM coverage), "
+                         "assumed flat (0 deg)", "measured": False}
 
     direction = "flat/upslope"
     basis = f"terrain slope {mag} deg; direction not resolved -> flat/upslope (conservative-neutral)"
-    if veg_lat is not None:
-        e_site = terrain.elevation(lat, lng)
-        e_veg = terrain.elevation(veg_lat, veg_lng)
-        if e_site is not None and e_veg is not None:
-            drop = e_site - e_veg
-            if drop > 2:  # site meaningfully above the vegetation -> downslope
-                direction = "downslope"
-                basis = (f"site {round(e_site)} m is {round(drop)} m above nearest "
-                         f"vegetation {round(e_veg)} m -> downslope; slope {mag} deg")
-            else:
-                direction = "flat/upslope"
-                basis = (f"site {round(e_site)} m vs vegetation {round(e_veg)} m "
-                         f"(drop {round(drop)} m) -> flat/upslope; slope {mag} deg")
+    if e_site is not None and e_veg is not None:
+        drop = e_site - e_veg
+        if drop > 2:  # site meaningfully above the vegetation -> downslope
+            direction = "downslope"
+            basis = (f"site {round(e_site)} m is {round(drop)} m above the "
+                     f"vegetation at {round(e_veg)} m -> downslope; slope {mag} deg")
+        else:
+            basis = (f"site {round(e_site)} m vs vegetation {round(e_veg)} m "
+                     f"(drop {round(drop)} m) -> flat/upslope; slope {mag} deg")
 
     if direction == "downslope":
         if mag > 20:
@@ -322,48 +344,99 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
         }
 
     # --- Classified vegetation within 100 m --------------------------------
-    dist = veg["distance_m"]
-    wc = veg["wc_class"]
-    point_class, light_class, veg_label = VEG_MAP[wc]
+    # Worst case across EVERY qualifying vegetation pixel: class, distance and
+    # slope direction are all evaluated per pixel and the severest outcome
+    # wins. Reducing to the nearest pixel per class let a nearer upslope
+    # forest shadow a farther downslope forest whose Method 1 band is worse,
+    # just as reducing to the nearest patch let grass shadow forest.
+    pixels = veg.get("pixels") or [
+        {"wc_class": veg["wc_class"], "distance_m": veg["distance_m"],
+         "veg_lat": veg["veg_lat"], "veg_lng": veg["veg_lng"]}]
 
-    slope = _effective_slope(lat, lng, veg["veg_lat"], veg["veg_lng"], slope_deg=slope_deg)
-
-    # GA's Method 1 implementation excludes grassland at >=50 m for every FDI
-    # except 50. It still assesses closer grassland; the former implementation
-    # incorrectly discarded all grassland in those jurisdictions.
-    grass_excluded = wc == WC_GRASS and _grassland_excluded(fdi_used, dist)
-    if grass_excluded:
-        assumptions.append(
-            f"Nearest vegetation is grassland at {dist} m; the GA Method 1 "
-            f"implementation excludes grassland from 50 m for FDI {fdi_used}.")
-
-    def _bal_for(band, veg_class):
+    def _bal_for(band, veg_class, distance_m):
         if band == ">20":
             return "BAL-FZ"
-        return tables.lookup_bal(fdi_table, band, veg_class, dist)
+        return tables.lookup_bal(fdi_table, band, veg_class, distance_m)
 
-    if grass_excluded:
-        point_bal = "BAL-LOW"
-    else:
-        point_bal = _bal_for(slope["band"], point_class)
+    # a steeper downslope is the plausible-worse case for slope uncertainty
+    steeper = {"flat": "d5", "d5": "d10", "d10": "d15", "d15": "d20", "d20": ">20"}
 
-    # Confidence band: vary formation (point vs lighter class) and slope
-    # (measured band vs flat as the mild end; one-steeper as the harsh end).
-    band_candidates = []
-    if grass_excluded:
-        band_candidates = ["BAL-LOW"]
-    else:
-        harsh_band = slope["band"]
-        # a steeper downslope is the plausible-worse case for slope uncertainty
-        steeper = {"flat": "d5", "d5": "d10", "d10": "d15", "d15": "d20", "d20": ">20"}
-        harsh_band = steeper.get(slope["band"], slope["band"]) if slope["measured"] else slope["band"]
-        band_candidates = [
-            _bal_for("flat", light_class),      # mild: lighter formation, flat
-            point_bal,                          # point estimate
-            _bal_for(harsh_band, point_class),  # harsh: heavier formation, steeper
-        ]
-    lo = min(band_candidates, key=_bal_rank)
-    hi = max(band_candidates, key=_bal_rank)
+    mag, measured = _slope_magnitude(lat, lng, slope_deg=slope_deg)
+    e_site = None
+    if measured and any(p["veg_lat"] is not None for p in pixels):
+        e_site = terrain.elevation(lat, lng)
+
+    def _cand_key(cand):
+        # worst point BAL wins; break ties by the harsher band, then proximity
+        return (_bal_rank(cand["point_bal"]),
+                _bal_rank(max(cand["band_candidates"], key=_bal_rank)),
+                -cand["dist"])
+
+    worst = None      # severest candidate overall
+    by_class = {}     # severest candidate per vegetation class (for reporting)
+    hi = "BAL-LOW"    # harsh end of the confidence band across ALL candidates
+    for pix in pixels:
+        c_dist = pix["distance_m"]
+        wc_cls = pix["wc_class"]
+        c_point, c_light, c_label = VEG_MAP[wc_cls]
+        e_veg = None
+        if e_site is not None and pix["veg_lat"] is not None:
+            e_veg = terrain.elevation(pix["veg_lat"], pix["veg_lng"])
+        c_slope = _pixel_slope(mag, measured, e_site, e_veg)
+        # GA's Method 1 implementation excludes grassland at >=50 m for every
+        # FDI except 50. It still assesses closer grassland; the former
+        # implementation incorrectly discarded all grassland in those
+        # jurisdictions.
+        c_grass_excluded = wc_cls == WC_GRASS and _grassland_excluded(fdi_used, c_dist)
+        if c_grass_excluded:
+            c_point_bal = "BAL-LOW"
+            # Confidence band: vary formation (point vs lighter class) and
+            # slope (flat as the mild end; one-steeper as the harsh end).
+            c_band_candidates = ["BAL-LOW"]
+        else:
+            c_point_bal = _bal_for(c_slope["band"], c_point, c_dist)
+            harsh_band = (steeper.get(c_slope["band"], c_slope["band"])
+                          if c_slope["measured"] else c_slope["band"])
+            c_band_candidates = [
+                _bal_for("flat", c_light, c_dist),        # mild: lighter formation, flat
+                c_point_bal,                              # point estimate
+                _bal_for(harsh_band, c_point, c_dist),    # harsh: heavier formation, steeper
+            ]
+        cand = {
+            "wc": wc_cls, "dist": c_dist, "point_class": c_point,
+            "light_class": c_light, "label": c_label, "slope": c_slope,
+            "grass_excluded": c_grass_excluded, "point_bal": c_point_bal,
+            "band_candidates": c_band_candidates,
+        }
+        if worst is None or _cand_key(cand) > _cand_key(worst):
+            worst = cand
+        prev = by_class.get(wc_cls)
+        if prev is None or _cand_key(cand) > _cand_key(prev):
+            by_class[wc_cls] = cand
+        c_hi = max(c_band_candidates, key=_bal_rank)
+        if _bal_rank(c_hi) > _bal_rank(hi):
+            hi = c_hi
+
+    dist = worst["dist"]
+    point_class, light_class, veg_label = (
+        worst["point_class"], worst["light_class"], worst["label"])
+    slope = worst["slope"]
+    point_bal = worst["point_bal"]
+    lo = min(worst["band_candidates"], key=_bal_rank)
+
+    class_summaries = sorted(by_class.values(), key=lambda c: c["dist"])
+    for cand in class_summaries:
+        if cand["grass_excluded"]:
+            assumptions.append(
+                f"Grassland at {cand['dist']} m; the GA Method 1 implementation "
+                f"excludes grassland from 50 m for FDI {fdi_used}.")
+    if len(class_summaries) > 1:
+        assumptions.append(
+            "Multiple vegetation classes qualify within 100 m; the screen keeps "
+            "the worst BAL across all of them ("
+            + ", ".join(f"{c['point_class']} at {c['dist']} m -> {c['point_bal']}"
+                        for c in class_summaries)
+            + ").")
 
     # Confidence: driven by formation ambiguity + slope measurement + overlay agreement
     conf = "moderate"
@@ -390,6 +463,10 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
                 "in_vegetation": veg["in_vegetation"],
                 "patch_pixels": veg["patch_pixels"],
                 "nearest_patch_pixels": veg.get("nearest_patch_pixels"),
+                "assessed_classes": [
+                    {"as3959_class": c["point_class"], "label": c["label"],
+                     "distance_m": c["dist"], "bal": c["point_bal"]}
+                    for c in class_summaries],
                 "min_patch_pixels": veg.get("min_patch_pixels"),
                 "pixel_area_m2": veg.get("pixel_area_m2"),
                 "formation_uncertainty": (

@@ -729,14 +729,8 @@ def water_nearest_point(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
 
 
 def pois_near_detailed(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
-                       radius_m: int = 1500, *,
-                       with_address: bool = False) -> list[tuple]:
-    """Like pois_near but returns (category, dist_m, lng, lat, name).
-
-    with_address=True appends (locality, postcode) from the POI's first
-    Overture address (None when the record carries no address), so a consumer
-    can check a suburb word in the name against where the record says it is.
-    """
+                       radius_m: int = 1500) -> list[tuple]:
+    """Like pois_near but returns (category, dist_m, lng, lat, name)."""
     pois_path = data_path(POIS_FILE)
     if not pois_path.exists():
         return []
@@ -744,13 +738,9 @@ def pois_near_detailed(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
     import math
     m_per_deg = 111_320 * math.cos(math.radians(lat))
     deg_thresh = radius_m / m_per_deg
-    addr_outer = ", locality, postcode" if with_address else ""
-    addr_inner = (",\n                       addresses[1].locality AS locality,"
-                  "\n                       addresses[1].postcode AS postcode"
-                  if with_address else "")
     sql = f"""
-        SELECT category, dist_m, poi_lng, poi_lat, name{addr_outer} FROM (
-            SELECT category, poi_lng, poi_lat, name{addr_outer},
+        SELECT category, dist_m, poi_lng, poi_lat, name FROM (
+            SELECT category, poi_lng, poi_lat, name,
                    {_metres_from_closest_point(lng, lat, m_per_deg)} AS dist_m
             FROM (
                 SELECT CASE
@@ -763,7 +753,7 @@ def pois_near_detailed(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
                        END AS category,
                        ST_X(geometry) AS poi_lng,
                        ST_Y(geometry) AS poi_lat,
-                       names.primary AS name{addr_inner},
+                       names.primary AS name,
                        {_closest_point_sql('geometry', lng, lat)} AS cp
                 FROM read_parquet('{pois_path}')
                 WHERE bbox.xmin BETWEEN {lng - delta} AND {lng + delta}

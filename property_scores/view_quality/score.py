@@ -24,6 +24,7 @@ from property_scores.common.config import data_path
 from property_scores.common.overture import (
     POIS_FILE,
     WATER_FILE,
+    water_nearest_point,
     buildings_near,
     get_db,
     pois_near,
@@ -70,6 +71,25 @@ _HORIZON_DIRECTIONS = (
     ("N", 0.0), ("NE", 45.0), ("E", 90.0), ("SE", 135.0),
     ("S", 180.0), ("SW", 225.0), ("W", 270.0), ("NW", 315.0),
 )
+# A terrain horizon below this elevation angle counts as an open direction.
+HORIZON_OPEN_DEG = 3.0
+COASTAL_FLOOR_SCORE = 68
+
+
+def _bearing_deg(lat: float, lng: float, to_lat: float, to_lng: float) -> float:
+    """Initial great-circle bearing from (lat, lng) to (to_lat, to_lng), 0-360."""
+    p1, p2 = math.radians(lat), math.radians(to_lat)
+    dl = math.radians(to_lng - lng)
+    y = math.sin(dl) * math.cos(p2)
+    x = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dl)
+    return (math.degrees(math.atan2(y, x)) + 360.0) % 360.0
+
+
+def _seaward_sectors(bearing_deg: float) -> list[str]:
+    """The compass sector facing the nearest ocean point and its two neighbours."""
+    idx = int(round(bearing_deg / 45.0)) % len(_HORIZON_DIRECTIONS)
+    n = len(_HORIZON_DIRECTIONS)
+    return [_HORIZON_DIRECTIONS[(idx + k) % n][0] for k in (-1, 0, 1)]
 
 
 def _offset_point(lat: float, lng: float, distance_m: float,
@@ -89,26 +109,49 @@ def _data_file_available(filename: str) -> bool:
     return data_path(filename).exists()
 
 
-def _coastal_escarpment_floor(factors: dict[str, dict]) -> int | None:
-    """Great-view floor for an elevated, open site immediately above ocean.
+def _coastal_escarpment_basis(factors: dict[str, dict]) -> dict | None:
+    """Why an elevated site immediately above ocean earns the openness floor.
 
     The additive average treats all-direction building/green density as if it
     could cancel a strong one-direction coastal outlook.  A site is only in
     this class when three independent signals agree: ocean within 200 m,
-    >=30 m relative terrain advantage, and at least half the horizon open.
-    Flat beaches, dense waterfront streets without an open horizon, and high
-    inland sites do not qualify.  The floor says *potential* only; the API's
-    line-of-sight caveat remains unchanged.
+    >=30 m relative terrain advantage, and the seaward arc open: the compass
+    sector facing the nearest ocean point plus its two neighbours all have a
+    terrain horizon below HORIZON_OPEN_DEG.  Counting open sectors around the
+    whole compass (the 2026-08-29 rule, >=4 of 8) flipped on a 0.5 degree
+    margin when the DEM changed from 30 m to 5 m: the inland half of the
+    horizon has nothing to do with whether the sea is in front of the site.
+    Flat beaches (no terrain advantage), high inland sites (no ocean) and
+    coastal sites with a ridge between them and the water do not qualify.
+    The floor says *potential* only; the API's line-of-sight caveat remains.
+
+    Returns the basis dict, or None when the site does not qualify.
     """
     ocean = factors.get("ocean_proximity") or {}
     elevation = factors.get("elevation_advantage") or {}
     horizon = factors.get("horizon_openness") or {}
-    if (ocean.get("distance_m") is not None
-            and ocean["distance_m"] <= 200
-            and elevation.get("advantage_m", 0) >= 30
-            and horizon.get("open_directions", 0) >= 4):
-        return 68
-    return None
+    distance = ocean.get("distance_m")
+    bearing = ocean.get("bearing_deg")
+    if distance is None or distance > 200 or bearing is None:
+        return None
+    if elevation.get("advantage_m", 0) < 30:
+        return None
+    angles = horizon.get("horizon_angles") or {}
+    sectors = _seaward_sectors(bearing)
+    seaward = {s: angles.get(s) for s in sectors}
+    if any(a is None for a in seaward.values()):
+        return None
+    if not all(a < HORIZON_OPEN_DEG for a in seaward.values()):
+        return None
+    return {"ocean_bearing_deg": round(bearing, 1),
+            "seaward_sectors": sectors,
+            "seaward_horizon_deg": seaward,
+            "open_below_deg": HORIZON_OPEN_DEG}
+
+
+def _coastal_escarpment_floor(factors: dict[str, dict]) -> int | None:
+    """COASTAL_FLOOR_SCORE when _coastal_escarpment_basis qualifies, else None."""
+    return COASTAL_FLOOR_SCORE if _coastal_escarpment_basis(factors) else None
 
 
 # ---------------------------------------------------------------------------
@@ -119,21 +162,18 @@ def _ocean_proximity_factor(db, lat: float, lng: float) -> dict | None:
     """Score based on distance to nearest ocean/coastline."""
     if not _data_file_available(WATER_FILE):
         return None
-    rows = water_near(db, lat, lng, radius_m=10_000, strict=True)
+    nearest = water_nearest_point(db, lat, lng, radius_m=10_000,
+                                  classes=OCEAN_CLASSES)
 
-    ocean_dist = None
-    for cls, _sub, dist_m in rows:
-        if cls and cls.lower() in OCEAN_CLASSES:
-            ocean_dist = dist_m
-            break
-
-    if ocean_dist is None:
+    if nearest is None:
         return {
             "value": 0.0,
             "distance_m": None,
             "searched_radius_m": 10_000,
             "coverage_status": "checked_clear",
         }
+    _cls, ocean_dist, point_lng, point_lat = nearest
+    bearing = _bearing_deg(lat, lng, point_lat, point_lng)
 
     if ocean_dist < 200:
         decay = 1.0
@@ -149,6 +189,8 @@ def _ocean_proximity_factor(db, lat: float, lng: float) -> dict | None:
         decay = max(0.0, 0.15 * (1 - (ocean_dist - 5000) / 5000))
 
     return {"value": decay, "distance_m": round(ocean_dist),
+            "bearing_deg": round(bearing, 1),
+            "nearest_point": {"lng": round(point_lng, 6), "lat": round(point_lat, 6)},
             "searched_radius_m": 10_000, "coverage_status": "data_returned"}
 
 
@@ -431,7 +473,7 @@ def _horizon_openness_factor(lat: float, lng: float) -> dict | None:
             partial_directions.append(label)
         valid_directions += 1
         max_angles[label] = round(max_angle, 1)
-        if max_angle < 3:
+        if max_angle < HORIZON_OPEN_DEG:
             open_dirs += 1
         if max_angle < -2:
             downhill_dirs += 1
@@ -657,6 +699,7 @@ def view_quality_score(lat: float, lng: float) -> dict:
     if score_floor is not None:
         result["score_floor"] = score_floor
         result["score_floor_reason"] = "elevated_open_coastal_escarpment"
+        result["score_floor_basis"] = _coastal_escarpment_basis(factor_results)
     if degraded:
         unavailable = ", ".join(missing + partial)
         result["caveat"] = (

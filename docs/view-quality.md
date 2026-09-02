@@ -57,3 +57,24 @@ A true Viewshed or View Intelligence product requires at least observer height,
 orientation, 3D terrain plus building occlusion, visible-target classification
 and labelled real-property validation. It is not a rename of this score and
 should be built only after a named buyer demonstrates a repeated sightline job.
+
+## Coastal escarpment floor
+
+An elevated site immediately above the ocean can still average down to a
+mid score because building and green density are counted in every direction.
+When three independent signals agree the score is floored at 68 (High) and
+the payload says so (`score_floor`, `score_floor_reason`, `score_floor_basis`):
+
+- ocean within 200 m (`factors.ocean_proximity.distance_m`), with the
+  bearing to the nearest ocean point (`bearing_deg`, `nearest_point`);
+- at least 30 m relative terrain advantage;
+- the seaward arc open: the compass sector facing that bearing and its two
+  neighbours all have a terrain horizon below 3 degrees.
+
+The gate is the seaward arc rather than "4 of 8 sectors open" because the
+inland half of the horizon says nothing about the sea in front of the site;
+the 30 m to 5 m DEM change (2026-09-02) moved one inland sector by half a
+degree and silently removed the floor at Dover Heights. Flat beaches (no
+terrain advantage), high inland sites (no ocean) and coastal sites with a
+ridge between them and the water do not qualify. The floor describes
+potential only; the line-of-sight caveat is unchanged.

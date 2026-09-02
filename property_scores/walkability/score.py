@@ -170,7 +170,17 @@ _FALSE_POSITIVES = {
                   "physiotherapy", "chiropractic", "osteopath", "podiatry"],
     "hospital": ["medical centre", "medical clinic", "health centre", "imaging"],
     "pharmacy": ["nursing", "midwifery", "association", "federation"],
-    "childcare": ["doncaster", "ringwood", "berwick", "frankston"],  # wrong suburb in POI name = bad coords
+}
+
+# Childcare records whose name carries one of these suburbs used to be dropped
+# outright, because a few Overture rows named after a suburb sat at the wrong
+# coordinates.  That blanket rule also killed every genuine "X Kindergarten" in
+# X itself (the truth audit counted 37 suburbs; Berwick lost 2 of its 5 centres
+# within 1.5 km).  Now the name is checked against the record's own address: a
+# suburb-named centre is kept when its locality or postcode agrees with the
+# name and dropped only when the address contradicts it or is absent.
+_SUBURB_NAMED_CHILDCARE = {
+    "berwick": "3806", "doncaster": "3108", "ringwood": "3134", "frankston": "3199",
 }
 
 MAX_WALK_DISTANCE_M = 1500.0
@@ -185,8 +195,27 @@ _UNCAPPED_OPTION_SCENARIOS = frozenset({"primary_school", "secondary_school"})
 _DEFAULT_OPTIONS_LIMIT = 3
 
 
-def _match_category(poi_category: str | None, poi_name: str | None = None) -> str | None:
-    """Map exact Overture category to our scenario. Returns scenario key."""
+def _suburb_named_childcare_ok(name_lower: str, locality: str | None,
+                               postcode: str | None) -> bool:
+    """False only when a suburb word in the name is contradicted by the address."""
+    for word, expected_postcode in _SUBURB_NAMED_CHILDCARE.items():
+        if word not in name_lower:
+            continue
+        if word in (locality or "").lower():
+            return True
+        if str(postcode or "").strip() == expected_postcode:
+            return True
+        return False
+    return True
+
+
+def _match_category(poi_category: str | None, poi_name: str | None = None,
+                    locality: str | None = None,
+                    postcode: str | None = None) -> str | None:
+    """Map exact Overture category to our scenario. Returns scenario key.
+
+    locality/postcode are the POI's own Overture address, used only to keep or
+    drop suburb-named childcare records (see _SUBURB_NAMED_CHILDCARE)."""
     if not poi_category:
         return None
     cat_lower = poi_category.lower().replace(" ", "_")
@@ -211,6 +240,9 @@ def _match_category(poi_category: str | None, poi_name: str | None = None) -> st
             return None
     if name_lower and scenario in _FALSE_POSITIVES:
         if any(fp in name_lower for fp in _FALSE_POSITIVES[scenario]):
+            return None
+    if scenario == "childcare" and name_lower:
+        if not _suburb_named_childcare_ok(name_lower, locality, postcode):
             return None
     return scenario
 
@@ -296,7 +328,7 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
         pois = pois_near(db, lat, lng, radius_m, source=source)
         detailed = False
     else:
-        pois_full = pois_near_detailed(db, lat, lng, radius_m)
+        pois_full = pois_near_detailed(db, lat, lng, radius_m, with_address=True)
         # GTFS bus/tram stops: Overture places have essentially no AU bus
         # stops (zero within 1500 m of Turramurra's bus interchange), so the
         # tram_bus scenario reads official GTFS stops. Same 5-tuple shape,
@@ -352,8 +384,9 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
     cat_counts: dict[str, int] = {}
     items = pois_full if detailed else [(c, d, None, None, None) for c, d in pois]
     seen_names: dict[str, set] = {}
-    for poi_cat, dist_m, plng, plat, pname in items:
-        matched = _match_category(poi_cat, pname)
+    for poi_cat, dist_m, plng, plat, pname, *address in items:
+        # Overture POIs carry (locality, postcode); trail/rail rows do not.
+        matched = _match_category(poi_cat, pname, *address[:2])
         if matched:
             cat_counts[matched] = cat_counts.get(matched, 0) + 1
             if matched not in nearest or dist_m < nearest[matched]:

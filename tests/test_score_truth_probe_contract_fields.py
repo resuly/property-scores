@@ -102,3 +102,18 @@ def test_fitzroy_anchor_requires_audit_evidence_and_non_reassuring_headline():
     assert probes.evaluate(rows[0]["expected"], {
         **payload, "environmental_audit_entries_count": 0,
     })[0] == "FAIL"
+
+
+def test_nested_walkability_count_contract_field():
+    """childcare_count>=5 must read category_scores.childcare.count.
+
+    From 2026-08-30 to 2026-09-03 the numeric branch read only the top level,
+    reported count=None and turned a data gap into an unreadable FAIL.
+    """
+    payload = {"category_scores": {"childcare": {"distance_m": 315, "count": 5}}}
+    assert probes.evaluate("childcare_count>=5", payload) == (
+        "PASS", "childcare_count=5 expected >=5")
+    status, note = probes.evaluate("childcare_count>=6", payload)
+    assert status == "FAIL" and "childcare_count=5" in note
+    status, note = probes.evaluate("childcare_count>=1", {"category_scores": {}})
+    assert status == "FAIL" and "None" in note

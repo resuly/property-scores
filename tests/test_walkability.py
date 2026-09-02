@@ -203,3 +203,22 @@ def test_road_query_failure_is_conservative_and_disclosed(monkeypatch):
     assert result["category_scores"]["supermarket"]["barrier"] is True
     assert result["road_barrier_check"] == "unavailable_conservative"
     assert "conservatively" in result["disclaimer"]
+
+
+def test_suburb_named_childcare_is_kept_when_its_address_agrees():
+    """Berwick 2026-09-03: the name-only rule dropped real Berwick centres."""
+    assert _match_category("child_care_and_day_care", "Only About Children Berwick",
+                           "Berwick", "3806") == "childcare"
+    assert _match_category("preschool", "Berwick Kindergarten",
+                           "Melbourne", "3806") == "childcare"
+    assert _match_category("preschool", "Berwick Kindergarten", "BERWICK", None) == "childcare"
+
+
+def test_suburb_named_childcare_is_dropped_when_its_address_contradicts_or_is_absent():
+    assert _match_category("child_care_and_day_care", "Goodstart Berwick",
+                           "Cranbourne", "3977") is None
+    assert _match_category("child_care_and_day_care", "Goodstart Berwick") is None
+    assert _match_category("child_care_and_day_care", "Frankston Kids", "Melbourne", "3000") is None
+    # No suburb word in the name: address is irrelevant.
+    assert _match_category("child_care_and_day_care", "Journey Early Learning",
+                           "Cranbourne", "3977") == "childcare"

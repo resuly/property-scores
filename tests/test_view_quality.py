@@ -80,6 +80,7 @@ def test_direction_offsets_are_equal_ground_distance_at_melbourne(bearing):
 def test_checked_clear_water_is_zero_not_a_missing_factor(monkeypatch):
     monkeypatch.setattr(vs, "_data_file_available", lambda _name: True)
     monkeypatch.setattr(vs, "water_near", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(vs, "water_nearest_point", lambda *_args, **_kwargs: None)
 
     ocean = vs._ocean_proximity_factor(object(), -37.81, 144.96)
     inland = vs._inland_water_factor(object(), -37.81, 144.96)
@@ -179,3 +180,16 @@ def test_all_missing_landscape_factors_keep_the_contract_shape(monkeypatch):
     assert out["partial_factors"] == []
     assert out["factor_weight_completeness"] == 0.0
     assert out["degraded"] is True
+
+
+def test_ocean_factor_reports_bearing_to_the_nearest_ocean_point(monkeypatch):
+    """The coastal floor needs to know which way the sea is, not just how far."""
+    monkeypatch.setattr(vs, "_data_file_available", lambda _name: True)
+    monkeypatch.setattr(
+        vs, "water_nearest_point",
+        lambda _db, lat, lng, radius_m, classes: ("ocean", 96.0, lng + 0.001, lat))
+    ocean = vs._ocean_proximity_factor(object(), -33.8651, 151.2830)
+    assert ocean["distance_m"] == 96 and ocean["value"] == 1.0
+    assert abs(ocean["bearing_deg"] - 90.0) < 0.5
+    assert ocean["nearest_point"] == {"lng": 151.284, "lat": -33.8651}
+    assert ocean["coverage_status"] == "data_returned"

@@ -3,7 +3,7 @@ lat,lng,expected,why,id,reminder_days,blocker
 -31.91002,116.02581,epa_status=not_integrated,"Independent coverage contract for report 6217. It must remain not_integrated while rights are pending and turn red when integration status changes.",wa_dwer_6217_coverage_contract,,
 -31.95651,115.78446,flag_high_risk,"Known WA DWER remediation-required polygon (report 8). The risk truth stays FAIL while commercial derived-score permission is pending; do not treat the rights gate's score 95 as clean.",,30,"DWER commercial derived-score permission pending; trigger = written permission or a cleared equivalent source"
 -31.95651,115.78446,epa_status=not_integrated,"Independent coverage contract for report 8. It must remain not_integrated while rights are pending and turn red when integration status changes.",wa_dwer_8_coverage_contract,,
--31.947251,115.878342,epa_status=ok,"WA DWER 'Remediated for restricted use' (https://cssbsr.dwer.wa.gov.au/2992, East Perth). Register integration must surface the classification; this stays red while rights block the source."
+-31.947251,115.878342,epa_status=ok,"WA DWER 'Remediated for restricted use' (https://cssbsr.dwer.wa.gov.au/2992, East Perth). Register integration must surface the classification; this stays red while rights block the source.",,30,"WA DWER register rights pending (followup dwer-team-licence-replies-watch); trigger = written permission or a cleared equivalent source"
 -36.0805,146.9158,epa_sites_count>=10,"Albury NSW CBD. NSW CLR publishes at least 10 notified sites within 2km, including Former Gasworks."
 -36.084169,146.91377,score<=14,"Exact register point: 'Former Gasworks and surrounding commercial land', Albury, NSW EPA CLR."
 -35.1085,147.3598,epa_sites_count>=11,"Wagga Wagga CBD. NSW CLR publishes at least 11 notified sites within 2km."
@@ -13,7 +13,7 @@ lat,lng,expected,why,id,reminder_days,blocker
 -35.3549,149.2316,epa_sites_count>=8,"Queanbeyan NSW, not ACT. NSW CLR publishes at least 8 notified sites within 2km."
 -35.0042,138.5705,score<=55,"Inside SA EPA Tonsley Groundwater Prohibition Area polygon."
 -35.0080,138.5730,score<=55,"Also within Tonsley GPA footprint."
--27.4495,153.0435,score<=55,"Newstead Gasworks Brisbane is on the QLD EMR. This stays red until an authorised QLD register source or equivalent catches it."
+-27.4495,153.0435,score<=55,"Newstead Gasworks Brisbane is on the QLD EMR. This stays red until an authorised QLD register source or equivalent catches it.",,30,"QLD EMR/CLR has no authorised bulk source; DETSI access request sent 2026-09-02 (followup contamination-source-access-reply-watch); trigger = reply or an authorised register source"
 -27.5850,153.0900,epa_status=not_integrated,"Eight Mile Plains QLD residential control must state that the QLD register was not checked."
 -33.963353,151.217106,score<=14,"Exact register point: Caltex Terminal Botany, NSW EPA CLR."
 -33.7620,151.1580,label Mapped Context / Review,"Killara NSW has nearby register evidence but no on-site finding; the headline must request review rather than say Clean."

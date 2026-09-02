@@ -13,6 +13,11 @@ KNOWN POSITIVE. This runner closes that class:
    live score API per domain and evaluates the machine-parseable expectations
    (score<N, label X, foo<=Nm, *_mapped / official_* flags). Unparseable rows
    are listed as MANUAL, never silently dropped.
+   Rows whose CSV `blocker` column names an external blocker (a licence or a
+   source that does not exist yet) are reported as BLOCKED when red: still a
+   true gap and still in the state file with their `reminder_days` cadence,
+   but never a "new failure" alert and never exit 1 (2026-09-03: eight of
+   nine reds were such rows and every alert re-listed them).
 3. Source probes: direct, read-only checks that share the production adapter
    contract. VIC Environmental Audit checks cover WFS shape, schema, publisher
    counts, extraction freshness/skew and known positive/negative locations.
@@ -116,6 +121,20 @@ def _get(url: str, timeout: int = 120, headers: dict | None = None,
     return None
 
 
+def _category_field(payload: dict, field: str):
+    """Resolve `<category>_<suffix>` against walkability category_scores.
+
+    `supermarket_barrier` -> category_scores.supermarket.barrier, so a nested
+    contract field is read where it lives instead of being reported missing.
+    """
+    for suffix in ("water_barrier", "distance_m", "barrier", "count", "decay"):
+        marker = "_" + suffix
+        if field.endswith(marker):
+            category = field[:-len(marker)]
+            return ((payload.get("category_scores") or {}).get(category) or {}).get(suffix)
+    return None
+
+
 def _flatten(d: dict) -> dict:
     """The noise endpoint nests the payload under 'score' when detail mode."""
     if isinstance(d.get("score"), dict):
@@ -149,12 +168,7 @@ def evaluate(expected: str, payload: dict) -> tuple[str, str]:
         # status fields such as epa_status are top-level.  Resolve both rather
         # than treating `supermarket_barrier=false` as a missing top-level key.
         if field not in payload:
-            for suffix in ("water_barrier", "distance_m", "barrier", "count", "decay"):
-                marker = "_" + suffix
-                if field.endswith(marker):
-                    category = field[:-len(marker)]
-                    got = ((payload.get("category_scores") or {}).get(category) or {}).get(suffix)
-                    break
+            got = _category_field(payload, field)
         if want.lower() in ("true", "false"):
             ok = isinstance(got, bool) and got is (want.lower() == "true")
         else:
@@ -178,6 +192,11 @@ def evaluate(expected: str, payload: dict) -> tuple[str, str]:
     if m:
         field, op, raw_n = m.group(1), m.group(2), m.group(3)
         got = payload.get(field)
+        if got is None:
+            # `childcare_count>=5` read only the top level and came back None
+            # from 2026-08-30 until 2026-09-03: the nested walkability field
+            # resolver below lived in the exact-match branch only.
+            got = _category_field(payload, field)
         if not isinstance(got, (int, float)):
             return "FAIL", f"{field}={got!r} expected {op}{raw_n}"
         n = float(raw_n)
@@ -255,6 +274,13 @@ def run_anchors(base: str, only_domain: str | None) -> list[dict]:
                                 "blocker": row.get("blocker")})
                 continue
             status, note = evaluate(row["expected"], _flatten(payload))
+            if status == "FAIL" and (row.get("blocker") or "").strip():
+                # The anchor declares a named external blocker (a licence or
+                # a source that does not exist yet). It is still a true gap
+                # and still tracked, but it is not news: it stays out of the
+                # new-failure alert and the exit code and is reported on its
+                # own reminder cadence instead.
+                status = "BLOCKED"
             if status == "PASS" and row.get("ref_lat") and row.get("ref_lng"):
                 ref_url = (f"{base}/scores/{ep}?lat={row['ref_lat']}"
                            f"&lng={row['ref_lng']}")
@@ -442,12 +468,13 @@ def main():
         results += run_canaries() + run_anchors(args.base, args.domain)
 
     fails = [r for r in results if r["status"] == "FAIL"]
+    blocked = [r for r in results if r["status"] == "BLOCKED"]
     manual = [r for r in results if r["status"] == "MANUAL"]
     passes = [r for r in results if r["status"] == "PASS"]
     for r in results:
-        print(f"[{r['status']:6}] {r['domain']:14} {r['key']:28} {r['note']}")
-    print(f"\n{len(passes)} pass, {len(fails)} fail, {len(manual)} manual "
-          f"of {len(results)}")
+        print(f"[{r['status']:7}] {r['domain']:14} {r['key']:28} {r['note']}")
+    print(f"\n{len(passes)} pass, {len(fails)} fail, {len(blocked)} blocked "
+          f"(declared external blocker), {len(manual)} manual of {len(results)}")
 
     prev, since, reminded = set(), {}, {}
     if STATE_FILE.exists():
@@ -459,7 +486,8 @@ def main():
         except Exception:
             pass
     now = time.time()
-    now_failing = {f"{r['domain']}|{r['key']}" for r in fails}
+    now_failing = {f"{r['domain']}|{r['key']}" for r in fails + blocked}
+    blocked_keys = {f"{r['domain']}|{r['key']}" for r in blocked}
     # A --domain run probes one domain, so everything else is simply unknown
     # this run, not recovered. Overwriting the whole file with that partial
     # view already invented "new" failures on the next full run; now it would
@@ -474,7 +502,9 @@ def main():
                   if not k.startswith(f"{args.domain}|")
                   and not k.startswith("canary|")}
                  if args.domain else set())
-    new_failures = now_failing - prev
+    # A blocked anchor going red is expected by its own declaration: it enters
+    # the state (so its reminder clock runs) but never the error alert.
+    new_failures = now_failing - prev - blocked_keys
     recovered = prev - now_failing - untouched
 
     # A key already red when this bookkeeping shipped has no true start date.
@@ -483,7 +513,7 @@ def main():
     keep = now_failing | untouched
     since = {k: since.get(k, now) for k in keep}
     reminded = {k: v for k, v in reminded.items() if k in keep}
-    fail_by_key = {f"{r['domain']}|{r['key']}": r for r in fails}
+    fail_by_key = {f"{r['domain']}|{r['key']}": r for r in fails + blocked}
     stale = sorted(
         k for k in now_failing - new_failures
         if now - since[k] >= reminder_due_seconds(fail_by_key[k])

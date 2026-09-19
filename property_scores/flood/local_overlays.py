@@ -23,9 +23,12 @@ import logging
 import os
 from threading import Lock
 
+from property_scores.flood.shards import ShardReader
+
 log = logging.getLogger(__name__)
 
 FEATURES_DB = os.environ.get("FEATURES_DB", "/data/features/features.duckdb")
+FEATURES_MANIFEST = os.environ.get("FEATURES_MANIFEST", "/data/features/manifest.json")
 
 _SEVERITY_RANK = {"floodway": 0, "flood": 1, "moderate": 2}
 
@@ -209,6 +212,25 @@ def _get_conn():
             return None
 
 
+_reader_lock = Lock()
+_reader: ShardReader | None = None
+
+
+def _get_reader() -> ShardReader | None:
+    global _reader
+    if not os.path.exists(FEATURES_MANIFEST):
+        return None
+    with _reader_lock:
+        if _reader is None or _reader.manifest_path != FEATURES_MANIFEST:
+            if _reader is not None:
+                try:
+                    _reader.close()
+                except Exception:
+                    pass
+            _reader = ShardReader(FEATURES_MANIFEST)
+        return _reader
+
+
 def check(state: str, lat: float, lng: float) -> dict | None:
     """Query the library for whitelisted flood overlay hits at a point.
 
@@ -219,19 +241,33 @@ def check(state: str, lat: float, lng: float) -> dict | None:
     trust = TRUST.get(st)
     if trust is None:
         return None
-    conn = _get_conn()
-    if conn is None:
-        return None
-    try:
-        rows = conn.execute(
-            "SELECT source, props FROM features "
-            "WHERE state = ? AND category = 'flood' "
-            "AND ST_Contains(geom, ST_Point(?, ?))",
-            [st, float(lng), float(lat)],
-        ).fetchall()
-    except Exception:
-        log.warning("local flood overlay query failed", exc_info=True)
-        return None
+    reader = _get_reader()
+    if reader is not None:
+        try:
+            rows = reader.query(
+                "source, props",
+                "state = ? AND category = 'flood' AND ST_Contains(geom, ST_Point(?, ?))",
+                [st, float(lng), float(lat)],
+                categories=["flood"],
+                states=[st],
+            )
+        except Exception:
+            log.warning("sharded flood overlay query failed", exc_info=True)
+            return None
+    else:
+        conn = _get_conn()
+        if conn is None:
+            return None
+        try:
+            rows = conn.execute(
+                "SELECT source, props FROM features "
+                "WHERE state = ? AND category = 'flood' "
+                "AND ST_Contains(geom, ST_Point(?, ?))",
+                [st, float(lng), float(lat)],
+            ).fetchall()
+        except Exception:
+            log.warning("local flood overlay query failed", exc_info=True)
+            return None
 
     worst: str | None = None
     labels: list[str] = []
@@ -353,19 +389,33 @@ def check_bushfire(state: str, lat: float, lng: float) -> dict | None:
     trust = BUSHFIRE_TRUST.get(st)
     if trust is None:
         return None
-    conn = _get_conn()
-    if conn is None:
-        return None
-    try:
-        rows = conn.execute(
-            "SELECT source, props FROM features "
-            "WHERE state = ? AND category = 'bushfire' "
-            "AND ST_Contains(geom, ST_Point(?, ?))",
-            [st, float(lng), float(lat)],
-        ).fetchall()
-    except Exception:
-        log.warning("local bushfire overlay query failed", exc_info=True)
-        return None
+    reader = _get_reader()
+    if reader is not None:
+        try:
+            rows = reader.query(
+                "source, props",
+                "state = ? AND category = 'bushfire' AND ST_Contains(geom, ST_Point(?, ?))",
+                [st, float(lng), float(lat)],
+                categories=["bushfire"],
+                states=[st],
+            )
+        except Exception:
+            log.warning("sharded bushfire overlay query failed", exc_info=True)
+            return None
+    else:
+        conn = _get_conn()
+        if conn is None:
+            return None
+        try:
+            rows = conn.execute(
+                "SELECT source, props FROM features "
+                "WHERE state = ? AND category = 'bushfire' "
+                "AND ST_Contains(geom, ST_Point(?, ?))",
+                [st, float(lng), float(lat)],
+            ).fetchall()
+        except Exception:
+            log.warning("local bushfire overlay query failed", exc_info=True)
+            return None
 
     worst: str | None = None
     labels: list[str] = []

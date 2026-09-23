@@ -247,3 +247,16 @@ def test_summary_absence_claim_never_exceeds_search_radius(monkeypatch):
     summary = walk.walkability_score(-37.8, 145.0, radius_m=600)["summary"]
     assert "within 600m straight-line" in summary
     assert "1000m" not in summary
+
+
+def test_summary_nearby_claim_states_straight_line_threshold(monkeypatch):
+    """Close amenities are a raw 400m straight-line check, not a walk time."""
+    from property_scores.walkability import score as walk
+
+    rows = [("supermarket", 300, 145.0, -37.8, "Near Market"),
+            ("supermarket", 450, 145.001, -37.8, "Other Market")]
+    _stub_walk_sources(monkeypatch, walk, rows)
+
+    summary = walk.walkability_score(-37.8, 145.0)["summary"]
+    assert summary.startswith("Supermarket within 400m straight-line")
+    assert "min walk" not in summary

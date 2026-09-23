@@ -185,6 +185,9 @@ MAX_WALK_DISTANCE_M = 1500.0
 # straight-line distance (not the barrier-adjusted one), so the sentence says
 # exactly that instead of implying a walking-route check.
 SUMMARY_FAR_STRAIGHT_LINE_M = 1000
+# Summary "X within ..." threshold, also raw straight-line: no route time and
+# no barrier check, so it must not be phrased as a walking time.
+SUMMARY_CLOSE_STRAIGHT_LINE_M = 400
 BARRIER_CLASSES = {"motorway", "trunk"}
 BARRIER_PENALTY = 2.5
 # These are data rows in a licensed property response, not a presentation
@@ -492,7 +495,7 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
     # Generate summary
     essentials = ["supermarket", "train", "primary_school", "gp_clinic", "park", "tram_bus"]
     close = [SCENARIO_CONFIG[s]["label"] for s in essentials
-             if s in nearest and nearest[s] < 400]
+             if s in nearest and nearest[s] < SUMMARY_CLOSE_STRAIGHT_LINE_M]
     # A category missing from `nearest` was only searched out to radius_m, so
     # never claim absence beyond what the query covered.
     far_m = int(min(SUMMARY_FAR_STRAIGHT_LINE_M, radius_m))
@@ -500,7 +503,7 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
            if s not in nearest or nearest[s] >= far_m]
     summary_parts = []
     if close:
-        summary_parts.append(f"{', '.join(close[:3])} within 5 min walk")
+        summary_parts.append(f"{', '.join(close[:3])} within {SUMMARY_CLOSE_STRAIGHT_LINE_M}m straight-line")
     if far:
         summary_parts.append(f"no {' or '.join(far[:2])} within {far_m}m straight-line")
     summary = '. '.join(summary_parts) + '.' if summary_parts else None

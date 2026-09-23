@@ -109,6 +109,13 @@ def window_stats(path, lat, lng, radius_m, categorical=False, classes=None,
         return {}
     if src.nodata is not None:
         arr = arr[arr != src.nodata]
+    if np.issubdtype(arr.dtype, np.floating):
+        # A NaN nodata survives `arr != nodata` (NaN != NaN is True), and a
+        # float raster can carry NaN gaps with any declared nodata. One NaN
+        # pixel turns the window mean into NaN, which then reaches the JSON
+        # response and 500s it ("Out of range float values are not JSON
+        # compliant"). A gap is missing data, so drop it like nodata.
+        arr = arr[np.isfinite(arr)]
     if arr.size == 0:
         return {}
     if categorical:

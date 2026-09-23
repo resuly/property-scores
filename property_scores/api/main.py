@@ -117,10 +117,52 @@ DISCLAIMER = (
     "Flood, bushfire, and contamination scores do not replace site-specific investigations."
 )
 
+def _finite_or_none(value, path: str, bad: list):
+    """Copy of ``value`` with every non-finite float replaced by None."""
+    if isinstance(value, float):
+        if math.isfinite(value):
+            return value
+        bad.append(path or "$")
+        return None
+    if isinstance(value, dict):
+        return {k: _finite_or_none(v, f"{path}.{k}", bad)
+                for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_finite_or_none(v, f"{path}[{i}]", bad)
+                for i, v in enumerate(value)]
+    return value
+
+
+class FiniteJSONResponse(JSONResponse):
+    """JSONResponse that serialises NaN/inf as null instead of raising.
+
+    Starlette renders with ``allow_nan=False``, so one NaN anywhere in a score
+    payload used to turn the whole response into a 500 ("Out of range float
+    values are not JSON compliant: nan"; 97 of them 2026-09-10..21). A
+    non-finite number is not a measurement, so null is the honest value, and
+    the rest of the payload is still good. Each replacement is logged with its
+    key path so the component that produced it can be fixed at the source.
+    """
+
+    def render(self, content) -> bytes:
+        try:
+            return super().render(content)
+        except ValueError:
+            bad: list = []
+            cleaned = _finite_or_none(content, "", bad)
+            where = ""
+            if isinstance(content, dict) and "lat" in content:
+                where = f" lat={content.get('lat')} lng={content.get('lng')}"
+            logger.warning("non-finite floats replaced with null in response%s: %s",
+                           where, ", ".join(bad[:20]) or "(none found)")
+            return super().render(cleaned)
+
+
 app = FastAPI(
     title="Property Scores API",
     description="Open-data property intelligence scoring engine",
     version="0.1.0",
+    default_response_class=FiniteJSONResponse,
 )
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -271,8 +313,11 @@ _BATCH_DEADLINE_S = 25
 
 @app.get("/scores")
 def get_all_scores(
-    lat: float = Query(..., description="Latitude (WGS84)"),
-    lng: float = Query(..., description="Longitude (WGS84)"),
+    # Bounded so nan/inf (which FastAPI otherwise accepts as floats) 422 at
+    # the door. This endpoint echoes lat/lng into the payload, so a `lat=nan`
+    # request used to 500 at JSON serialisation after running every component.
+    lat: float = Query(..., ge=-90, le=90, description="Latitude (WGS84)"),
+    lng: float = Query(..., ge=-180, le=180, description="Longitude (WGS84)"),
     source_roads: str | None = Query(None, description="Local roads parquet"),
     source_pois: str | None = Query(None, description="Local POI parquet"),
     noise_detail: bool = Query(False, description="Include road/rail source details"),

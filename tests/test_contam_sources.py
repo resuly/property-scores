@@ -106,6 +106,7 @@ def test_act_register_exact_count_and_parcel_join(monkeypatch):
         ),
         "activity_type": "ACT contaminated sites register",
         "management_class": "76A(1)",
+        "inside": True,
         "distance_m": 0,
         "geom": "polygon",
         "source": "ACT EPA Register of contaminated sites",

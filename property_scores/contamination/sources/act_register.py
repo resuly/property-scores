@@ -235,6 +235,8 @@ def sites_at(lat: float, lng: float) -> list[dict] | None:
             ),
             "activity_type": "ACT contaminated sites register",
             "management_class": row["notified_under_section"],
+            # Block match = the query point lies on this register parcel.
+            "inside": True,
             "distance_m": 0,
             "geom": "polygon",
             "source": "ACT EPA Register of contaminated sites",

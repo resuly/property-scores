@@ -103,3 +103,45 @@ def test_window_stats_ignores_nan_gaps(tmp_path):
     assert math.isfinite(stats["mean"])
     assert 30.0 <= stats["mean"] <= 40.0
     assert stats["max"] == 40.0
+
+
+_COORD_PARAMS = {"lat", "lng", "src_lat", "src_lng"}
+
+
+def _coordinate_routes():
+    """Every GET route with a coordinate query parameter, read from the app so
+    a new endpoint is covered without editing this list."""
+    from fastapi.routing import APIRoute
+    out = []
+    for route in main.app.routes:
+        if not isinstance(route, APIRoute) or "GET" not in route.methods:
+            continue
+        names = {p.name for p in route.dependant.query_params}
+        coords = sorted(names & _COORD_PARAMS)
+        if coords:
+            out.append((route.path, tuple(coords)))
+    return out
+
+
+_ROUTES = _coordinate_routes()
+
+
+def test_coordinate_route_discovery_is_not_empty():
+    paths = {path for path, _ in _ROUTES}
+    assert {"/scores", "/scores/noise", "/scores/noise/terrain",
+            "/scores/elevation/contours", "/scores/aircraft-noise"} <= paths
+
+
+@pytest.mark.parametrize("bad", ["nan", "inf", "-inf"])
+@pytest.mark.parametrize("path,coords", _ROUTES,
+                         ids=[f"{p}:{','.join(c)}" for p, c in _ROUTES])
+def test_every_coordinate_param_rejects_non_finite(client, path, coords, bad):
+    valid = {"lat": "-37.8", "lng": "145.0",
+             "src_lat": "-37.8", "src_lng": "145.0"}
+    for target in coords:
+        params = {c: valid[c] for c in coords}
+        params[target] = bad
+        r = client.get(path, params=params)
+        assert r.status_code == 422, (path, target, bad, r.status_code)
+        locs = [tuple(e["loc"]) for e in r.json()["detail"]]
+        assert ("query", target) in locs

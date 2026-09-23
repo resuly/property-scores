@@ -7,7 +7,7 @@ import time
 from collections import defaultdict
 from pathlib import Path
 from threading import Lock
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
@@ -30,6 +30,12 @@ from property_scores.contamination import contamination_score
 from property_scores.common.overture import building_footprint_m2, get_db
 
 logger = logging.getLogger(__name__)
+
+# Every coordinate parameter uses these. Bounds make nan/inf (which FastAPI
+# otherwise accepts as floats) 422 at the door instead of failing deep in a
+# component or at JSON serialisation.
+Lat = Annotated[float, Query(ge=-90, le=90, description="Latitude (WGS84)")]
+Lng = Annotated[float, Query(ge=-180, le=180, description="Longitude (WGS84)")]
 
 
 def _solar_with_footprint(lat: float, lng: float) -> dict:
@@ -316,8 +322,8 @@ def get_all_scores(
     # Bounded so nan/inf (which FastAPI otherwise accepts as floats) 422 at
     # the door. This endpoint echoes lat/lng into the payload, so a `lat=nan`
     # request used to 500 at JSON serialisation after running every component.
-    lat: float = Query(..., ge=-90, le=90, description="Latitude (WGS84)"),
-    lng: float = Query(..., ge=-180, le=180, description="Longitude (WGS84)"),
+    lat: Lat,
+    lng: Lng,
     source_roads: str | None = Query(None, description="Local roads parquet"),
     source_pois: str | None = Query(None, description="Local POI parquet"),
     noise_detail: bool = Query(False, description="Include road/rail source details"),
@@ -370,7 +376,7 @@ def get_all_scores(
 @app.get("/scores/noise")
 def get_noise(
     request: Request,
-    lat: float = Query(...), lng: float = Query(...),
+    lat: Lat, lng: Lng,
     radius: int = Query(500), source: str | None = Query(None),
     nocache: bool = Query(False),
     detail: bool = Query(False),
@@ -396,7 +402,7 @@ def get_noise(
 
 @app.get("/scores/walkability")
 def get_walkability(
-    lat: float = Query(...), lng: float = Query(...),
+    lat: Lat, lng: Lng,
     radius: int = Query(1500), source: str | None = Query(None),
 ):
     try:
@@ -410,7 +416,7 @@ def get_walkability(
 
 @app.get("/scores/solar")
 def get_solar(
-    lat: float = Query(...), lng: float = Query(...),
+    lat: Lat, lng: Lng,
     roof_area: float | None = Query(None, gt=0),
     orientation: Literal["optimal", "east", "west", "suboptimal"] = Query(
         "optimal"),
@@ -424,7 +430,7 @@ def get_solar(
 
 
 @app.get("/scores/flood")
-def get_flood(lat: float = Query(...), lng: float = Query(...),
+def get_flood(lat: Lat, lng: Lng,
               nocache: bool = Query(False)):
     try:
         # The legacy regional cache stores only a numeric score and cannot
@@ -441,7 +447,7 @@ def get_flood(lat: float = Query(...), lng: float = Query(...),
 
 
 @app.get("/scores/flood/inundation")
-def get_flood_inundation(lat: float = Query(...), lng: float = Query(...),
+def get_flood_inundation(lat: Lat, lng: Lng,
                          radius: int = Query(500)):
     """DEM grid relative to the local drainage line, for the map's water-level
     simulation overlay. Terrain fill illustration, not a hydraulic model."""
@@ -457,7 +463,7 @@ def get_flood_inundation(lat: float = Query(...), lng: float = Query(...),
 
 
 @app.get("/scores/bushfire")
-def get_bushfire(lat: float = Query(...), lng: float = Query(...),
+def get_bushfire(lat: Lat, lng: Lng,
                  quick: bool = Query(False)):
     try:
         return bushfire_score(lat, lng, quick=quick)
@@ -467,7 +473,7 @@ def get_bushfire(lat: float = Query(...), lng: float = Query(...),
 
 
 @app.get("/scores/bushfire/landcover")
-def get_bushfire_landcover(lat: float = Query(...), lng: float = Query(...),
+def get_bushfire_landcover(lat: Lat, lng: Lng,
                            radius: int = Query(500)):
     """WorldCover 10m land-cover grid around a point, for the fuel map overlay."""
     from property_scores.bushfire.score import landcover_grid, lc_vrt_available
@@ -485,7 +491,7 @@ def get_bushfire_landcover(lat: float = Query(...), lng: float = Query(...),
 
 
 @app.get("/scores/heat-island")
-def get_heat_island(lat: float = Query(...), lng: float = Query(...)):
+def get_heat_island(lat: Lat, lng: Lng):
     try:
         return heat_island_score(lat, lng)
     except Exception as e:
@@ -495,7 +501,7 @@ def get_heat_island(lat: float = Query(...), lng: float = Query(...)):
 
 @app.get("/scores/view-quality")
 @app.get("/scores/landscape-openness")
-def get_view_quality(lat: float = Query(...), lng: float = Query(...)):
+def get_view_quality(lat: Lat, lng: Lng):
     try:
         return view_quality_score(lat, lng)
     except Exception as e:
@@ -504,7 +510,7 @@ def get_view_quality(lat: float = Query(...), lng: float = Query(...)):
 
 
 @app.get("/scores/contamination")
-def get_contamination(lat: float = Query(...), lng: float = Query(...)):
+def get_contamination(lat: Lat, lng: Lng):
     try:
         return contamination_score(lat, lng)
     except Exception as e:
@@ -515,7 +521,7 @@ def get_contamination(lat: float = Query(...), lng: float = Query(...)):
 @app.get("/scores/noise/surface")
 def get_noise_surface(
     request: Request,
-    lat: float = Query(...), lng: float = Query(...),
+    lat: Lat, lng: Lng,
     radius: int = Query(1500), cells: int = Query(7),
     require_path: str | None = Query(
         None, description="Model path this deployment is supposed to run "
@@ -554,8 +560,8 @@ def get_noise_surface(
 
 @app.get("/scores/noise/terrain")
 def get_noise_terrain(
-    src_lat: float = Query(...), src_lng: float = Query(...),
-    lat: float = Query(...), lng: float = Query(...),
+    src_lat: Lat, src_lng: Lng,
+    lat: Lat, lng: Lng,
 ):
     """DEM elevation profile from a source to the receiver. Local 30 m DEM only
     (GA DEM-H for AU tiles; the Open-Meteo out-of-coverage fallback was removed 2026-08-02:
@@ -577,8 +583,8 @@ def get_elevation_contours(
     # 422 at the door instead of blowing up window arithmetic deeper down,
     # where the ValueError is indistinguishable from a raster fault and was
     # reported as 503 "dem unreadable": a client typo must not page anyone.
-    lat: float = Query(..., ge=-90, le=90),
-    lng: float = Query(..., ge=-180, le=180),
+    lat: Lat,
+    lng: Lng,
     radius: int = Query(1500),
     interval_m: float | None = Query(
         None, gt=0, le=200,
@@ -622,7 +628,7 @@ def get_elevation_contours(
 
 
 @app.get("/scores/aircraft-noise")
-def get_aircraft_noise(lat: float = Query(...), lng: float = Query(...)):
+def get_aircraft_noise(lat: Lat, lng: Lng):
     """Query airport noise overlay (MAEO/AEO) for a coordinate."""
     try:
         return aircraft_noise_penalty(lat, lng)

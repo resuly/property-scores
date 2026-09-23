@@ -212,3 +212,38 @@ def test_suburb_named_childcare_is_no_longer_dropped():
                  "Doncaster East Preschool", "Springwood Kindergarten",
                  "Goodstart Carrum Downs - Frankston Dandenong Road"):
         assert _match_category("child_care_and_day_care", name) == "childcare", name
+
+
+def _stub_walk_sources(monkeypatch, walk, rows):
+    monkeypatch.setattr(walk, "get_db", lambda: object())
+    monkeypatch.setattr(walk, "pois_near_detailed", lambda *a, **k: rows)
+    for name in ("transit_stops_near", "sports_fields_near",
+                 "osm_amenities_near", "rail_stops_near", "walking_trails_near"):
+        monkeypatch.setattr(walk, name, lambda *a, **k: [])
+    monkeypatch.setattr(walk, "road_crossings", lambda *a, **k: set())
+    monkeypatch.setattr(walk, "water_crossings", lambda *a, **k: set())
+    monkeypatch.setattr(walk, "_slope_penalty", lambda *a, **k: 1.0)
+
+
+def test_summary_absence_claim_states_straight_line_threshold(monkeypatch):
+    """The summary must not imply a walking-route check it never ran."""
+    from property_scores.walkability import score as walk
+
+    # Supermarket 1200 m straight-line: inside the 1500 m search radius but
+    # past the 1000 m summary threshold. No train at all.
+    rows = [("supermarket", 1200, 145.0, -37.8, "Far Market")]
+    _stub_walk_sources(monkeypatch, walk, rows)
+
+    summary = walk.walkability_score(-37.8, 145.0)["summary"]
+    assert "no Supermarket or Train Station within 1000m straight-line" in summary
+    assert "walking distance" not in summary
+    assert "1500m" not in summary
+
+
+def test_summary_absence_claim_never_exceeds_search_radius(monkeypatch):
+    from property_scores.walkability import score as walk
+
+    _stub_walk_sources(monkeypatch, walk, [])
+    summary = walk.walkability_score(-37.8, 145.0, radius_m=600)["summary"]
+    assert "within 600m straight-line" in summary
+    assert "1000m" not in summary

@@ -98,6 +98,7 @@ def test_act_register_exact_count_and_parcel_join(monkeypatch):
     hits = act_register.sites_at(*ACT_BRADDON_BP)
 
     assert len(hits) == 1
+    assert hits[0]["inside"] is True
     assert hits[0] == {
         "site_id": "42",
         "name": "Active BP Service Station",

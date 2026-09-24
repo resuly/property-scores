@@ -117,7 +117,7 @@ def test_a_genuinely_new_failure_still_alerts_next_to_blocked_rows(harness):
     t0 = 1_700_000_000.0
     harness([BLOCKED], t0)
     code, sent, _ = harness([BLOCKED, FAIL], t0 + DAY)
-    assert code == 1 and len(sent) == 1
+    assert code == probes.EXIT_ALREADY_ALERTED and len(sent) == 1
     assert sent[0]["title"] == "真值哨兵: 1 项新失败"
     assert "-27.4650" in sent[0]["message"]
     assert "-28.8131" not in sent[0]["message"], "blocked rows are not re-listed"

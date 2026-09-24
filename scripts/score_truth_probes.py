@@ -75,6 +75,13 @@ STALE_RED_DAYS = float(os.environ.get("TRUTH_PROBE_STALE_RED_DAYS", "7"))
 # sends the reader somewhere real and empty -- reading as "the log is gone".
 LOG_PATH = os.environ.get("TRUTH_PROBE_LOG_PATH",
                           "/var/www/daleads.com.au/logs/truth_probes.log")
+# cron_with_alert.sh's EXIT_ALREADY_ALERTED: "failed, and I already pushed my
+# own alert for it". The wrapper records the failure but does not push a
+# second, less informative red for the same event (2026-09-24 15:25: the
+# "3 项新失败" alert was followed by the wrapper's own exit=1 alert).
+# Only used when the new-failure alert was actually delivered; an undelivered
+# one still exits 1 so the wrapper's push is the fallback.
+EXIT_ALREADY_ALERTED = 79
 
 
 def _write_state(failing, since, reminded, ts):
@@ -590,7 +597,9 @@ def main():
     if recovered:
         print(f"recovered since last run: {len(recovered)}")
 
-    sys.exit(1 if new_failures else 0)
+    if new_failures:
+        sys.exit(EXIT_ALREADY_ALERTED if delivered_new else 1)
+    sys.exit(0)
 
 
 if __name__ == "__main__":

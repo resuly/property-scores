@@ -64,7 +64,8 @@ def _canary(key=KEY):
 def test_a_still_red_check_is_reported_again_after_a_week(harness):
     t0 = 1_700_000_000.0
     code, sent, _ = harness([_canary()], t0)
-    assert code == 1 and len(sent) == 1, "第一天是新失败, 照常告警"
+    assert code == probes.EXIT_ALREADY_ALERTED == 79 and len(sent) == 1, \
+        "第一天是新失败, 照常告警; 已自行送达, 告诉 wrapper 不必再推"
     assert "新失败" in sent[0]["title"]
 
     # 中间六天: 一直红, 但不该再吵。
@@ -320,3 +321,11 @@ def test_the_truncation_notice_points_at_a_path_that_holds_the_log(harness):
     _code, sent, _ = harness(many, t0 + 7 * DAY)
     msg = [s for s in sent if "持续失败" in s["title"]][0]["message"]
     assert probes.LOG_PATH in msg, msg
+
+
+def test_an_undelivered_new_failure_exits_1_so_the_wrapper_pushes(harness):
+    """Only a delivered alert may claim "already alerted"; otherwise the
+    wrapper's own red is the only message anyone gets."""
+    code, sent, _ = harness([_canary()], 1_700_000_000.0, deliver=False)
+    assert len(sent) == 1
+    assert code == 1

@@ -49,7 +49,13 @@ def test_no_other_source_file_pins_an_atlas_version():
 
 
 def test_layer_ids_verified_on_the_current_version():
-    """Ids re-matched by name against V19 on 2026-09-24; see common/sappa.py."""
+    """Tripwire against an accidental id edit, nothing more.
+
+    It compares against a hard-coded list and never contacts the service, so
+    it cannot tell whether these ids still name the right layers upstream.
+    That was checked by hand, by layer name, against V19 on 2026-09-24 (see
+    common/sappa.py) and must be re-checked on every version bump.
+    """
     ids = {url.rsplit("/", 1)[1] for url in _sa_urls()}
     assert ids == {"135", "136", "137", "138", "139", "140",
                    "141", "372", "367", "403"}

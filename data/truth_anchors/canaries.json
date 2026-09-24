@@ -37,11 +37,11 @@
     "active": true
   },
   {
-    "name": "SA bushfire Cleland NP edge known-positive (SAPPA V18)",
-    "url": "https://lsa2.geohub.sa.gov.au/arcgis/rest/services/SAPPA/PropertyPlanningAtlasV18/MapServer/135/query?geometry=138.6890,-34.9870&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&returnCountOnly=true&f=json",
+    "name": "SA bushfire Cleland NP edge known-positive (SAPPA)",
+    "url": "https://lsa2.geohub.sa.gov.au/arcgis/rest/services/SAPPA/PropertyPlanningAtlasV19/MapServer/135/query?geometry=138.6890,-34.9870&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&returnCountOnly=true&f=json",
     "assert": "count>0",
     "active": true,
-    "note": "version-pinned service; if 404s, list SAPPA folder for newer V{N}",
+    "note": "version-pinned service (V18 deleted 2026-09-24); if 404s, list the SAPPA folder (with the Referer) for newer V{N}, bump SAPPA_ATLAS_VERSION in property_scores/common/sappa.py and here together, and re-match layer ids by name",
     "headers": {
       "Referer": "https://sappa.plan.sa.gov.au/"
     }
@@ -53,8 +53,8 @@
     "active": true
   },
   {
-    "name": "SA flood Mile End known-positive (SAPPA V18)",
-    "url": "https://lsa2.geohub.sa.gov.au/arcgis/rest/services/SAPPA/PropertyPlanningAtlasV18/MapServer/141/query?geometry=138.5640,-34.9330&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&returnCountOnly=true&f=json",
+    "name": "SA flood Mile End known-positive (SAPPA)",
+    "url": "https://lsa2.geohub.sa.gov.au/arcgis/rest/services/SAPPA/PropertyPlanningAtlasV19/MapServer/141/query?geometry=138.5640,-34.9330&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&returnCountOnly=true&f=json",
     "headers": {
       "Referer": "https://sappa.plan.sa.gov.au/"
     },

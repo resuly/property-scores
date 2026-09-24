@@ -22,6 +22,8 @@ import time as _time
 
 import requests
 
+from property_scores.common.sappa import SAPPA_BASE, SAPPA_HEADERS
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -36,11 +38,10 @@ VIC_PLAN_BASE = (
 # CurrentPDC_wmas was deleted upstream (HTTP 200 with an error body) and the
 # whole state silently scored on proxies for weeks (2026-06-11 audit).
 # CloudFront WAF on this host requires the SAPPA Referer header exactly.
-SA_PLAN_BASE = (
-    "https://lsa2.geohub.sa.gov.au/arcgis/rest/services"
-    "/SAPPA/PropertyPlanningAtlasV18/MapServer"
-)
-SA_HEADERS = {"Referer": "https://sappa.plan.sa.gov.au/"}
+# The atlas is version-pinned (V18 was deleted 2026-09-24); the version and the
+# id-by-name check live in common/sappa.py.
+SA_PLAN_BASE = SAPPA_BASE
+SA_HEADERS = SAPPA_HEADERS
 
 ENDPOINTS: dict[str, list[tuple[str, str, str]]] = {
     "VIC": [

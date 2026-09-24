@@ -14,6 +14,8 @@ import math
 
 import requests
 
+from property_scores.common.sappa import SAPPA_BASE, SAPPA_HEADERS
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -55,25 +57,17 @@ ENDPOINTS: dict[str, list[tuple[str, str, str]]] = {
     "SA": [
         # SAPPA backend; old server6 service deleted upstream (2026-06-11).
         # Requests to geohub need the SAPPA Referer (handled in _query_layer).
-        ("Hazards (Flooding)",
-         "https://lsa2.geohub.sa.gov.au/arcgis/rest/services"
-         "/SAPPA/PropertyPlanningAtlasV18/MapServer/141",
-         "flood"),
-        ("Hazards (Flooding - General)",
-         "https://lsa2.geohub.sa.gov.au/arcgis/rest/services"
-         "/SAPPA/PropertyPlanningAtlasV18/MapServer/372",
-         "moderate"),
-        ("Coastal Flooding",
-         "https://lsa2.geohub.sa.gov.au/arcgis/rest/services"
-         "/SAPPA/PropertyPlanningAtlasV18/MapServer/367",
-         "flood"),
+        # Version-pinned atlas, see common/sappa.py. Labels keep the Planning
+        # & Design Code overlay names; the service itself now titles 141
+        # "Hazards (Flooding High)" and 372 "Hazards (Flooding General)".
+        ("Hazards (Flooding)",           f"{SAPPA_BASE}/141", "flood"),
+        ("Hazards (Flooding - General)", f"{SAPPA_BASE}/372", "moderate"),
+        ("Coastal Flooding",             f"{SAPPA_BASE}/367", "flood"),
         # This control says that site-specific flood evidence is required; it
         # does not publish a flood extent or severity band.  Keep the hit in
         # flood_zones, but do not translate it into either risk or safety.
         ("Hazards (Flooding Evidence Required)",
-         "https://lsa2.geohub.sa.gov.au/arcgis/rest/services"
-         "/SAPPA/PropertyPlanningAtlasV18/MapServer/403",
-         "evidence_required"),
+         f"{SAPPA_BASE}/403", "evidence_required"),
     ],
     "TAS": [
         # Statewide overlay layer (14). Layer 3 is the Kingborough Interim
@@ -168,8 +162,7 @@ def _query_layer(url: str, lat: float, lng: float,
         params["where"] = where
 
     try:
-        headers = ({"Referer": "https://sappa.plan.sa.gov.au/"}
-                   if "geohub.sa.gov.au" in url else None)
+        headers = SAPPA_HEADERS if "geohub.sa.gov.au" in url else None
         resp = requests.get(f"{url}/query", params=params, timeout=TIMEOUT,
                             headers=headers)
         resp.raise_for_status()

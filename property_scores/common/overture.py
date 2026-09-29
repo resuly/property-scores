@@ -229,27 +229,79 @@ def road_crossings(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
     """
     if not targets:
         return set()
-    table = f"read_parquet('{source or _local_or_fail(ROADS_FILE)}')"
+    src = source or _local_or_fail(ROADS_FILE)
+    table = f"read_parquet('{src}')"
     delta = radius_m / 111_000 * 1.5
     values = ", ".join(
         f"({i}, {tlng}, {tlat})" for i, (_key, tlng, tlat) in enumerate(targets))
-    sql = f"""
-        SELECT DISTINCT t.idx
-        FROM (VALUES {values}) AS t(idx, tlng, tlat)
-        JOIN {table} r
-          ON ST_Intersects(r.geometry,
-                           ST_MakeLine(ST_Point({lng}, {lat}),
-                                       ST_Point(t.tlng, t.tlat)))
-        WHERE r.bbox.xmin <= {lng + delta} AND r.bbox.xmax >= {lng - delta}
-          AND r.bbox.ymin <= {lat + delta} AND r.bbox.ymax >= {lat - delta}
-          AND r.subtype = 'road'
-          AND r.class IN ('motorway', 'trunk')
-    """
     try:
+        cols = {row[0] for row in db.sql(f"DESCRIBE SELECT * FROM {table}").fetchall()}
+        # Overture marks a bridge/tunnel with road_flags (is_bridge/is_tunnel)
+        # and a stacked road with level_rules (value != 0).  A road that is
+        # not at ground level cannot stop a pedestrian at ground level, so
+        # the 2D intersection alone falsely blocks e.g. the Bay Run beneath
+        # or beside a grade-separated motorway.  A flag may cover only part
+        # of a segment (``between`` = linear-reference range); then it counts
+        # only where the crossing point falls inside that range.  A parquet
+        # without these columns keeps the old, conservative 2D behaviour.
+        sep_terms = []
+        if "road_flags" in cols:
+            sep_terms.append(
+                "coalesce(len(list_filter(road_flags, f -> "
+                "(list_contains(f.values, 'is_bridge') "
+                "OR list_contains(f.values, 'is_tunnel')) "
+                f"AND {_frac_in('f')})) > 0, false)")
+        if "level_rules" in cols:
+            sep_terms.append(
+                "coalesce(len(list_filter(level_rules, l -> "
+                f"l.value <> 0 AND {_frac_in('l')})) > 0, false)")
+        not_separated = (
+            f"NOT ({' OR '.join(sep_terms)})" if sep_terms else "TRUE")
+        flag_cols = ", ".join(
+            f"r.{c} AS {c}" for c in ("road_flags", "level_rules") if c in cols)
+        flag_cols = f", {flag_cols}" if flag_cols else ""
+        sql = f"""
+            SELECT DISTINCT idx FROM (
+                SELECT idx,
+                       CASE WHEN ST_GeometryType(g) = 'LINESTRING'
+                            THEN ST_LineLocatePoint(g, ST_Centroid(ST_Intersection(g, path)))
+                       END AS frac
+                       {', road_flags' if 'road_flags' in cols else ''}
+                       {', level_rules' if 'level_rules' in cols else ''}
+                FROM (
+                    SELECT t.idx AS idx, r.geometry AS g,
+                           ST_MakeLine(ST_Point({lng}, {lat}),
+                                       ST_Point(t.tlng, t.tlat)) AS path
+                           {flag_cols}
+                    FROM (VALUES {values}) AS t(idx, tlng, tlat)
+                    JOIN {table} r
+                      ON ST_Intersects(r.geometry,
+                                       ST_MakeLine(ST_Point({lng}, {lat}),
+                                                   ST_Point(t.tlng, t.tlat)))
+                    WHERE r.bbox.xmin <= {lng + delta} AND r.bbox.xmax >= {lng - delta}
+                      AND r.bbox.ymin <= {lat + delta} AND r.bbox.ymax >= {lat - delta}
+                      AND r.subtype = 'road'
+                      AND r.class IN ('motorway', 'trunk')
+                )
+            )
+            WHERE {not_separated}
+        """
         hit = {row[0] for row in db.sql(sql).fetchall()}
     except Exception:
         return None
     return {targets[i][0] for i in hit}
+
+
+def _frac_in(var: str) -> str:
+    """SQL predicate: crossing fraction ``frac`` lies in ``var.between``.
+
+    A missing range means the whole segment; a NULL ``frac`` (non-LINESTRING
+    geometry) matches only ranges spanning the whole segment.
+    """
+    b = f'{var}."between"'
+    return (f"({b} IS NULL OR ({b}[1] <= 0 AND {b}[2] >= 1) "
+            f"OR (frac IS NOT NULL AND frac >= {b}[1] - 0.001 "
+            f"AND frac <= {b}[2] + 0.001))")
 
 
 def walking_trails_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
@@ -728,6 +780,57 @@ def water_nearest_point(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
     return tuple(rows[0]) if rows else None
 
 
+# Overture labels many Australian primary schools with the generic category
+# ``school``.  A website containing "primary" alone is not evidence of a
+# school: the 24 generic-school records that matched it (2026-09-29 audit of
+# the production POI file) included a uniform shop, a P&C association, a
+# pre-school, a family centre, paid after-school French classes, a South
+# African school geolocated in Sydney and a school-association record.
+# Promotion therefore needs (1) no non-school signal in the name or the
+# alternate taxonomy, (2) a usable "primary" URL, i.e. not a commerce path and
+# not a foreign ccTLD, and (3) either "primary" in the name, the exact
+# elementary_school taxonomy, or a URL that literally says primary school.
+_GENERIC_SCHOOL_NAME_EXCLUDE = (
+    r"uniform|tutor|coaching|after[- ]?school|before[- ]?school|holiday"
+    r"|vacation care|oshc|\bclubs?\b|\bclasses\b|lessons"
+    r"|p\s*&\s*c\b|\bp and c\b|\bp&f\b|parents|association"
+    r"|\bpre-?school|kindergarten|family cent(re|er)|learning cent(re|er)"
+    r"|\bshop\b|\bstore\b")
+_GENERIC_SCHOOL_ALT_EXCLUDE = (
+    "uniform_store", "community_center", "home_service", "tutoring_service",
+    "day_care_preschool", "preschool", "nursery_school")
+_URL_COMMERCE_PATH = r"/(product|products|store|shop|cart|checkout|uniforms?)(/|$)"
+_URL_FOREIGN_HOST = (
+    r"\.(co\.)?(za|uk|nz|us|ca|in|ph|sg|my|ie|ng|ke|zw)$")
+
+
+def _primary_url_sql(var: str, *, strong: bool = False) -> str:
+    """SQL predicate: website ``var`` is a usable "primary" school URL."""
+    host = f"regexp_extract(lower({var}), '^(?:https?://)?([^/:?#]+)', 1)"
+    sql = (f"contains(lower({var}), 'primary')"
+           f" AND NOT regexp_matches(lower({var}), '{_URL_COMMERCE_PATH}')"
+           f" AND NOT regexp_matches({host}, '{_URL_FOREIGN_HOST}')")
+    if strong:
+        sql += f" AND regexp_matches(lower({var}), 'primary[-_ ]?school')"
+    return sql
+
+
+_ALT_LIST = "coalesce(categories.alternate, []::VARCHAR[])"
+_ALT_EXCLUDE_LIST = ", ".join(f"'{c}'" for c in _GENERIC_SCHOOL_ALT_EXCLUDE)
+GENERIC_SCHOOL_IS_PRIMARY_SQL = f"""(
+    categories.primary = 'school'
+    AND NOT regexp_matches(lower(coalesce(names.primary, '')),
+                           '{_GENERIC_SCHOOL_NAME_EXCLUDE}')
+    AND len(list_filter({_ALT_LIST}, c -> c IN ({_ALT_EXCLUDE_LIST}))) = 0
+    AND len(list_filter(coalesce(websites, []::VARCHAR[]),
+                        u -> {_primary_url_sql('u')})) > 0
+    AND (contains(lower(coalesce(names.primary, '')), 'primary')
+         OR list_contains({_ALT_LIST}, 'elementary_school')
+         OR len(list_filter(coalesce(websites, []::VARCHAR[]),
+                            u -> {_primary_url_sql('u', strong=True)})) > 0)
+)"""
+
+
 def pois_near_detailed(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
                        radius_m: int = 1500) -> list[tuple]:
     """Like pois_near but returns (category, dist_m, lng, lat, name)."""
@@ -744,10 +847,7 @@ def pois_near_detailed(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
                    {_metres_from_closest_point(lng, lat, m_per_deg)} AS dist_m
             FROM (
                 SELECT CASE
-                         WHEN categories.primary = 'school'
-                          AND len(list_filter(
-                                websites,
-                                url -> contains(lower(url), 'primary'))) > 0
+                         WHEN {GENERIC_SCHOOL_IS_PRIMARY_SQL}
                          THEN 'primary_school'
                          ELSE categories.primary
                        END AS category,

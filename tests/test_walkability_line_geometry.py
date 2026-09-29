@@ -83,7 +83,7 @@ def test_generic_school_with_primary_website_is_promoted(tmp_path, monkeypatch):
     db.load_extension("spatial")
     db.execute("""
         CREATE TABLE pois AS SELECT
-          struct_pack("primary" := 'school') AS categories,
+          struct_pack("primary" := 'school', alternate := ['education']::VARCHAR[]) AS categories,
           struct_pack("primary" := 'The Springfield Anglican College') AS names,
           ['https://example.edu/our-college/primary-schooling']::VARCHAR[] AS websites,
           ST_GeomFromText('POINT(152.907723 -27.656501)') AS geometry,

@@ -21,7 +21,8 @@ def _db():
 
 
 def _parquet(tmp_path, flags="NULL", level="NULL", with_columns=True,
-             road_class="motorway", extra_rows=""):
+             road_class="motorway", extra_rows="",
+             wkt="LINESTRING(151.1455 -33.871,151.1455 -33.867)"):
     path = tmp_path / "roads.parquet"
     db = _db()
     cols = ("id, subtype, class, geometry, bbox"
@@ -32,8 +33,8 @@ def _parquet(tmp_path, flags="NULL", level="NULL", with_columns=True,
         CREATE TABLE roads AS
         SELECT * FROM (VALUES
           ('m', 'road', '{road_class}',
-           ST_GeomFromText('LINESTRING(151.1455 -33.871,151.1455 -33.867)'),
-           struct_pack(xmin := 151.1455, xmax := 151.1455,
+           ST_GeomFromText('{wkt}'),
+           struct_pack(xmin := 151.1455, xmax := 151.1458,
                        ymin := -33.871, ymax := -33.867){extra}
           ){extra_rows}
         ) AS t({cols})
@@ -91,3 +92,19 @@ def test_bridge_does_not_hide_a_second_at_grade_motorway_on_the_path(tmp_path):
 
 def test_parquet_without_flag_columns_keeps_conservative_2d_behaviour(tmp_path):
     assert _hit(tmp_path, with_columns=False) == {"east"}
+
+
+# A U-shaped segment that the path crosses twice: at fraction ~0.23 and ~0.77.
+U_WKT = ("LINESTRING(151.1455 -33.870,151.1455 -33.8675,"
+         "151.1458 -33.8675,151.1458 -33.870)")
+
+
+def test_bridge_over_one_of_two_crossings_of_the_same_segment_still_blocks(tmp_path):
+    first = "[{'values': ['is_bridge'], 'between': [0.15, 0.30]}]"
+    second = "[{'values': ['is_bridge'], 'between': [0.70, 0.85]}]"
+    both = ("[{'values': ['is_bridge'], 'between': [0.15, 0.30]},"
+            " {'values': ['is_bridge'], 'between': [0.70, 0.85]}]")
+    assert _hit(tmp_path, wkt=U_WKT) == {"east"}
+    assert _hit(tmp_path, wkt=U_WKT, flags=first) == {"east"}
+    assert _hit(tmp_path, wkt=U_WKT, flags=second) == {"east"}
+    assert _hit(tmp_path, wkt=U_WKT, flags=both) == set()

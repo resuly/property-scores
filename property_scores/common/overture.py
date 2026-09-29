@@ -264,11 +264,18 @@ def road_crossings(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
             SELECT DISTINCT idx FROM (
                 SELECT idx,
                        CASE WHEN ST_GeometryType(g) = 'LINESTRING'
-                            THEN ST_LineLocatePoint(g, ST_Centroid(ST_Intersection(g, path)))
+                            THEN ST_LineLocatePoint(g, ST_Centroid(part))
                        END AS frac
                        {', road_flags' if 'road_flags' in cols else ''}
                        {', level_rules' if 'level_rules' in cols else ''}
                 FROM (
+                    -- one row per crossing point: a path that crosses the same
+                    -- segment twice is judged at each crossing, so a bridge
+                    -- over one crossing cannot excuse a ground-level other.
+                    SELECT idx, g, unnest(ST_Dump(ST_Intersection(g, path))).geom AS part
+                           {', road_flags' if 'road_flags' in cols else ''}
+                           {', level_rules' if 'level_rules' in cols else ''}
+                    FROM (
                     SELECT t.idx AS idx, r.geometry AS g,
                            ST_MakeLine(ST_Point({lng}, {lat}),
                                        ST_Point(t.tlng, t.tlat)) AS path
@@ -282,6 +289,7 @@ def road_crossings(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
                       AND r.bbox.ymin <= {lat + delta} AND r.bbox.ymax >= {lat - delta}
                       AND r.subtype = 'road'
                       AND r.class IN ('motorway', 'trunk')
+                    )
                 )
             )
             WHERE {not_separated}

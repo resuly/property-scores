@@ -126,6 +126,68 @@ def test_nsw_query_filters_records_beyond_radius_and_accepts_string_coordinates(
     assert sites[0]["distance_m"] == pytest.approx(1498, abs=2)
 
 
+def _nsw_payload(lat, lng):
+    return {"features": [{"attributes": {
+        "Longitude": lng, "Latitude": lat, "SiteName": "site",
+        "ContaminationActivityType": "test"}}]}
+
+
+def test_nsw_retries_a_dropped_connection_and_reads_the_register(monkeypatch):
+    lat, lng = -36.0805, 146.9158
+    calls = []
+
+    def _get(*a, **k):
+        calls.append(1)
+        if len(calls) < 3:
+            raise requests.ConnectionError("Remote end closed connection")
+        return _Resp(True, _nsw_payload(lat, lng))
+
+    monkeypatch.setattr(cs.requests, "get", _get)
+    monkeypatch.setattr(cs._time, "sleep", lambda s: None)
+    sites = cs._nsw_epa_sites(lat, lng)
+    assert [site["name"] for site in sites] == ["site"]
+    assert len(calls) == 3
+
+
+def test_nsw_gives_up_after_three_dropped_connections(monkeypatch):
+    calls = []
+
+    def _get(*a, **k):
+        calls.append(1)
+        raise requests.ConnectionError("Remote end closed connection")
+
+    monkeypatch.setattr(cs.requests, "get", _get)
+    monkeypatch.setattr(cs._time, "sleep", lambda s: None)
+    assert cs._nsw_epa_sites(-36.0805, 146.9158) is None
+    assert len(calls) == 3
+
+
+@pytest.mark.parametrize("exc", [requests.ReadTimeout, requests.ConnectTimeout])
+def test_nsw_does_not_retry_a_timeout(monkeypatch, exc):
+    calls = []
+
+    def _get(*a, **k):
+        calls.append(1)
+        raise exc("timed out")
+
+    monkeypatch.setattr(cs.requests, "get", _get)
+    monkeypatch.setattr(cs._time, "sleep", lambda s: None)
+    assert cs._nsw_epa_sites(-36.0805, 146.9158) is None
+    assert len(calls) == 1
+
+
+def test_nsw_does_not_retry_a_non_2xx(monkeypatch):
+    calls = []
+
+    def _get(*a, **k):
+        calls.append(1)
+        return _Resp(False)
+
+    monkeypatch.setattr(cs.requests, "get", _get)
+    assert cs._nsw_epa_sites(-36.0805, 146.9158) is None
+    assert len(calls) == 1
+
+
 @pytest.mark.parametrize("func", EPA_FUNCS)
 def test_epa_malformed_feature_fails_closed(monkeypatch, func):
     monkeypatch.setattr(cs.requests, "get", lambda *a, **k: _Resp(True, {"features": [None]}))

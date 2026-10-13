@@ -217,6 +217,10 @@ def _vic_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict] |
         return None  # error must stay distinguishable from a clean register
 
 
+_NSW_EPA_ATTEMPTS = 3
+_NSW_EPA_RETRY_PAUSE_S = 0.3
+
+
 def _nsw_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict] | None:
     """Query NSW EPA Contaminated Land Notified Sites."""
     url = (
@@ -224,15 +228,30 @@ def _nsw_epa_sites(lat: float, lng: float, radius_m: int = 2000) -> list[dict] |
         "/EPA/Contaminated_land_notified_sites/MapServer/0/query"
     )
     west, south, east, north = _search_envelope(lat, lng, radius_m)
+    params = {
+        "geometry": f"{west},{south},{east},{north}",
+        "geometryType": "esriGeometryEnvelope",
+        "inSR": "4326",
+        "outSR": "4326",
+        "outFields": "SiteName,Longitude,Latitude,ManagementClass,ContaminationActivityType",
+        "f": "json",
+    }
     try:
-        resp = requests.get(url, params={
-            "geometry": f"{west},{south},{east},{north}",
-            "geometryType": "esriGeometryEnvelope",
-            "inSR": "4326",
-            "outSR": "4326",
-            "outFields": "SiteName,Longitude,Latitude,ManagementClass,ContaminationActivityType",
-            "f": "json",
-        }, timeout=TIMEOUT)
+        # The host drops connections at random: 9 of 20 calls on 2026-10-13
+        # ended in RemoteDisconnected within 0.3s while the other 11 returned
+        # the full register. A dropped connection costs almost nothing to
+        # repeat, so try up to three times. Timeouts are not retried: each
+        # one already spends the whole TIMEOUT.
+        for attempt in range(_NSW_EPA_ATTEMPTS):
+            try:
+                resp = requests.get(url, params=params, timeout=TIMEOUT)
+                break
+            except requests.Timeout:
+                raise
+            except requests.ConnectionError:
+                if attempt == _NSW_EPA_ATTEMPTS - 1:
+                    raise
+                _time.sleep(_NSW_EPA_RETRY_PAUSE_S)
         if not resp.ok:
             # a non-2xx is an outage, not an empty register: same semantics
             # as the except branch below (2026-08-10 fail-closed audit)

@@ -1,5 +1,6 @@
 """Contract tests for the preliminary BAL computation data and data guards."""
 
+import math
 from unittest import mock
 
 from property_scores.bal_prescreen import tables
@@ -355,7 +356,7 @@ def test_equal_bal_tie_prefers_closer_vegetation():
 def test_same_class_downslope_behind_is_not_shadowed_by_nearer_upslope():
     # Forest on BOTH sides of the site: north patch nearer (about 45 m) but
     # UPSLOPE (flat band, BAL-19), south patch farther (about 56 m) but
-    # DOWNSLOPE at 15 deg (d15 band, BAL-29). Per-class nearest-pixel logic
+    # DOWNSLOPE at 14 deg (d15 band, BAL-29). Per-class nearest-pixel logic
     # kept only the north pixel and reported BAL-19; every pixel must be
     # assessed with its own direction so the south side drives the result.
     site_lat, site_lng = -34.00155, 150.00155  # pixel (15, 15) centre
@@ -367,10 +368,13 @@ def test_same_class_downslope_behind_is_not_shadowed_by_nearer_upslope():
         for c in range(11, 22):
             classes[r][c] = 10  # south forest, 99 px, nearest about 56 m
 
+    # one tilted plane rising to the north at 14 deg: north forest upslope,
+    # south forest downslope, and both the site-to-veg fall and the slope
+    # under each south pixel read 14 deg (d15 band)
+    tan14 = math.tan(math.radians(14))
+
     def _elev(la, ln):
-        if abs(la - site_lat) < 1e-9:
-            return 100.0  # site
-        return 120.0 if la > site_lat else 80.0  # north above, south below
+        return 100.0 + tan14 * (la - site_lat) * 111320.0
 
     with mock.patch("property_scores.bushfire.score.landcover_grid",
                     return_value=_grid(classes)), \
@@ -398,7 +402,7 @@ def test_same_class_downslope_behind_is_not_shadowed_by_nearer_upslope():
 
 def test_range_upper_bound_takes_max_across_all_candidates():
     # Shrub 12 m upslope: point BAL-40, own harsh end BAL-40 (the worst
-    # candidate). Forest 49.5 m downslope 15 deg: point BAL-29 but its harsh
+    # candidate). Forest 49.5 m downslope 11.4 deg: point BAL-29 but its harsh
     # end (d20) is BAL-FZ. The range upper bound must be the maximum harsh
     # end across ALL candidates, not just the worst candidate's own.
     site_lat = -37.8
@@ -418,7 +422,8 @@ def test_range_upper_bound_takes_max_across_all_candidates():
     def _elev(la, ln):
         if abs(la - site_lat) < 1e-9:
             return 100.0
-        return 120.0 if la > site_lat else 80.0
+        # south forest 10 m below over 49.5 m: 11.4 deg, d15 band
+        return 120.0 if la > site_lat else 90.0
 
     with mock.patch(
             "property_scores.bal_prescreen.prescreen._nearest_vegetation",
@@ -432,3 +437,66 @@ def test_range_upper_bound_takes_max_across_all_candidates():
 
     assert result["indicative_bal"] == "BAL-40"  # shrub is still the point
     assert result["bal_range"] == ["BAL-29", "BAL-FZ"]
+
+
+def _bench_over_gully_elev(site_lat, *, bench_m, gully_deg, site_deg=0.0):
+    """Synthetic DEM: the site sits on a bench of half-width bench_m that is
+    tilted at site_deg; south of the bench the land falls at gully_deg."""
+    t_g = math.tan(math.radians(gully_deg))
+    t_s = math.tan(math.radians(site_deg))
+
+    def _elev(la, ln):
+        dy = (site_lat - la) * 111320.0  # metres south of the site
+        if dy <= bench_m:
+            return 100.0 - t_s * dy
+        return 100.0 - t_s * bench_m - t_g * (dy - bench_m)
+    return _elev
+
+
+def _south_forest_classes():
+    classes = [[50 for _ in range(30)] for _ in range(30)]
+    for r in range(17, 28):
+        for c in range(10, 21):
+            classes[r][c] = 10  # forest from about 20 m south, 121 px
+    return classes
+
+
+def test_flat_bench_over_steep_forest_gully_is_not_read_as_d5():
+    # Site on a flat bench (local site slope 2 deg); 15 m south the land drops
+    # into a forested gully at 18 deg. The fuel sits on 18 deg ground, so the
+    # d20 band applies. The site's local mean slope (2 deg) read it as d5.
+    site_lat, site_lng = -34.00155, 150.00155
+    elev = _bench_over_gully_elev(site_lat, bench_m=15, gully_deg=18)
+    with mock.patch("property_scores.bushfire.score.landcover_grid",
+                    return_value=_grid(_south_forest_classes())), \
+         mock.patch("property_scores.common.terrain.elevation", side_effect=elev):
+        result = bal_prescreen(
+            site_lat, site_lng, state="VIC", elevation=100, slope_deg=2,
+            overlay=(None, [], None, True, "state_service"),
+        )
+    slope = result["inputs"]["slope"]
+    assert slope["direction"] == "downslope"
+    assert slope["band"] == "d20"
+    assert 15 < slope["deg"] <= 20
+    assert result["indicative_bal"] == "BAL-FZ"
+
+
+def test_gentle_distant_slope_is_not_raised_by_steep_site_pitch():
+    # Site on a 14 deg pitch (site local slope 14 deg, d15 under the old
+    # rule). 5 m south it meets gentle 4 deg ground, and the forest from about
+    # 20 m sits on that gentle slope: the fall from the site to each forest
+    # pixel is at most about 7 deg, so the band is d10, not d15.
+    site_lat, site_lng = -34.00155, 150.00155
+    elev = _bench_over_gully_elev(site_lat, bench_m=5, gully_deg=4, site_deg=14)
+    with mock.patch("property_scores.bushfire.score.landcover_grid",
+                    return_value=_grid(_south_forest_classes())), \
+         mock.patch("property_scores.common.terrain.elevation", side_effect=elev):
+        result = bal_prescreen(
+            site_lat, site_lng, state="VIC", elevation=100, slope_deg=14,
+            overlay=(None, [], None, True, "state_service"),
+        )
+    slope = result["inputs"]["slope"]
+    assert slope["direction"] == "downslope"
+    assert slope["band"] in ("d5", "d10")
+    assert slope["band"] != "d15"
+    assert slope["deg"] < 10

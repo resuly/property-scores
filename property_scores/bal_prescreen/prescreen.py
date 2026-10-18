@@ -4,7 +4,7 @@ Pipeline (all inputs automated from a coordinate):
   1. State + FDI region        -> tables.resolve_fdi  (AS 3959 Table 2.1)
   2. Classify vegetation       -> ESA WorldCover 10m qualifying patches, all classes
   3. Distance to vegetation    -> geodesic distance per class to its nearest >=1 ha patch
-  4. Effective slope + sign    -> local DEM/5m-LiDAR slope + site-vs-veg elevation
+  4. Effective slope + sign    -> per pixel: max(site-to-veg fall, slope under the veg)
   5. Look up indicative BAL    -> tables.lookup_bal, worst across veg types
   6. Confidence band           -> vary formation (Forest<->Woodland) and slope
   7. Official overlay check    -> reuse bushfire overlay as an independent cross-check
@@ -224,14 +224,53 @@ def _slope_magnitude(lat, lng, *, slope_deg=None) -> tuple[float | None, bool]:
     return slope["mean_slope_deg"], True
 
 
-def _pixel_slope(mag, measured, e_site, e_veg) -> dict:
+# half-baseline of the central-difference local slope under one vegetation
+# pixel: one WorldCover pixel either side (~10 m), so the slope describes the
+# ground the fuel sits on, not the 250 m window around the site.
+PIXEL_SLOPE_HALF_M = 10.0
+
+
+def _pixel_local_slope(plat, plng, elev_fn) -> float | None:
+    """Local terrain slope (deg) under one vegetation pixel, or None.
+
+    Central differences over +/- PIXEL_SLOPE_HALF_M east-west and north-south.
+    None when any of the four samples falls outside DEM coverage.
+    """
+    if plat is None or plng is None:
+        return None
+    h = PIXEL_SLOPE_HALF_M
+    dlat = h / 111320.0
+    dlng = h / (111320.0 * max(math.cos(math.radians(plat)), 0.1))
+    n = elev_fn(plat + dlat, plng)
+    s = elev_fn(plat - dlat, plng)
+    e = elev_fn(plat, plng + dlng)
+    w = elev_fn(plat, plng - dlng)
+    if None in (n, s, e, w):
+        return None
+    gy = (n - s) / (2 * h)
+    gx = (e - w) / (2 * h)
+    return math.degrees(math.atan(math.hypot(gx, gy)))
+
+
+def _pixel_slope(mag, measured, e_site, e_veg, *, dist_m=None,
+                 local_deg=None) -> dict:
     """Effective slope for ONE vegetation pixel: magnitude + direction.
 
     Downslope (site above the vegetation, land falling away toward the veg) is
     the more dangerous case in AS 3959. Direction comes from the elevation
     difference between the site and THIS pixel, so vegetation on opposite
     sides of the site gets its own direction instead of inheriting the nearest
-    pixel's. Returns {band, deg, direction, basis, measured}.
+    pixel's.
+
+    Magnitude is also per pixel when both elevations are known:
+    max(atan(drop / dist_m), local_deg), where drop is the site-to-pixel fall
+    and local_deg is the terrain slope under the pixel itself. Using the
+    site's local mean slope instead under-read a flat bench above a steep
+    forested gully (d5 where the land under the fuel is >15 deg) and over-read
+    a gentle distant slope when the site itself sat on a local pitch. When
+    local_deg is unmeasurable the site magnitude stands in for it
+    (conservative). When the direction cannot be resolved, the site magnitude
+    is reported as before. Returns {band, deg, direction, basis, measured}.
     """
     if not measured:
         return {"band": "flat", "deg": None, "direction": "unknown",
@@ -244,8 +283,21 @@ def _pixel_slope(mag, measured, e_site, e_veg) -> dict:
         drop = e_site - e_veg
         if drop > 2:  # site meaningfully above the vegetation -> downslope
             direction = "downslope"
+            parts = []
+            cands = []
+            if dist_m is not None and dist_m > 0:
+                chord = math.degrees(math.atan(drop / dist_m))
+                cands.append(chord)
+                parts.append(f"site-to-veg {round(chord, 1)} deg over {round(dist_m)} m")
+            under = local_deg if local_deg is not None else mag
+            if under is not None:
+                cands.append(under)
+                parts.append(f"under-veg {round(under, 1)} deg" if local_deg is not None
+                             else f"under-veg not measurable, site {under} deg")
+            mag = round(max(cands), 1) if cands else mag
             basis = (f"site {round(e_site)} m is {round(drop)} m above the "
-                     f"vegetation at {round(e_veg)} m -> downslope; slope {mag} deg")
+                     f"vegetation at {round(e_veg)} m -> downslope; slope {mag} deg "
+                     f"(max of {', '.join(parts)})")
         else:
             basis = (f"site {round(e_site)} m vs vegetation {round(e_veg)} m "
                      f"(drop {round(drop)} m) -> flat/upslope; slope {mag} deg")
@@ -382,7 +434,13 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
         e_veg = None
         if e_site is not None and pix["veg_lat"] is not None:
             e_veg = terrain.elevation(pix["veg_lat"], pix["veg_lng"])
-        c_slope = _pixel_slope(mag, measured, e_site, e_veg)
+        local_deg = None
+        if e_veg is not None and e_site is not None and e_site - e_veg > 2:
+            # only downslope pixels use a magnitude; skip DEM reads otherwise
+            local_deg = _pixel_local_slope(pix["veg_lat"], pix["veg_lng"],
+                                           terrain.elevation)
+        c_slope = _pixel_slope(mag, measured, e_site, e_veg, dist_m=c_dist,
+                               local_deg=local_deg)
         # GA's Method 1 implementation excludes grassland at >=50 m for every
         # FDI except 50. It still assesses closer grassland; the former
         # implementation incorrectly discarded all grassland in those

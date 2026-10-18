@@ -1,10 +1,21 @@
 #!/usr/bin/env python3
-"""Build au_rail_stops.parquet from GTFS feeds (train + tram stops only).
+"""Build au_rail_stops.parquet from GTFS feeds (train + metro stops only).
 
-Downloads GTFS zips from each state's transit authority, extracts stops.txt,
-filters to rail/tram stops (route_type 0, 1, 2), and writes a single parquet.
+Downloads GTFS zips from each state's transit authority and keeps a stop only
+when routes.txt -> trips.txt -> stop_times.txt shows it is actually served by
+a rail route_type. VIC ships a nested zip (one inner GTFS per mode); every
+inner zip is resolved against its own routes/trips/stop_times, so a bus stop
+named "... Railway Station" or a "Rail Replacement Bus Stop" no longer passes
+on its name.
 
-Output columns: stop_id, stop_name, lat, lng, route_type, state
+Trams are deliberately excluded: the walkability tram_bus scenario reads tram
+stops from au_bus_stops.parquet (scripts/build_bus_stops.py, also route_type
+based), while rail_stops_near() labels every row here "train_station". Keeping
+tram here counted one tram stop as a train station too.
+
+Output columns: stop_id, stop_name, lat, lng, route_type, mode, state
+  route_type: the GTFS value of the rail route serving the stop (train wins
+              over metro when both serve it), mode: train | metro
 """
 import csv
 import io
@@ -12,7 +23,6 @@ import sys
 import zipfile
 from pathlib import Path
 from urllib.request import Request, urlopen
-import base64, os
 
 SOURCES = {
     "vic": "http://data.ptv.vic.gov.au/downloads/gtfs.zip",
@@ -30,20 +40,79 @@ def _dict_reader(f):
     return rdr
 
 
-RAIL_TYPES = {0, 1, 2}  # tram, metro, train
+def _mode_for(route_type: int) -> str | None:
+    """GTFS route_type -> rail mode, or None for tram/bus/coach/ferry.
+
+    Basic types 2 (rail) and 1 (subway/metro) plus the extended families
+    100-117 (railway services) and 400-405 (urban railway / metro), which
+    Sydney Metro uses (401). Tram (0, 900) and every bus type, including
+    714 rail replacement bus, are not rail.
+    """
+    if route_type == 2 or 100 <= route_type <= 117:
+        return "train"
+    if route_type == 1 or 400 <= route_type <= 405:
+        return "metro"
+    return None
 
 
-def _read_stops(zf, state):
-    """Extract stops from a GTFS zip, optionally nested (VIC has inner zips)."""
-    stops = []
-    # Check for stops.txt directly
+def _better(a, b):
+    """Pick the (route_type, mode) to report when two rail modes serve a stop."""
+    if b is None:
+        return a
+    return a if a[1] == "train" or b[1] != "train" else b
+
+
+def _extract(zf: zipfile.ZipFile, state: str) -> list[dict]:
+    """Rail stops from one self-consistent GTFS (routes+trips+stop_times+stops)."""
     names = zf.namelist()
-    stop_files = [n for n in names if n.endswith("stops.txt")]
-    inner_zips = [n for n in names if n.endswith(".zip")]
 
-    for sf in stop_files:
+    def _open(suffix):
+        # only this zip's own members; nested zips are handled by _collect
+        return [n for n in names if n.endswith(suffix)]
+
+    route_rail: dict[str, tuple] = {}
+    for rf in _open("routes.txt"):
+        with zf.open(rf) as f:
+            for row in _dict_reader(f):
+                try:
+                    rt = int(row.get("route_type", -1))
+                except (ValueError, TypeError):
+                    continue
+                mode = _mode_for(rt)
+                if mode:
+                    route_rail[row["route_id"]] = (rt, mode)
+    if not route_rail:
+        return []
+
+    trip_rail: dict[str, tuple] = {}
+    for tf in _open("trips.txt"):
+        with zf.open(tf) as f:
+            for row in _dict_reader(f):
+                r = route_rail.get(row.get("route_id"))
+                if r:
+                    trip_rail[row["trip_id"]] = r
+
+    stop_rail: dict[str, tuple] = {}
+    for stf in _open("stop_times.txt"):
+        with zf.open(stf) as f:
+            for row in _dict_reader(f):
+                r = trip_rail.get(row.get("trip_id"))
+                if r:
+                    sid = row.get("stop_id", "").strip()
+                    stop_rail[sid] = _better(r, stop_rail.get(sid))
+    if not stop_rail:
+        return []
+
+    out = []
+    for sf in _open("stops.txt"):
         with zf.open(sf) as f:
             for row in _dict_reader(f):
+                sid = row.get("stop_id", "").strip()
+                r = stop_rail.get(sid)
+                if not r:
+                    continue
+                if row.get("location_type", "0") not in ("", "0", "1"):
+                    continue
                 try:
                     lat = float(row.get("stop_lat", 0))
                     lng = float(row.get("stop_lon", 0))
@@ -51,64 +120,37 @@ def _read_stops(zf, state):
                     continue
                 if lat == 0 or lng == 0:
                     continue
-                name = row.get("stop_name", "").strip()
-                sid = row.get("stop_id", "").strip()
-                loc_type = row.get("location_type", "0")
-                if loc_type not in ("", "0", "1"):
-                    continue
-                stops.append({
+                out.append({
                     "stop_id": f"{state}:{sid}",
-                    "stop_name": name,
-                    "lat": lat,
-                    "lng": lng,
-                    "state": state,
+                    "stop_name": row.get("stop_name", "").strip(),
+                    "lat": lat, "lng": lng,
+                    "route_type": r[0], "mode": r[1], "state": state,
                 })
+    return out
 
-    for iz in inner_zips:
+
+def _collect(zf: zipfile.ZipFile, state: str) -> list[dict]:
+    """Extract from this zip, then recurse into nested zips (VIC per-mode)."""
+    out = _extract(zf, state)
+    for iz in [n for n in zf.namelist() if n.endswith(".zip")]:
         try:
-            with zf.open(iz) as inner_f:
-                inner_data = io.BytesIO(inner_f.read())
-                with zipfile.ZipFile(inner_data) as inner_zf:
-                    stops.extend(_read_stops(inner_zf, state))
+            with zf.open(iz) as f:
+                with zipfile.ZipFile(io.BytesIO(f.read())) as izf:
+                    out.extend(_collect(izf, state))
         except Exception as e:
             print(f"  skip inner zip {iz}: {e}", file=sys.stderr)
-    return stops
+    return out
 
 
-def _filter_rail_stops(stops, zf, state):
-    """Filter stops to only those served by rail/tram routes."""
-    names = zf.namelist()
-    routes_files = [n for n in names if n.endswith("routes.txt")]
-    trips_files = [n for n in names if n.endswith("trips.txt")]
-    stop_times_files = [n for n in names if n.endswith("stop_times.txt")]
-
-    rail_route_ids = set()
-    for rf in routes_files:
-        with zf.open(rf) as f:
-            for row in _dict_reader(f):
-                rt = int(row.get("route_type", -1))
-                if rt in RAIL_TYPES:
-                    rail_route_ids.add(row["route_id"])
-
-    if not rail_route_ids:
-        return []
-
-    rail_trip_ids = set()
-    for tf in trips_files:
-        with zf.open(tf) as f:
-            for row in _dict_reader(f):
-                if row.get("route_id") in rail_route_ids:
-                    rail_trip_ids.add(row["trip_id"])
-
-    rail_stop_ids = set()
-    for stf in stop_times_files:
-        with zf.open(stf) as f:
-            for row in _dict_reader(f):
-                if row.get("trip_id") in rail_trip_ids:
-                    rail_stop_ids.add(row["stop_id"])
-
-    stop_id_set = {f"{state}:{sid}" for sid in rail_stop_ids}
-    return [s for s in stops if s["stop_id"] in stop_id_set]
+def _dedup(stops: list[dict]) -> list[dict]:
+    """One row per rounded coordinate; a train label wins over metro."""
+    best: dict[tuple, dict] = {}
+    for s in stops:
+        key = (round(s["lat"], 4), round(s["lng"], 4))
+        prev = best.get(key)
+        if prev is None or (s["mode"] == "train" and prev["mode"] != "train"):
+            best[key] = s
+    return list(best.values())
 
 
 def main():
@@ -122,32 +164,15 @@ def main():
             resp = urlopen(req, timeout=60)
             data = io.BytesIO(resp.read())
             with zipfile.ZipFile(data) as zf:
-                stops = _read_stops(zf, state)
-                print(f"  {len(stops)} total stops", file=sys.stderr)
-                if state == "vic":
-                    # VIC has nested zips, harder to filter by route type
-                    # Keep stops with "Station" or "Stop" in name as heuristic
-                    rail = [s for s in stops if "station" in s["stop_name"].lower()
-                            or "railway" in s["stop_name"].lower()]
-                    print(f"  {len(rail)} rail/station stops (name filter)", file=sys.stderr)
-                else:
-                    rail = _filter_rail_stops(stops, zf, state)
-                    print(f"  {len(rail)} rail stops (GTFS route_type filter)", file=sys.stderr)
-                    if not rail:
-                        rail = [s for s in stops if "station" in s["stop_name"].lower()]
-                        print(f"  fallback: {len(rail)} by name filter", file=sys.stderr)
-                all_stops.extend(rail)
+                rail = _collect(zf, state)
+            # no name-based fallback: an empty result means the feed changed
+            # shape and must be looked at, not papered over with "station"
+            print(f"  {len(rail)} rail stops (GTFS route_type)", file=sys.stderr)
+            all_stops.extend(rail)
         except Exception as e:
             print(f"  FAILED: {e}", file=sys.stderr)
 
-    # Deduplicate by rounding lat/lng to 4 decimals
-    seen = set()
-    deduped = []
-    for s in all_stops:
-        key = (round(s["lat"], 4), round(s["lng"], 4))
-        if key not in seen:
-            seen.add(key)
-            deduped.append(s)
+    deduped = _dedup(all_stops)
 
     print(f"\nTotal: {len(all_stops)} raw, {len(deduped)} after dedup", file=sys.stderr)
     if not deduped:
@@ -160,6 +185,8 @@ def main():
         "stop_name": [s["stop_name"] for s in deduped],
         "lat": [s["lat"] for s in deduped],
         "lng": [s["lng"] for s in deduped],
+        "route_type": [s["route_type"] for s in deduped],
+        "mode": [s["mode"] for s in deduped],
         "state": [s["state"] for s in deduped],
     })
     db.execute(f"COPY tbl TO '{out_path}' (FORMAT PARQUET, COMPRESSION ZSTD)")

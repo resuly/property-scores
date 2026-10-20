@@ -1,0 +1,2 @@
+﻿route_id,service_id,trip_id,shape_id,trip_headsign,direction_id,block_id,wheelchair_accessible
+"aus:vic:vic-03-96:","T2","03-96--8-T2-146647165","3-96-vpt-8.3.H","East Brunswick","0","","1"

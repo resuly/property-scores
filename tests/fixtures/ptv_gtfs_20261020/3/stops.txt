@@ -1,0 +1,2 @@
+﻿stop_id,stop_name,stop_lat,stop_lon,stop_url,location_type,parent_station,wheelchair_boarding,level_id
+"18187","Southern Cross Railway Station/Spencer St #122","-37.81833799","144.95377437","https://transport.vic.gov.au/stop/2497/?utm_source=open_data_click_stop&utm_medium=open_data_stop_click&utm_campaign=open_data_click","","","0","Level 0"

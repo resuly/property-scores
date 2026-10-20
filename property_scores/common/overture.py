@@ -961,12 +961,13 @@ RAIL_STOPS_FILE = "au_rail_stops.parquet"
 
 def rail_stops_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
                     radius_m: int = 1500, *, source: str | None = None) -> list[tuple]:
-    """GTFS rail/metro/tram stations near a point: same 5-tuple shape.
+    """GTFS train/metro stations near a point: same 5-tuple shape.
 
     GTFS only contains stops with CURRENT service, so this kills both failure
     modes of the Overture train POIs at once (2026-06-11 audit): Perth's
     Morley-Ellenbrook line (opened 2024) was missing, while Newcastle
-    stations closed in 2014 still served as "nearest train". category is
+    stations closed in 2014 still served as "nearest train". Trams come from
+    au_bus_stops.parquet (transit_stops_near) instead. category is
     "train_station" so rows merge straight into the POI stream.
     """
     path = source or data_path(RAIL_STOPS_FILE)

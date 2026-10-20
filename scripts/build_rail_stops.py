@@ -5,8 +5,9 @@ Downloads GTFS zips from each state's transit authority and keeps a stop only
 when routes.txt -> trips.txt -> stop_times.txt shows it is actually served by
 a rail route_type. VIC ships a nested zip (one inner GTFS per mode); every
 inner zip is resolved against its own routes/trips/stop_times, so a bus stop
-named "... Railway Station" or a "Rail Replacement Bus Stop" no longer passes
-on its name.
+named "... Railway Station" no longer passes on its name. Rail replacement
+bus stops ride rail-typed routes in the PTV feed, so they are dropped on the
+stop row instead (platform_code "Replacement bus", see _is_replacement_bus).
 
 Trams are deliberately excluded: the walkability tram_bus scenario reads tram
 stops from au_bus_stops.parquet (scripts/build_bus_stops.py, also route_type
@@ -53,6 +54,19 @@ def _mode_for(route_type: int) -> str | None:
     if route_type == 1 or 400 <= route_type <= 405:
         return "metro"
     return None
+
+
+def _is_replacement_bus(row) -> bool:
+    """True for a rail replacement bus stop listed inside a rail feed.
+
+    PTV (2026-10 feed) hangs replacement buses on their own rail-typed routes
+    (route vic-02-LIL-R, route_type 400, short name "Replacement Bus"), so
+    route_type cannot tell them apart. The stop row can: platform_code is
+    "Replacement bus" and the name ends "Rail Replacement Bus Stop".
+    """
+    if (row.get("platform_code") or "").strip().lower() == "replacement bus":
+        return True
+    return "replacement bus" in (row.get("stop_name") or "").lower()
 
 
 def _better(a, b):
@@ -112,6 +126,8 @@ def _extract(zf: zipfile.ZipFile, state: str) -> list[dict]:
                 if not r:
                     continue
                 if row.get("location_type", "0") not in ("", "0", "1"):
+                    continue
+                if _is_replacement_bus(row):
                     continue
                 try:
                     lat = float(row.get("stop_lat", 0))

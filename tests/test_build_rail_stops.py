@@ -1,16 +1,18 @@
 """Rail stop extraction keys on GTFS route_type, not on stop names.
 
-Fixture rows follow the real PTV GTFS layout: an outer gtfs.zip holding one
-inner google_transit.zip per mode folder (2 = metro train, 3 = metro tram,
-4 = metro bus), quoted CSV with a UTF-8 BOM. Stop ids, names and coordinates
-are the real PTV rows already in au_rail_stops.parquet that the old
-name heuristic let through.
+The VIC fixture is real bytes cut from the PTV gtfs.zip downloaded 2026-10-20
+(tests/fixtures/ptv_gtfs_20261020/{2,3,4}: metro train, tram, bus). Header
+lines keep their UTF-8 BOM, rows keep PTV's quoting and CRLF endings; only
+rows not needed for the cases below were dropped. The fixture is rezipped in
+the real nested layout (outer zip with one N/google_transit.zip per mode).
 """
 
 import importlib.util
 import io
 import zipfile
 from pathlib import Path
+
+PTV_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "ptv_gtfs_20261020"
 
 
 def _load():
@@ -43,54 +45,45 @@ def _gtfs(routes, trips, stop_times, stops) -> bytes:
 
 
 def _ptv_nested() -> zipfile.ZipFile:
-    train = _gtfs(
-        routes=['"2-BEL-mjp-1","1","Belgrave","Belgrave - City","2","094C8D","FFFFFF"',
-                # rail replacement buses ship inside the TRAIN feed
-                '"2-RRB-mjp-1","1","Replacement Bus","Arden - Parkville","714","FF8200","000000"'],
-        trips=['"2-BEL-mjp-1","T0","1.T0.2-BEL-mjp-1.1.H","2-BEL-mjp-1.1.H","City","0"',
-               '"2-RRB-mjp-1","T0","9.T0.2-RRB-mjp-1.1.H","2-RRB-mjp-1.1.H","Parkville","0"'],
-        stop_times=['"1.T0.2-BEL-mjp-1.1.H","05:01:00","05:01:00","12206","1","","0","0","0"',
-                    '"9.T0.2-RRB-mjp-1.1.H","06:10:00","06:10:00","26323","1","","0","0","0"'],
-        stops=['"12206","East Camberwell Station","-37.82584107","145.06824844"',
-               '"26323","Arden Railway Station Rail Replacement Bus Stop",'
-               '"-37.80128591","144.9417746"'],
-    )
-    tram = _gtfs(
-        routes=['"3-16-mjp-1","1","16","Melbourne University - Kew via St Kilda Beach",'
-                '"0","78BE20","000000"'],
-        trips=['"3-16-mjp-1","T0","3.T0.3-16-mjp-1.1.H","3-16-mjp-1.1.H","Kew","0"'],
-        stop_times=['"3.T0.3-16-mjp-1.1.H","05:30:00","05:30:00","20526","1","","0","0","0"'],
-        stops=['"20526","Malvern Railway Station/Glenferrie Rd #53",'
-               '"-37.86526359","145.02777434"'],
-    )
-    bus = _gtfs(
-        routes=['"4-903-mjp-1","4","903","Altona - Mordialloc (SMARTBUS Service)",'
-                '"3","FF8200","FFFFFF"'],
-        trips=['"4-903-mjp-1","T0","4.T0.4-903-mjp-1.1.H","4-903-mjp-1.1.H","Mordialloc","0"'],
-        stop_times=['"4.T0.4-903-mjp-1.1.H","05:40:00","05:40:00","19648","1","","0","0","0"'],
-        stops=['"19648","Box Hill Bus Station/Station St","-37.8198278","145.12214065"'],
-    )
     outer = io.BytesIO()
     with zipfile.ZipFile(outer, "w") as z:
-        z.writestr("2/google_transit.zip", train)
-        z.writestr("3/google_transit.zip", tram)
-        z.writestr("4/google_transit.zip", bus)
+        for mode_dir in sorted(PTV_FIXTURE.iterdir()):
+            inner = io.BytesIO()
+            with zipfile.ZipFile(inner, "w") as iz:
+                for txt in sorted(mode_dir.glob("*.txt")):
+                    iz.writestr(txt.name, txt.read_bytes())
+            z.writestr(f"{mode_dir.name}/google_transit.zip", inner.getvalue())
     outer.seek(0)
     return zipfile.ZipFile(outer)
+
+
+def test_fixture_is_raw_ptv_bytes():
+    stops = (PTV_FIXTURE / "2" / "stops.txt").read_bytes()
+    assert stops.startswith(b"\xef\xbb\xbfstop_id,")
+    assert b'"Replacement bus"\r\n' in stops
 
 
 def test_vic_nested_feed_keeps_only_rail_served_stops():
     with _ptv_nested() as zf:
         rows = brs._dedup(brs._collect(zf, "vic"))
     by_id = {r["stop_id"]: r for r in rows}
-    # only the real train station survives; the bus stop named "... Station",
-    # the tram stop named "... Railway Station" and the rail replacement bus
-    # stop inside the train feed are all out
-    assert set(by_id) == {"vic:12206"}
-    east = by_id["vic:12206"]
-    assert east["route_type"] == 2
-    assert east["mode"] == "train"
-    assert east["stop_name"] == "East Camberwell Station"
+    # Box Hill platform (train route 400) survives. Dropped: the Box Hill rail
+    # replacement bus stop, which PTV serves from route aus:vic:vic-02-LIL-R:
+    # with route_type 400 just like the trains; the tram stop named
+    # "Southern Cross Railway Station/..."; the bus stop "Box Hill Bus Station".
+    assert set(by_id) == {"vic:12221"}
+    box = by_id["vic:12221"]
+    assert box["route_type"] == 400
+    assert box["stop_name"] == "Box Hill Station"
+
+
+def test_replacement_bus_flag_reads_platform_code_or_name():
+    # each signal alone is enough; the 2026-10 PTV rows carry both
+    assert brs._is_replacement_bus({"stop_name": "Box Hill", "platform_code": "Replacement bus"})
+    assert brs._is_replacement_bus({"stop_name": "Box Hill Rail Replacement Bus Stop",
+                                    "platform_code": ""})
+    assert not brs._is_replacement_bus({"stop_name": "Box Hill Station", "platform_code": "1"})
+    assert not brs._is_replacement_bus({"stop_name": "Box Hill Station"})
 
 
 def test_flat_feed_reads_extended_metro_and_drops_light_rail():

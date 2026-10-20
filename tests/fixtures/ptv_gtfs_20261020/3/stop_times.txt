@@ -1,0 +1,2 @@
+﻿trip_id,arrival_time,departure_time,stop_id,stop_sequence,stop_headsign,pickup_type,drop_off_type,shape_dist_traveled
+"03-96--8-T2-146647165","02:48:00","02:48:00","18187","17","","0","0","8166.06"

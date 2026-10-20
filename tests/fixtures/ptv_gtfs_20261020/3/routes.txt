@@ -1,0 +1,2 @@
+﻿route_id,agency_id,route_short_name,route_long_name,route_type,route_color,route_text_color
+"aus:vic:vic-03-96:","","96","East Brunswick - St Kilda Beach","0","C6007E","FFFFFF"

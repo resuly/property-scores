@@ -1,0 +1,2 @@
+﻿trip_id,arrival_time,departure_time,stop_id,stop_sequence,stop_headsign,pickup_type,drop_off_type,shape_dist_traveled
+"21-201--1-MF10-1","07:00:00","07:00:00","19639","1","","0","0","0.00"

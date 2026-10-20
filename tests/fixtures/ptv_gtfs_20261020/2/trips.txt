@@ -1,0 +1,3 @@
+﻿route_id,service_id,trip_id,shape_id,trip_headsign,direction_id,block_id,wheelchair_accessible,bikes_allowed
+"aus:vic:vic-02-BEG:","T2_2","02-BEG--1-T2-3000","2-BEG-vpt-1.1.R","Flinders Street","1","11222","1","1"
+"aus:vic:vic-02-LIL-R:","T5+WD07","02-LIL-R-71-T5_WD07-BL0000","2-LIL-R-vpt-71.1.R","Parliament","1","","1","2"

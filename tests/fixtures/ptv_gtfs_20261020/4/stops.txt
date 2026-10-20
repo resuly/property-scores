@@ -1,0 +1,2 @@
+﻿stop_id,stop_code,stop_name,stop_lat,stop_lon,stop_url,location_type,parent_station,wheelchair_boarding,level_id,platform_code
+"19639","19639","Box Hill Bus Station/Station St","-37.81924497","145.12232582","https://transport.vic.gov.au/stop/14035/?utm_source=open_data_click_stop&utm_medium=open_data_stop_click&utm_campaign=open_data_click","","","0","Level 1","Bay 13"

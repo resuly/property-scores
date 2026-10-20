@@ -1,0 +1,3 @@
+﻿stop_id,stop_name,stop_lat,stop_lon,stop_url,location_type,parent_station,wheelchair_boarding,level_id,platform_code
+"12221","Box Hill Station","-37.81934528","145.12183478","https://transport.vic.gov.au/stop/1026/?utm_source=open_data_click_stop&utm_medium=open_data_stop_click&utm_campaign=open_data_click","","vic:rail:BOX","1","Level -1","2"
+"26124","Box Hill Rail Replacement Bus Stop","-37.81807366","145.12177613","https://transport.vic.gov.au/stop/1026/?utm_source=open_data_click_stop&utm_medium=open_data_stop_click&utm_campaign=open_data_click","","vic:rail:BOX","1","Level 0","Replacement bus"

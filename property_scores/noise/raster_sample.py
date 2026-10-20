@@ -67,6 +67,24 @@ def sample(path, lat, lng, default=np.nan):
     return float(v)
 
 
+def pixel_size_m(path, lat):
+    """Ground size in metres of one raster pixel near lat (the larger axis).
+
+    Read from the dataset transform; EPSG:4326 degrees are converted with
+    111,320 m per degree (cos(lat) on the east-west axis). None when the
+    raster cannot be opened.
+    """
+    src = _src(path)
+    if src is None:
+        return None
+    rx, ry = abs(src.transform.a), abs(src.transform.e)
+    if src.crs is None or src.crs.to_epsg() == 4326:
+        import math
+        rx *= 111_320.0 * max(math.cos(math.radians(lat)), 0.1)
+        ry *= 111_320.0
+    return float(max(rx, ry))
+
+
 def window_stats(path, lat, lng, radius_m, categorical=False, classes=None,
                  cos_correct=False):
     """Window stats in a metre radius around the point.

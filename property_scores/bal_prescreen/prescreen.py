@@ -224,21 +224,33 @@ def _slope_magnitude(lat, lng, *, slope_deg=None) -> tuple[float | None, bool]:
     return slope["mean_slope_deg"], True
 
 
-# half-baseline of the central-difference local slope under one vegetation
-# pixel: one WorldCover pixel either side (~10 m), so the slope describes the
-# ground the fuel sits on, not the 250 m window around the site.
+# minimum half-baseline of the central-difference local slope under one
+# vegetation pixel: one WorldCover pixel either side (~10 m), so the slope
+# describes the ground the fuel sits on, not the 250 m window around the site.
+# The real half-baseline is never below the elevation raster's own pixel size:
+# elevation reads take the nearest pixel, so on the 30 m DEM a +/-10 m offset
+# lands in the same cell about 1/3 of the time per axis and reads 0 deg.
 PIXEL_SLOPE_HALF_M = 10.0
 
 
-def _pixel_local_slope(plat, plng, elev_fn) -> float | None:
+def _pixel_local_slope(plat, plng, elev_fn, res_fn=None) -> float | None:
     """Local terrain slope (deg) under one vegetation pixel, or None.
 
-    Central differences over +/- PIXEL_SLOPE_HALF_M east-west and north-south.
-    None when any of the four samples falls outside DEM coverage.
+    Central differences east-west and north-south over a half-baseline of
+    max(PIXEL_SLOPE_HALF_M, res_fn(plat, plng)), res_fn giving the elevation
+    raster's pixel size in metres. None (the caller then falls back to the
+    site slope, the conservative side) when the resolution is unknown or any
+    of the four samples falls outside DEM coverage.
     """
     if plat is None or plng is None:
         return None
-    h = PIXEL_SLOPE_HALF_M
+    if res_fn is None:
+        from property_scores.common import terrain
+        res_fn = terrain.resolution_m
+    res = res_fn(plat, plng)
+    if res is None or not res > 0:
+        return None
+    h = max(PIXEL_SLOPE_HALF_M, float(res))
     dlat = h / 111320.0
     dlng = h / (111320.0 * max(math.cos(math.radians(plat)), 0.1))
     n = elev_fn(plat + dlat, plng)
@@ -438,7 +450,7 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
         if e_veg is not None and e_site is not None and e_site - e_veg > 2:
             # only downslope pixels use a magnitude; skip DEM reads otherwise
             local_deg = _pixel_local_slope(pix["veg_lat"], pix["veg_lng"],
-                                           terrain.elevation)
+                                           terrain.elevation, terrain.resolution_m)
         c_slope = _pixel_slope(mag, measured, e_site, e_veg, dist_m=c_dist,
                                local_deg=local_deg)
         # GA's Method 1 implementation excludes grassland at >=50 m for every

@@ -3,13 +3,28 @@
 import math
 from unittest import mock
 
+import pytest
+
 from property_scores.bal_prescreen import tables
 from property_scores.bal_prescreen.prescreen import (
     _bal_rank,
     _grassland_excluded,
     _nearest_vegetation,
+    _pixel_local_slope,
     bal_prescreen,
 )
+from property_scores.common import terrain as _terrain
+
+_REAL_RESOLUTION_M = _terrain.resolution_m  # before the autouse fixture patches it
+
+
+@pytest.fixture(autouse=True)
+def _lidar_resolution():
+    # the synthetic elevation functions below are continuous, so tests read
+    # them as 5 m LiDAR (half-baseline stays at the 10 m minimum); the 30 m
+    # DEM cases at the bottom override this with a real raster
+    with mock.patch("property_scores.common.terrain.resolution_m", return_value=5.0):
+        yield
 
 
 def test_all_australian_fdi_tables_are_exact_not_substituted():
@@ -500,3 +515,82 @@ def test_gentle_distant_slope_is_not_raised_by_steep_site_pitch():
     assert slope["band"] in ("d5", "d10")
     assert slope["band"] != "d15"
     assert slope["deg"] < 10
+
+
+def _dem_30m(tmp_path, *, slope_deg, lat0=-34.0, lng0=150.0, size=40):
+    """1 arc-second (~30 m) EPSG:4326 GeoTIFF that falls south at slope_deg.
+
+    Same layout as the DEM-H tiles behind data/global/dem.vrt, so the real
+    shared sampler reads it with nearest-pixel semantics.
+    """
+    rasterio = pytest.importorskip("rasterio")
+    import numpy as np
+    from rasterio.transform import from_origin
+
+    px = 1.0 / 3600.0
+    t = math.tan(math.radians(slope_deg))
+    rows = np.arange(size)[:, None] * np.ones((1, size))
+    arr = (500.0 - t * rows * px * 111320.0).astype("float32")
+    path = str(tmp_path / "dem30.tif")
+    with rasterio.open(path, "w", driver="GTiff", width=size, height=size, count=1,
+                       dtype="float32", crs="EPSG:4326",
+                       transform=from_origin(lng0, lat0, px, px)) as dst:
+        dst.write(arr, 1)
+    # a point at the centre of pixel (row 20, col 20): +/-10 m stays inside it
+    clat = lat0 - (20 + 0.5) * px
+    clng = lng0 + (20 + 0.5) * px
+    return path, clat, clng
+
+
+def test_local_slope_on_30m_dem_is_not_zero(tmp_path):
+    # 2026-10-20: a +/-10 m baseline on the 30 m DEM sampled the same cell on
+    # both sides and read 0 deg under forest on a 12 deg slope. The baseline
+    # now comes from the dataset transform (~31 m here).
+    from property_scores.common import lidar_local, terrain
+
+    path, clat, clng = _dem_30m(tmp_path, slope_deg=12)
+    with mock.patch.object(terrain, "DEM_VRT", path), \
+         mock.patch.object(terrain, "available", return_value=True), \
+         mock.patch.object(terrain, "covered", return_value=True), \
+         mock.patch.object(lidar_local, "elevation", return_value=None):
+        res = _REAL_RESOLUTION_M(clat, clng)
+        deg = _pixel_local_slope(clat, clng, terrain.elevation, _REAL_RESOLUTION_M)
+    assert 25 < res < 35
+    assert deg is not None
+    assert 10 < deg < 14
+
+
+def test_local_slope_is_none_not_zero_when_a_sample_is_missing():
+    # one of the four samples outside DEM coverage -> None, so the caller falls
+    # back to the site slope; never a 0 deg (or a fall from None-as-0) reading
+    plane = lambda la, ln: 100.0 - (-34.0 - la) * 111320.0 * 0.2  # noqa: E731
+    for missing in range(4):
+        calls = []
+
+        def elev(la, ln, _m=missing):
+            calls.append(1)
+            return None if len(calls) - 1 == _m else plane(la, ln)
+        assert _pixel_local_slope(-34.0, 150.0, elev, lambda la, ln: 30.0) is None
+    # unknown raster resolution is also "not measurable", not a 10 m guess
+    assert _pixel_local_slope(-34.0, 150.0, plane, lambda la, ln: None) is None
+    assert _pixel_local_slope(-34.0, 150.0, plane, lambda la, ln: 30.0) == pytest.approx(
+        math.degrees(math.atan(0.2)), abs=0.01)
+
+
+def test_unmeasurable_local_slope_falls_back_to_site_slope():
+    # the flat-bench gully again, but the raster resolution cannot be read:
+    # the under-veg slope is reported as not measurable and the site slope
+    # stands in for it (the documented fallback), not a 0 deg reading
+    site_lat, site_lng = -34.00155, 150.00155
+    elev = _bench_over_gully_elev(site_lat, bench_m=15, gully_deg=18)
+    with mock.patch("property_scores.bushfire.score.landcover_grid",
+                    return_value=_grid(_south_forest_classes())), \
+         mock.patch("property_scores.common.terrain.elevation", side_effect=elev), \
+         mock.patch("property_scores.common.terrain.resolution_m", return_value=None):
+        result = bal_prescreen(
+            site_lat, site_lng, state="VIC", elevation=100, slope_deg=2,
+            overlay=(None, [], None, True, "state_service"),
+        )
+    slope = result["inputs"]["slope"]
+    assert slope["direction"] == "downslope"
+    assert "under-veg not measurable, site 2 deg" in slope["basis"]

@@ -85,6 +85,30 @@ def elevation(lat: float, lng: float) -> float | None:
     return dem_elevation(lat, lng)
 
 
+def resolution_m(lat: float, lng: float) -> float | None:
+    """Pixel size (m) of the raster elevation() reads at this point, or None.
+
+    Mirrors elevation(): the LiDAR VRT where it has a value, else the DEM VRT
+    inside tile coverage. Read from the dataset transform, so a caller that
+    differences neighbouring samples can keep its baseline at least one pixel
+    wide (nearest-pixel sampling returns the same cell for closer offsets).
+    """
+    try:
+        from property_scores.common import lidar_local
+        if lidar_local.elevation(lat, lng) is not None:
+            r = lidar_local.resolution_m(lat)
+            if r:
+                return r
+    except Exception:
+        pass
+    if not available() or not covered(lat, lng):
+        return None
+    try:
+        return _sampler().pixel_size_m(DEM_VRT, lat)
+    except Exception:
+        return None
+
+
 def dem_elevation(lat: float, lng: float) -> float | None:
     """Elevation in metres from the 30 m DEM only, or None outside tile coverage."""
     if not available() or not covered(lat, lng):

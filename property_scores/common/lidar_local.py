@@ -37,3 +37,13 @@ def elevation(lat: float, lng: float) -> float | None:
     if v is None or v != v:  # None or NaN (nodata / uncovered)
         return None
     return float(v) / 10.0
+
+
+def resolution_m(lat: float) -> float | None:
+    """Pixel size in metres of the LiDAR VRT (from its transform), or None."""
+    if not available():
+        return None
+    try:
+        return _rs.pixel_size_m(LIDAR_VRT, lat)
+    except Exception:
+        return None

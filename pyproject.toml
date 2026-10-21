@@ -20,7 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 api = ["fastapi>=0.110", "uvicorn>=0.29", "gunicorn>=26.2", "uvicorn-worker>=0.4"]
-ml = ["xgboost>=2.0", "scikit-learn>=1.4"]
+ml = ["xgboost>=2.0", "scikit-learn==1.7.2"]  # == the version that pickled the active noise rf.pkl; tests/test_model_sklearn_version_pin.py
 dev = ["pytest>=8.0", "ruff>=0.4"]
 
 [tool.ruff]

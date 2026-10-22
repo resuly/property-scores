@@ -247,7 +247,9 @@ _CONFIG_SIG_VERSION = (_MODEL_DATE
 # a bounded area that no precomputed grid covers, so the date stays put (see
 # the PROCESS RULE note on 2026-10-22) but cached results inside that area must
 # not outlive the change. "air2" = Sydney Kingsford Smith digitised contour
-# removed, Sydney basin reports not_assessed (2026-10-22). As with "src2" there
+# removed, Sydney basin reports not_assessed, and noise_score now carries
+# aircraft_assessment plus a confidence_note sentence wherever aircraft is
+# not_assessed, SA/TAS/ACT/NT included (2026-10-22). As with "src2" there
 # was no "air1" token; starting at 2 keeps pre-tag entries from colliding.
 # Changing this signature also changes the api/stamp.py model stamp, so DA
 # Leads' per-parcel score cache flushes once on deploy. That is intended here:
@@ -765,6 +767,12 @@ def _apply_measured_disclosure(state, measured, ci_db, low_confidence,
             f"show {measured['bias_db']:+.1f} dB average bias, within the "
             "stated interval. Verify on site for critical decisions.")
     return ci_db, low_confidence, confidence_note
+
+
+_AIRCRAFT_NOT_ASSESSED_NOTE = (
+    "Aircraft noise is not included here: civilian aircraft-noise contours are "
+    "not available for this area, so the score may understate noise near an "
+    "airport.")
 
 
 def noise_score(lat: float, lng: float, radius_m: int = 500,
@@ -1412,6 +1420,18 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
         "measured_traffic_sources": sorted(
             {d["source"] for _, d in aadt_levels if d.get("source")}),
     }
+
+    # Aircraft not assessed (no licensed civilian contour here: SA/TAS/ACT/NT,
+    # and since 2026-10-22 the Sydney Kingsford Smith box). The level above
+    # then carries no aircraft term at all, which must not read as "no aircraft
+    # noise". Flag it and say so in the note, appending to any existing note.
+    # Deliberately no zone detail: there is none to give. Shape change is
+    # flushed from the result cache by the "air2" token in _CONFIG_SIG.
+    if aircraft.get("assessment") == "not_assessed":
+        result["aircraft_assessment"] = "not_assessed"
+        _air_note = _AIRCRAFT_NOT_ASSESSED_NOTE
+        result["confidence_note"] = (f"{confidence_note} {_air_note}"
+                                     if confidence_note else _air_note)
 
     if transfer_raw is not None:
         result["transfer_raw"] = transfer_raw

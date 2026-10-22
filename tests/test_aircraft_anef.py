@@ -294,3 +294,121 @@ def test_melbourne_inner_cells_score_identically_without_syd(monkeypatch,
                     assert r["penalty_db"] == 20.0 and r["source"] == "vicplan", r
                     assert r["lga"] == "MORELAND", r
     assert calls == [], "the Sydney gate was consulted for a Melbourne point"
+
+
+# ---------------------------------------------------------------------------
+# Existing guards the gate sits next to (so it cannot quietly swallow them)
+# ---------------------------------------------------------------------------
+
+def test_gold_coast_hit_on_the_nsw_side_is_still_reported(monkeypatch, request):
+    """The OOL contour straddles the border and detect_state() calls the
+    airport vicinity NSW. Dropping the Gold Coast query for NSW must fail."""
+    from property_scores.common.au_state import detect_state
+    lat, lng = -28.18, 153.53  # Tweed side of Gold Coast Airport
+    assert detect_state(lat, lng) == "NSW"
+    _stub_all_sources(monkeypatch, request, gc={
+        "anef_min": 25, "zone_code": "ANEF 25+",
+        "airfield": "Gold Coast Airport", "source": "qld_gccc"})
+    r = _score(lat, lng)
+    assert r["source"] == "qld_gccc", r
+    assert r["penalty_db"] == 25.0, r
+
+
+def test_adelaide_is_not_assessed_not_zero(monkeypatch, request):
+    """SA has no civilian ANEF source; a miss there is not a confident zero."""
+    _stub_all_sources(monkeypatch, request)
+    r = _score(-34.93, 138.60)
+    assert r["assessment"] == "not_assessed", r
+    assert r["zone_desc"] == "No civilian ANEF data for this state", r
+    assert r["penalty_db"] == 0, r
+
+
+# ---------------------------------------------------------------------------
+# noise_score must say when aircraft was not assessed (review P1, 2026-10-22)
+# ---------------------------------------------------------------------------
+
+def _stub_noise_inputs(monkeypatch):
+    """Road/rail/building inputs stubbed out (no sources), so noise_score
+    runs on a clean checkout. aircraft_noise_penalty is the REAL one: the
+    marker has to survive the whole chain from the aircraft gate."""
+    from property_scores.noise import score as ns
+    monkeypatch.setattr(ns, "aadt_near", lambda *a, **k: [])
+    monkeypatch.setattr(ns, "nfdh_near", lambda *a, **k: [])
+    monkeypatch.setattr(ns, "roads_near", lambda *a, **k: [])
+    monkeypatch.setattr(ns, "rail_near", lambda *a, **k: [])
+    monkeypatch.setattr(ns, "gtfs_rail_near", lambda *a, **k: [])
+    monkeypatch.setattr(ns, "get_db", lambda *a, **k: object())
+    monkeypatch.setattr(ns, "buildings_in_radius", lambda *a, **k: [])
+    monkeypatch.setattr(ns, "buildings_to_arrays", lambda *a, **k: None)
+    monkeypatch.setattr(ns, "barrier_attenuation", lambda *a, **k: 0.0)
+    monkeypatch.setattr(ns, "terrain_attenuation", lambda *a, **k: 0.0)
+    monkeypatch.setattr(ns, "_cache_get", lambda *a, **k: None)
+    monkeypatch.setattr(ns, "_cache_put", lambda *a, **k: None)
+    return ns
+
+
+_AIR_NOTE = ("Aircraft noise is not included here: civilian aircraft-noise "
+             "contours are not available for this area, so the score may "
+             "understate noise near an airport.")
+
+
+@pytest.mark.parametrize("label,lat,lng", SYD_GATED[:2])
+def test_noise_score_flags_aircraft_not_assessed_in_sydney(monkeypatch, request,
+                                                          label, lat, lng):
+    ns = _stub_noise_inputs(monkeypatch)
+    _stub_all_sources(monkeypatch, request)
+    r = ns.noise_score(lat, lng, 500)
+    assert r.get("aircraft_assessment") == "not_assessed", f"{label}: {r}"
+    assert _AIR_NOTE in (r.get("confidence_note") or ""), r
+    # No per-point zone detail leaks out of a not-assessed result.
+    assert "aircraft" not in r and "aircraft_db" not in r, r
+    assert "Kingsford" not in repr(r), r
+
+
+def test_noise_score_appends_to_an_existing_note(monkeypatch, request):
+    ns = _stub_noise_inputs(monkeypatch)
+    _stub_all_sources(monkeypatch, request)
+    from property_scores.noise import measured_validation as mv
+    monkeypatch.setattr(mv, "for_state", lambda s: {"note": "x"})
+    monkeypatch.setattr(ns, "_apply_measured_disclosure",
+                        lambda state, m, ci, lc, note, f: (ci, True, "Existing note."))
+    r = ns.noise_score(-33.9152, 151.1688, 500)
+    assert r["confidence_note"] == f"Existing note. {_AIR_NOTE}", r
+    assert r["aircraft_assessment"] == "not_assessed", r
+
+
+@pytest.mark.parametrize("label,lat,lng,kw", [
+    ("Melbourne CBD (no_overlay)", -37.8136, 144.9631, {}),
+    ("Western Sydney (SEPP hit)", -33.88, 150.72, {"nsw": {
+        "anef_min": 25, "zone_code": "25 - 30",
+        "airfield": "Western Sydney Airport", "source": "nsw_sepp"}}),
+])
+def test_noise_score_has_no_marker_where_aircraft_was_assessed(
+        monkeypatch, request, label, lat, lng, kw):
+    ns = _stub_noise_inputs(monkeypatch)
+    _stub_all_sources(monkeypatch, request, **kw)
+    r = ns.noise_score(lat, lng, 500)
+    assert "aircraft_assessment" not in r, f"{label}: {r}"
+    assert _AIR_NOTE not in (r.get("confidence_note") or ""), r
+    if kw:
+        assert r["aircraft"]["zone_code"] == "25 - 30", r
+
+
+def test_scores_noise_endpoint_carries_the_marker(monkeypatch, request):
+    """No response model strips it on the way out of /scores/noise."""
+    from fastapi.testclient import TestClient
+    from property_scores.api import main
+    ns = _stub_noise_inputs(monkeypatch)
+    monkeypatch.setattr(main, "noise_score", ns.noise_score)
+    _stub_all_sources(monkeypatch, request)
+    client = TestClient(main.app)
+    syd = client.get("/scores/noise",
+                     params={"lat": -33.913, "lng": 151.178, "nocache": True})
+    assert syd.status_code == 200, syd.text
+    body = syd.json()
+    assert body.get("aircraft_assessment") == "not_assessed", body
+    assert _AIR_NOTE in (body.get("confidence_note") or ""), body
+    mel = client.get("/scores/noise",
+                     params={"lat": -37.8136, "lng": 144.9631, "nocache": True})
+    assert mel.status_code == 200, mel.text
+    assert "aircraft_assessment" not in mel.json(), mel.json()

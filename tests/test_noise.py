@@ -775,7 +775,7 @@ def test_the_fold_does_not_flush_the_result_cache_or_the_model_stamp():
 
     sig, date = probe([])
     assert sig.split(":")[0] == expected_first_field(date)
-    assert sig == f"{date}:src2:t0:m0:r-:k-:"
+    assert sig == f"{date}:src2:air2:t0:m0:r-:k-:"
 
     # Production's configuration. The flags must still show in the t/m/r tokens
     # (that is the 2026-08-03 guard) while the first field stays on the pre-fold
@@ -783,7 +783,7 @@ def test_the_fold_does_not_flush_the_result_cache_or_the_model_stamp():
     sig, date = probe([("NOISE_TRANSFER", "1"), ("NOISE_QUIET_RECAL", "1"),
                        ("NOISE_RAIL_RECAL", "1")])
     assert sig.split(":")[0] == expected_first_field(date, quiet=True, rail=True)
-    assert sig == f"{date}-nswquiet-nswrail:src2:t1:m0:r8:k-:"
+    assert sig == f"{date}-nswquiet-nswrail:src2:air2:t1:m0:r8:k-:"
 
     # And the date really is shared, so a bump cannot reach one string only.
     from property_scores.noise.score import _MODEL_DATE, NOISE_MODEL_VERSION

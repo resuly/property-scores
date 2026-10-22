@@ -181,6 +181,18 @@ _MODEL_DATE = "2026-06-09-quincunx"
 # these grids were baked with (asserted by scripts/verify_noise_frozen.py).
 # Bumping would invalidate every precomputed grid and force a full re-bake for a
 # change noise does not see. Bump it if legacy_distance is ever removed.
+#
+# NOT bumped for the 2026-10-22 removal of the Sydney Kingsford Smith ANEF
+# source (syd_masterplan_2033, no redistribution licence, superseded by the
+# 2045 ANEF), deliberately and on the same reasoning. The removal only changes
+# aircraft output inside aircraft._SYD_BBOX (lat -34.1..-33.8, lng
+# 151.0..151.3). Production's only precomputed grid is melbourne-inner, which
+# does not intersect that box, so every grid cell is bit-identical and a bump
+# would force a full re-bake for nothing. Asserted by
+# tests/test_aircraft_anef.py::test_melbourne_inner_grid_does_not_touch_the_sydney_gate
+# and test_melbourne_inner_cells_score_identically_without_syd. Live results
+# inside the box are flushed by the "air2" token in _CONFIG_SIG instead. Bump
+# the date if a grid covering Sydney is ever baked before this ships.
 NOISE_MODEL_VERSION = (_MODEL_DATE
                        + (f"-aadt{_AADT_ADJUST_K:g}" if _AADT_ADJUST_ENABLED else "")
                        + ("-nswquiet" if _QUIET_RECAL_ENABLED else "")
@@ -229,9 +241,21 @@ _CONFIG_SIG_VERSION = (_MODEL_DATE
 # change: 16,628 rows, of which 15,712 were still inside the 24h TTL and 8,037
 # carried a "vicroads" label. Without the bump every one of those would have
 # kept serving its old label until it aged out.
+#
+# The aircraft-data tag is the same idea one layer over: it is bumped when the
+# set of aircraft ANEF sources changes in a way that moves numbers only inside
+# a bounded area that no precomputed grid covers, so the date stays put (see
+# the PROCESS RULE note on 2026-10-22) but cached results inside that area must
+# not outlive the change. "air2" = Sydney Kingsford Smith digitised contour
+# removed, Sydney basin reports not_assessed (2026-10-22). As with "src2" there
+# was no "air1" token; starting at 2 keeps pre-tag entries from colliding.
+# Changing this signature also changes the api/stamp.py model stamp, so DA
+# Leads' per-parcel score cache flushes once on deploy. That is intended here:
+# Sydney parcels scored with the removed contour must be recomputed.
 _CONFIG_SIG = ":".join((
     _CONFIG_SIG_VERSION,
     "src2",
+    "air2",
     "t1" if _TRANSFER_ENABLED else "t0",
     "m1" if _ML_CORRECTION_ENABLED else "m0",
     f"r{_RAIL_RECAL_DB:g}" if _RAIL_RECAL_ENABLED else "r-",

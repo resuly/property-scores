@@ -3,7 +3,9 @@ Aircraft noise penalty from national ANEF data.
 
 Three data layers, queried by state:
 1. VIC — VicPlan ArcGIS (MAEO/AEO overlays, Melbourne + regional airports)
-2. NSW — ePlanning SEPP layer 280 (Western Sydney Airport)
+2. NSW - ePlanning SEPP layer 280 (Western Sydney Airport). Sydney Kingsford
+        Smith has no licensed contour source: a point in the Sydney basin with
+        no other hit returns assessment="not_assessed" (see _SYD_BBOX).
 3. QLD — Brisbane Open Data API (Brisbane + Archerfield airports)
         + Gold Coast City Plan v13 FeatureServer layer 94 (Gold Coast / OOL)
 4. WA  — SLIP MapServer layer 77 (Perth Airport SPP 5.1)
@@ -398,76 +400,20 @@ def _query_defence(lat: float, lng: float) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# NSW — Sydney Kingsford Smith (SYD) ANEF (digitised from 2033 Master Plan)
+# NSW - Sydney Kingsford Smith (SYD): honesty gate only, no contour data
 # ---------------------------------------------------------------------------
-# The NSW ePlanning SEPP layer (_query_nsw) only covers Western Sydney Airport.
-# SYD (Kingsford Smith) is the busiest airport in the country and its ANEF is not
-# published as a queryable web service, so we ship a digitised GeoJSON traced from
-# the Airservices-endorsed 2033 ANEF chart (Sydney Airport Master Plan 2013/2033).
-# Bands 20/25/30/35/40, nested polygons (high ANEF inside low ANEF).
-
-# Gate: only run the (cheap) point-in-polygon test inside the Sydney basin, so we
-# never touch this layer for the rest of NSW.
+# The NSW ePlanning SEPP layer (_query_nsw) only covers Western Sydney Airport,
+# and SYD's ANEF is not published as a queryable web service. Until 2026-10-22
+# this module shipped a GeoJSON digitised from the 2033 Master Plan chart. It
+# was removed: it carries no redistribution licence and the current ANEF is the
+# 2045 one. With no licensed replacement, a point inside this box that no other
+# source hits is reported as not_assessed, never as a confident zero.
 _SYD_BBOX = (-34.1, -33.8, 151.0, 151.3)  # (lat_min, lat_max, lng_min, lng_max)
 
-_syd_loaded = False
-_syd_features: list = []
 
-
-_syd_lock = threading.Lock()
-
-
-def _load_syd():
-    # Same lock + flag-set-last rationale as _load_defence.
-    global _syd_loaded, _syd_features
-    if _syd_loaded:
-        return
-    with _syd_lock:
-        if _syd_loaded:
-            return
-        try:
-            geojson_path = data_path("syd_anef.geojson")
-            if geojson_path.exists():
-                with open(geojson_path) as f:
-                    data = json.load(f)
-                _syd_features = data.get("features", [])
-        except Exception:
-            pass
-        finally:
-            _syd_loaded = True
-
-
-def _query_syd(lat: float, lng: float) -> dict | None:
+def _in_syd_bbox(lat: float, lng: float) -> bool:
     lat_min, lat_max, lng_min, lng_max = _SYD_BBOX
-    if not (lat_min <= lat <= lat_max and lng_min <= lng <= lng_max):
-        return None
-
-    _load_syd()
-    if not _syd_features:
-        return None
-
-    best_anef = 0
-    best_contour = ""
-    for feat in _syd_features:
-        geom = feat.get("geometry", {})
-        coords = geom.get("coordinates", [])
-        if not coords:
-            continue
-        if _point_in_polygon(lat, lng, coords):
-            props = feat.get("properties", {})
-            anef = props.get("anef_min", 20)
-            if anef > best_anef:
-                best_anef = anef
-                best_contour = props.get("contour", str(anef))
-
-    if best_anef == 0:
-        return None
-    return {
-        "anef_min": best_anef,
-        "zone_code": f"ANEF {best_contour}",
-        "airfield": "Sydney Kingsford Smith",
-        "source": "syd_masterplan_2033",
-    }
+    return lat_min <= lat <= lat_max and lng_min <= lng <= lng_max
 
 
 # ---------------------------------------------------------------------------
@@ -501,9 +447,6 @@ def _aircraft_cached(lat: float, lng: float) -> dict:
         hit = _query_nsw(lat, lng)  # Western Sydney Airport (SEPP layer)
         if hit:
             results.append(hit)
-        syd_hit = _query_syd(lat, lng)  # Sydney Kingsford Smith (digitised ANEF)
-        if syd_hit:
-            results.append(syd_hit)
     elif state == "QLD":
         hit = _query_qld(lat, lng)  # Brisbane / Archerfield
         if hit:
@@ -529,6 +472,25 @@ def _aircraft_cached(lat: float, lng: float) -> dict:
         results.append(defence)
 
     if not results:
+        if state == "NSW" and _in_syd_bbox(lat, lng):
+            # Inside the Sydney basin the civilian contour that matters is SYD's,
+            # which we do not hold under licence. Western Sydney, Gold Coast and
+            # Defence were all checked and missed, but a miss here says nothing
+            # about Kingsford Smith.
+            return {
+                "penalty_db": 0.0,
+                "assessment": "not_assessed",
+                "zone_code": None,
+                "zone_desc": "Sydney Kingsford Smith ANEF not available",
+                "anef_min": None,
+                "anef_max": None,
+                "lga": None,
+                "impact": ("Civilian aircraft-noise contours for Sydney Kingsford "
+                           "Smith are not available under our data licences; "
+                           "treat as not assessed, not as zero."),
+                "source": "national",
+                "airport_type": None,
+            }
         if state not in _CIVILIAN_ANEF_STATES:
             # SA/TAS/ACT/NT have no civilian ANEF source; only Defence was
             # checked. Report not_assessed rather than a confident zero.

@@ -8,7 +8,7 @@
 |------|--------|
 | VIC BMO overlay (layer 19) | Done |
 | NSW BPL + category (layer 229) | Done |
-| WA OBRM-023 (layer 8) | Done |
+| WA OBRM-026 (layer 11; OBRM-023 layer 8 retired upstream 2026-09) | Done |
 | SA 6 bands (layers 9-14) | Done |
 | TAS (layer 3) | Done |
 | QLD | Not available |
@@ -21,7 +21,7 @@
 |-------|----------|--------|------------|
 | VIC | planning-schemes.api.delwp.vic.gov.au | BMO (layer 19) | Binary overlay |
 | NSW | mapprod3.environment.nsw.gov.au | BPL (layer 229) | Veg Cat 1 (extreme), Cat 2 (high), Cat 3 (moderate), Buffer (low) |
-| WA | services.slip.wa.gov.au | OBRM-023 (layer 8) | Binary overlay |
+| WA | services.slip.wa.gov.au | OBRM-026 (layer 11) | Binary overlay |
 | SA | location.sa.gov.au | Layers 9-14 | 6 hazard bands (high→low) |
 | TAS | services.thelist.tas.gov.au | Layer 3 | Filtered by bushfire keyword |
 

@@ -26,7 +26,7 @@
   },
   {
     "name": "WA Bush Fire Prone Areas service known-positive (Perth hills)",
-    "url": "https://services.slip.wa.gov.au/public/rest/services/Landgate_Public_Maps/Map_of_Bush_Fire_Prone_Areas_3/MapServer/8/query?geometry=116.06,-31.80&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&returnCountOnly=true&f=json",
+    "url": "https://services.slip.wa.gov.au/public/rest/services/Landgate_Public_Maps/Map_of_Bush_Fire_Prone_Areas_3/MapServer/11/query?geometry=116.06,-31.80&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&returnCountOnly=true&f=json",
     "assert": "count>0",
     "active": true
   },

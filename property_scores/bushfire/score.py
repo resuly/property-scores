@@ -54,9 +54,18 @@ ENDPOINTS: dict[str, list[tuple[str, str, str]]] = {
          "high"),
     ],
     "WA": [
+        # Layer 8 (OBRM-023) was removed upstream (404 "Layer not found"; the
+        # sentinel canary sat red on it from ~2026-09-22). Layer 11 of the
+        # same service is OBRM-026, which the WA catalogue says supersedes
+        # and consolidates OBRM-001/023/024/025 (same 13-12-2025 gazettal,
+        # DFES, CC BY 4.0). Checked 2026-10-27: Lesmurdie and Glen Forrest
+        # anchors count=1, Kalamunda control count=0, summed st_area equal
+        # to OBRM-001. The label keeps "OBRM-023": it is the UI lookup key in
+        # api/static/bushfire.html and the local overlay library, and the
+        # designation it names is the same one.
         ("Bush Fire Prone Area (OBRM-023)",
          "https://services.slip.wa.gov.au/public/rest/services"
-         "/Landgate_Public_Maps/Map_of_Bush_Fire_Prone_Areas_3/MapServer/8",
+         "/Landgate_Public_Maps/Map_of_Bush_Fire_Prone_Areas_3/MapServer/11",
          "moderate"),
     ],
     "SA": [

@@ -66,6 +66,10 @@ DOMAIN_ENDPOINT = {
     "solar": "solar", "contamination": "contamination",
 }
 SLEEP_S = float(os.environ.get("TRUTH_PROBE_SLEEP", "2.5"))
+# Pause before re-asking an anchor whose FAIL came with degraded components
+# (an upstream register the service could not read in time). Long enough for
+# a stall to clear, short enough that a run with a few of them stays minutes.
+REPROBE_WAIT_S = float(os.environ.get("TRUTH_PROBE_REPROBE_WAIT", "30"))
 # How long a check may stay red before it is reported again. Days, not runs,
 # so a few missed crons cannot silence it.
 STALE_RED_DAYS = float(os.environ.get("TRUTH_PROBE_STALE_RED_DAYS", "7"))
@@ -259,6 +263,57 @@ def evaluate_margin(payload: dict, reference: dict, min_margin: float) -> tuple[
             f"score={score} reference={ref_score} margin={actual} expected >={min_margin:g}")
 
 
+_DEGRADED_STATUSES = ("error", "partial")
+
+
+def degraded_components(payload: dict) -> list[str]:
+    """Components the service itself reported as not read, e.g. 'landfill=error'.
+
+    These are the inputs that make a fail-closed service answer "Incomplete
+    Check" / a null score. Such an answer is correct product behaviour during
+    an upstream stall, not evidence that the anchor's truth regressed.
+    """
+    out: list[str] = []
+    for key, value in payload.items():
+        if isinstance(value, dict):
+            st = value.get("status")
+            if st in _DEGRADED_STATUSES:
+                out.append(f"{key}={st}")
+        elif key.endswith("_status") and value in _DEGRADED_STATUSES:
+            # e.g. epa_status, industrial_status; environmental_audit_status
+            # duplicates its nested dict and the set below collapses it.
+            out.append(f"{key[:-len('_status')]}={value}")
+    return sorted(set(out))
+
+
+def _reprobe_if_degraded(url: str, expected: str, payload: dict,
+                         note: str) -> tuple[str, str]:
+    """Re-ask once when a FAIL came from components the service could not read.
+
+    2026-10-27 07:02 AEDT: vic_fitzroy_audit_headline went red as 'Incomplete
+    Check' because the landfill signal (VIC VLR + national GA WMF, one 8s
+    budget) timed out; GA answered in 2.2s at 07:10 versus ~0.1s normally and
+    the same point read 'Mapped Context - Review' again minutes later. The
+    alert said nothing about landfill, so the reader had to rebuild that by
+    hand. A degraded answer now gets one delayed re-probe; if it still fails
+    the note names the degraded components, and a persistent outage stays red.
+    """
+    first = degraded_components(payload)
+    if not first:
+        return "FAIL", note
+    time.sleep(REPROBE_WAIT_S)
+    again = _get(url)
+    time.sleep(SLEEP_S)
+    if again is None:
+        return "FAIL", f"{note} [degraded: {', '.join(first)}; re-probe unreachable]"
+    again = _flatten(again)
+    status, note2 = evaluate(expected, again)
+    if status == "PASS":
+        return "PASS", f"{note2} (first probe degraded: {', '.join(first)})"
+    second = degraded_components(again) or ["none"]
+    return status, f"{note2} [degraded: {', '.join(first)}; re-probe: {', '.join(second)}]"
+
+
 def run_anchors(base: str, only_domain: str | None) -> list[dict]:
     results = []
     for f in sorted(ANCHOR_DIR.glob("*_anchors.csv")):
@@ -281,6 +336,9 @@ def run_anchors(base: str, only_domain: str | None) -> list[dict]:
                                 "blocker": row.get("blocker")})
                 continue
             status, note = evaluate(row["expected"], _flatten(payload))
+            if status == "FAIL" and not (row.get("blocker") or "").strip():
+                status, note = _reprobe_if_degraded(
+                    url, row["expected"], _flatten(payload), note)
             if status == "FAIL" and (row.get("blocker") or "").strip():
                 # The anchor declares a named external blocker (a licence or
                 # a source that does not exist yet). It is still a true gap

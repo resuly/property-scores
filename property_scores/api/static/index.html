@@ -62,6 +62,17 @@
 </div>
 
 <script>
+// BEGIN flood-zones-cell (pure; tests/test_flood_summary_overlay_claim.py runs it in node)
+// "None" only after a statewide check came back empty; a partial or absent
+// official layer is not a clear (see flood.html floodOverlayClause).
+function floodZonesCell(s) {
+  if (s.flood_zones && s.flood_zones.length) return s.flood_zones.join(', ');
+  if (s.official_layer === 'checked_no_hit') return 'None';
+  if (s.official_layer === 'checked_partial_coverage') return 'None of the held overlays (partial coverage)';
+  return 'Not checked';
+}
+// END flood-zones-cell
+
 let map, marker;
 
 async function initMap() {
@@ -192,12 +203,7 @@ function renderResults(lat, lng, scores) {
   // Flood
   if (scores.flood && !scores.flood.error && scores.flood.score != null) {
     const s = scores.flood;
-    // "None" only after a statewide check came back empty; a partial or
-    // absent official layer is not a clear (see flood.html floodOverlayClause).
-    const zones = s.flood_zones?.length ? s.flood_zones.join(', ')
-      : s.official_layer === 'checked_no_hit' ? 'None'
-      : s.official_layer === 'checked_partial_coverage' ? 'None of the held overlays (partial coverage)'
-      : 'Not checked';
+    const zones = floodZonesCell(s);
     let d = `<dt>Overlay Zones</dt><dd>${zones}</dd>`;
     if (s.jrc) {
       d += `<dt>JRC Flood Cells</dt><dd>${s.jrc.flood_cells}/${s.jrc.total_cells}</dd>`;

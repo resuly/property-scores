@@ -85,10 +85,47 @@ def test_overlay_hit_reads_as_before():
     assert r["summary"] == "Inside a government flood overlay, low elevation above drainage."
 
 
+def test_evidence_required_hit_is_not_called_unchecked():
+    """PlanSA "Flooding Evidence Required" is the only hit: official_layer is
+    'hit', flood_zones is non-empty, but there is no severity zone. The page
+    must say the evidence control applies, not that nothing was checked."""
+    ev = {"official_layer": "hit",
+          "flood_zones": ["Hazards (Flooding Evidence Required)"]}
+    r = _run([({**ev, **HIGH}, 85), (ev, 85), ({**ev, "flood_zones": []}, 60)])
+    for x in r:
+        assert "was checked here" not in x["summary"]
+        assert "requiring site-specific flood evidence applies here" in x["summary"]
+    assert r[0]["summary"] == ("Well elevated above drainage; an official control "
+                               "requiring site-specific flood evidence applies here.")
+    assert r[1]["summary"] == ("An official control requiring site-specific flood "
+                               "evidence applies here.")
+
+
+def _zones_cell(cases):
+    html = (STATIC / "index.html").read_text()
+    block = html[html.index("// BEGIN flood-zones-cell"):html.index("// END flood-zones-cell")]
+    js = block + ("\nconsole.log(JSON.stringify(" + json.dumps(cases)
+                  + ".map(floodZonesCell)));\n")
+    out = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+def test_index_overlay_zones_cell():
+    assert _zones_cell([
+        {"official_layer": "checked_no_hit", "flood_zones": []},
+        {"official_layer": "checked_partial_coverage"},
+        {"official_layer": "none"},
+        {},
+        {"official_layer": "hit", "flood_zones": ["LSIO (1% AEP)", "FO"]},
+    ]) == ["None", "None of the held overlays (partial coverage)", "Not checked",
+           "Not checked", "LSIO (1% AEP), FO"]
+
+
 def test_page_uses_the_helpers():
     html = FLOOD_HTML.read_text()
     assert "const summary = floodSummaryText(d, sc);" in html
     assert "${floodOverlayLine(d)}" in html
     assert html.count("Not within any government flood overlay") == 1  # only in floodOverlayLine
     index = (STATIC / "index.html").read_text()
-    assert "s.official_layer === 'checked_no_hit' ? 'None'" in index
+    assert "const zones = floodZonesCell(s);" in index

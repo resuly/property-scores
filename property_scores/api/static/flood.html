@@ -158,15 +158,24 @@ function floodSummaryText(d, sc) {
   else if (d.hand && d.hand.hand_m >= 20) parts.push('well elevated above drainage');
   if (d.jrc && d.jrc.flood_cells >= 5) parts.push('satellite evidence of past flooding');
   else if (d.jrc && d.jrc.max_occurrence_pct > 80) parts.push('near permanent water body');
+  // An official control did hit, but only one that asks for site-specific
+  // flood evidence (PlanSA "Flooding Evidence Required"): say that, never
+  // "no official flood overlay was checked here".
+  const evidenceOnly = severityZones.length === 0
+    && ((d.flood_zones || []).length > 0 || d.official_layer === 'hit');
+  const clause = evidenceOnly
+    ? 'an official control requiring site-specific flood evidence applies here'
+    : floodOverlayClause(d);
   const cap = t => t.replace(/^./, c => c.toUpperCase());
   if (parts.length > 0) {
     const base = parts.join(', ');
-    return severityZones.length > 0 ? cap(base) + '.' : cap(base) + '; ' + floodOverlayClause(d) + '.';
+    return severityZones.length > 0 ? cap(base) + '.' : cap(base) + '; ' + clause + '.';
   }
+  if (evidenceOnly) return cap(clause) + '.';
   if (sc >= 80) {
     return d.official_layer === 'checked_no_hit'
       ? 'No significant flood indicators detected at this location.'
-      : 'No terrain or water-record flood indicators detected; ' + floodOverlayClause(d) + '.';
+      : 'No terrain or water-record flood indicators detected; ' + clause + '.';
   }
   return null;
 }

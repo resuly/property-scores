@@ -192,7 +192,12 @@ function renderResults(lat, lng, scores) {
   // Flood
   if (scores.flood && !scores.flood.error && scores.flood.score != null) {
     const s = scores.flood;
-    const zones = s.flood_zones?.length ? s.flood_zones.join(', ') : 'None';
+    // "None" only after a statewide check came back empty; a partial or
+    // absent official layer is not a clear (see flood.html floodOverlayClause).
+    const zones = s.flood_zones?.length ? s.flood_zones.join(', ')
+      : s.official_layer === 'checked_no_hit' ? 'None'
+      : s.official_layer === 'checked_partial_coverage' ? 'None of the held overlays (partial coverage)'
+      : 'Not checked';
     let d = `<dt>Overlay Zones</dt><dd>${zones}</dd>`;
     if (s.jrc) {
       d += `<dt>JRC Flood Cells</dt><dd>${s.jrc.flood_cells}/${s.jrc.total_cells}</dd>`;

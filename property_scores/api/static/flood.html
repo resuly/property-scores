@@ -132,6 +132,46 @@ const OVERLAY_LAYERS = [
   { id: 'flood-sbo',  layer: 16, color: 'rgba(96,165,250,0.25)',outline: 'rgba(96,165,250,0.45)',label: 'SBO' },
 ];
 
+// BEGIN flood-summary (pure; tests/test_flood_summary_overlay_claim.py runs it in node)
+// Overlay wording follows what official_layer says was actually checked.
+// Only a statewide check that came back empty (checked_no_hit) may say the
+// point is outside the overlays. A miss against partial coverage (NSW/QLD/WA
+// council mosaics) or no official layer at all must not read as a clear, so
+// the summary then describes only terrain and water record (2026-10-27:
+// "no significant overlay indicators" sat next to a "no flood layer held"
+// warning).
+function floodOverlayClause(d) {
+  if (d.official_layer === 'checked_no_hit') return 'no official flood overlay covers this point';
+  if (d.official_layer === 'checked_partial_coverage') return 'none of the held flood overlays covers this point, but official flood mapping in this state is partial';
+  return 'no official flood overlay was checked here';
+}
+function floodOverlayLine(d) {
+  if (d.official_layer === 'checked_no_hit') return 'Not within any government flood overlay';
+  if (d.official_layer === 'checked_partial_coverage') return 'None of the held flood overlays covers this point. Official flood mapping in this state is partial, so this does not mean the site is outside a flood area.';
+  return 'No official flood overlay was checked here.';
+}
+function floodSummaryText(d, sc) {
+  const parts = [];
+  const severityZones = (d.flood_zones || []).filter(z => !z.includes('Evidence Required'));
+  if (severityZones.length > 0) parts.push('inside a government flood overlay');
+  if (d.hand && d.hand.hand_m < 3) parts.push('low elevation above drainage');
+  else if (d.hand && d.hand.hand_m >= 20) parts.push('well elevated above drainage');
+  if (d.jrc && d.jrc.flood_cells >= 5) parts.push('satellite evidence of past flooding');
+  else if (d.jrc && d.jrc.max_occurrence_pct > 80) parts.push('near permanent water body');
+  const cap = t => t.replace(/^./, c => c.toUpperCase());
+  if (parts.length > 0) {
+    const base = parts.join(', ');
+    return severityZones.length > 0 ? cap(base) + '.' : cap(base) + '; ' + floodOverlayClause(d) + '.';
+  }
+  if (sc >= 80) {
+    return d.official_layer === 'checked_no_hit'
+      ? 'No significant flood indicators detected at this location.'
+      : 'No terrain or water-record flood indicators detected; ' + floodOverlayClause(d) + '.';
+  }
+  return null;
+}
+// END flood-summary
+
 function setPoint(lat, lng, label) {
   document.getElementById('lat').value = lat.toFixed(4);
   document.getElementById('lng').value = lng.toFixed(4);
@@ -315,18 +355,10 @@ async function query() {
         <span>0 high risk</span><span>50</span><span>100 safe</span>
       </div>`;
 
-    // Risk summary
-    const summaryParts = [];
-    const severityZones = (d.flood_zones || []).filter(z => !z.includes('Evidence Required'));
-    if (severityZones.length > 0) summaryParts.push('inside a government flood overlay');
-    if (d.hand && d.hand.hand_m < 3) summaryParts.push('low elevation above drainage');
-    else if (d.hand && d.hand.hand_m >= 20) summaryParts.push('well elevated above drainage');
-    if (d.jrc && d.jrc.flood_cells >= 5) summaryParts.push('satellite evidence of past flooding');
-    else if (d.jrc && d.jrc.max_occurrence_pct > 80) summaryParts.push('near permanent water body');
-    if (summaryParts.length > 0) {
-      html += `<div class="text-xs text-slate-600 mb-3 leading-relaxed">${summaryParts.join(', ').replace(/^./, c => c.toUpperCase())}.</div>`;
-    } else if (sc >= 80) {
-      html += `<div class="text-xs text-slate-600 mb-3">No significant flood indicators detected at this location.</div>`;
+    // Risk summary (floodSummaryText above: overlay words only when checked)
+    const summary = floodSummaryText(d, sc);
+    if (summary) {
+      html += `<div class="text-xs text-slate-600 mb-3 leading-relaxed">${summary}</div>`;
     }
 
     // Overlay zones
@@ -350,7 +382,7 @@ async function query() {
         html += `</div>`;
       });
     } else {
-      html += `<div class="text-xs text-slate-500">Not within any government flood overlay</div>`;
+      html += `<div class="text-xs text-slate-500">${floodOverlayLine(d)}</div>`;
     }
 
     // HAND

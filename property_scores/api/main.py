@@ -192,6 +192,11 @@ def _resolve_score_stamp():
     here also puts the stamp in the startup log, so "why did every consumer
     cache flush" is answerable from the journal.
     """
+    # Fail closed on an unknown PROPERTY_SCORES_MODEL_VERSION: raising here
+    # stops the unit at boot instead of serving a different model under the
+    # label a pinned consumer asked for (see common/model_version).
+    from property_scores.common import model_version
+    logger.info("STARTUP: score model version=%s", model_version.current())
     try:
         from property_scores.api import stamp
         logger.info("STARTUP: score model_stamp=%s components=%s",

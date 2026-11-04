@@ -146,7 +146,8 @@ def _detect_state(lat: float, lng: float) -> str | None:
 
 def _query_layer(url: str, lat: float, lng: float,
                  *, where: str | None = None,
-                 count_only: bool = False) -> dict | None:
+                 count_only: bool = False,
+                 timeout=None) -> dict | None:
     params: dict[str, str] = {
         "geometry": f"{lng},{lat}",
         "geometryType": "esriGeometryPoint",
@@ -163,7 +164,8 @@ def _query_layer(url: str, lat: float, lng: float,
 
     try:
         headers = SAPPA_HEADERS if "geohub.sa.gov.au" in url else None
-        resp = requests.get(f"{url}/query", params=params, timeout=TIMEOUT,
+        resp = requests.get(f"{url}/query", params=params,
+                            timeout=TIMEOUT if timeout is None else timeout,
                             headers=headers)
         resp.raise_for_status()
         return resp.json()
@@ -172,8 +174,10 @@ def _query_layer(url: str, lat: float, lng: float,
 
 
 def _layer_has_features(url: str, lat: float, lng: float,
-                        *, where: str | None = None) -> bool | None:
-    data = _query_layer(url, lat, lng, where=where, count_only=True)
+                        *, where: str | None = None,
+                        timeout=None) -> bool | None:
+    data = _query_layer(url, lat, lng, where=where, count_only=True,
+                        timeout=timeout)
     if data is None:
         return None
     count = data.get("count")
@@ -769,6 +773,54 @@ def _hand_discounted_jrc(jrc_score: int | None, hand: dict | None) -> int | None
     return round(jrc_score * (1.0 - w) + 95 * w)
 
 
+# --- score model v2: no "Low" on terrain the model cannot read --------------
+# Measured 2026-11-05 against 716 live official-truth addresses (VicPlan, ACT,
+# Brisbane): where no official overlay vouches the point, the model alone
+# called 28% of in-overlay VIC addresses Low/Very Low, 71% in Shepparton. Two
+# mechanisms: (1) on flat 30 m DEM terrain the HAND read is flagged uncertain
+# and skipped, so nothing pulls the satellite water score (95 when no water
+# shows nearby) down; (2) HAND < 2 m without water evidence was capped at 70,
+# exactly the Low threshold. Neither situation is evidence of safety, so v2
+# caps both at the top of the Moderate band and says why in terrain_check.
+# An authoritative read still decides: a clean statewide statutory overlay
+# check (overlay score present) is left alone, and study depth never reaches
+# here.
+_V2_UNVERIFIED_TERRAIN_CAP = 65
+_V2_LOW_HAND_M = 2.0
+
+
+def _v2_unverified_terrain_cap(score: int, overlay_score: int | None,
+                               hand: dict | None) -> tuple[int, bool]:
+    """(score, capped?) under the v2 terrain guard; identity under v1."""
+    from property_scores.common import model_version
+    if not model_version.at_least("v2") or overlay_score is not None:
+        return score, False
+    unverified = (
+        hand is None
+        or bool(hand.get("uncertain", False))
+        or _ELEV_CONFIDENCE.get(hand.get("source"), "low") == "low"
+        or hand.get("hand_m", 0.0) < _V2_LOW_HAND_M
+    )
+    if unverified and score > _V2_UNVERIFIED_TERRAIN_CAP:
+        return _V2_UNVERIFIED_TERRAIN_CAP, True
+    return score, False
+
+
+def _v2_overlay_ceiling(score: int, worst_severity: str) -> int:
+    """v2: a scored official hazard hit caps the score at its band's top.
+
+    The HAND > 20 m boost (+10) was written for "no evidence" ground, but it
+    also fires on an overlay hit: a Ku-ring-gai overland-flow planning area
+    lot on a ridge read 60 -> 70 "Low" (108 Ryde Rd Pymble, 2026-11-05).
+    Overland flow is exactly the hazard that sits on high ground, so the
+    terrain must not talk a mapped hit out of its band. Identity under v1.
+    """
+    from property_scores.common import model_version
+    if not model_version.at_least("v2"):
+        return score
+    return min(score, SEVERITY_SCORES[worst_severity][1])
+
+
 def flood_score(lat: float, lng: float) -> dict:
     """Compute flood risk score for a coordinate.
 
@@ -799,7 +851,10 @@ def flood_score(lat: float, lng: float) -> dict:
     local = _local_check(state, lat, lng)
     hazard_detail: dict | None = None  # reg-09: graded ARR H-class + provenance
     if local is not None:
-        worst_severity, hit_zones, warnings = local["worst"], local["hit_zones"], []
+        worst_severity, hit_zones = local["worst"], local["hit_zones"]
+        # v2 VicPlan SBO check reports unreachable-service warnings here; v1
+        # local results never carry the key, so v1 output is unchanged.
+        warnings = list(local.get("warnings") or [])
         overlay_trust: str | None = local["trust"]
         overlay_basis: str | None = "local_library"
         hazard_detail = local.get("hazard")
@@ -917,6 +972,13 @@ def flood_score(lat: float, lng: float) -> dict:
             # turning a waterfront property's elevation into a false safety bonus.
             score = max(score, min(score + 10, 95))
 
+    terrain_unverified = False
+    if score is not None and depth_score is None:
+        score, terrain_unverified = _v2_unverified_terrain_cap(
+            score, overlay_score, hand)
+    if score is not None and worst_severity is not None:
+        score = _v2_overlay_ceiling(score, worst_severity)
+
     # Design-rainfall modifier: intense 1% AEP storms + other flood evidence
     # = compound risk. 70mm/1h is the upper-intensity band (Brisbane 98,
     # Sydney 59, Melbourne 49), so only genuinely storm-heavy locations with
@@ -961,6 +1023,8 @@ def flood_score(lat: float, lng: float) -> dict:
             hand.get("source"), "low")
     if ifd:
         result_dict["design_rainfall"] = ifd
+    if terrain_unverified:
+        result_dict["terrain_check"] = "unverified"
     if warnings:
         result_dict["warnings"] = warnings
     # Transparency flags: whether an OFFICIAL flood overlay covered this

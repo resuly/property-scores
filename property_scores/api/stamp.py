@@ -225,6 +225,11 @@ def components() -> dict[str, str]:
     entry just flush" has an answer other than "the hash changed".
     """
     parts: dict[str, str] = {"code": code_revision()}
+    # The model family (v1/v2) is an env switch, not code: flipping it on an
+    # unchanged checkout changes scores, so it must move the stamp. Not caught:
+    # an unknown value raises here as it does at startup (fail closed).
+    from property_scores.common import model_version
+    parts["score_model"] = model_version.current()
     try:
         from property_scores.noise.score import _CONFIG_SIG
         parts["noise_config"] = _CONFIG_SIG

@@ -1,0 +1,77 @@
+{
+ "_provenance": "VicPlan Vicplan_PlanningSchemeOverlays/MapServer/16 (SBO) /query responses with returnCountOnly=true, fetched live 2026-11-05; recorded_inputs/live_v1_* = production :8099 /scores/flood?nocache=true payload for the same G-NAF point (2026-11-05 validation run).",
+ "cases": [
+  {
+   "truth": "in_sbo",
+   "address": "15 FLINDERS STREET MENTONE VIC 3194",
+   "lat": -37.97552884,
+   "lng": 145.0556819,
+   "vicplan_sbo_count_response": "{\"count\":1}",
+   "library_hit_zones": [],
+   "recorded_inputs": {
+    "water_proximity": {
+     "max_occurrence_pct": 0,
+     "nearest_water_m": 443,
+     "wet_cells": 1,
+     "flood_cells": 0,
+     "total_cells": 121,
+     "mean_occurrence_pct": 0
+    },
+    "hand": {
+     "hand_m": 2.9,
+     "point_elev_m": 27.7,
+     "drainage_elev_m": 24.8,
+     "relief_m": 8.7,
+     "uncertain": false,
+     "source": "lidar_5m_local"
+    },
+    "design_rainfall": {
+     "ifd_1pct_1h_mm": 45.4,
+     "ifd_1pct_6h_mm": 75.1,
+     "grid_dist_deg": 0.1,
+     "source": "BOM 2016 IFD (CC BY 4.0)"
+    },
+    "flood_depth": null
+   },
+   "live_v1_score": 80,
+   "live_v1_label": "Low Risk",
+   "live_v1_official_layer": "checked_no_hit"
+  },
+  {
+   "truth": "outside",
+   "address": "14 JACKSON GREEN BOULEVARD CLAYTON SOUTH VIC 3169",
+   "lat": -37.93145338,
+   "lng": 145.12687909,
+   "vicplan_sbo_count_response": "{\"count\":0}",
+   "library_hit_zones": [],
+   "recorded_inputs": {
+    "water_proximity": {
+     "max_occurrence_pct": 0,
+     "nearest_water_m": null,
+     "wet_cells": 0,
+     "flood_cells": 0,
+     "total_cells": 121,
+     "mean_occurrence_pct": 0
+    },
+    "hand": {
+     "hand_m": 1.9,
+     "point_elev_m": 54.2,
+     "drainage_elev_m": 52.3,
+     "relief_m": 2.5,
+     "uncertain": false,
+     "source": "lidar_5m_local"
+    },
+    "design_rainfall": {
+     "ifd_1pct_1h_mm": 45.4,
+     "ifd_1pct_6h_mm": 75.1,
+     "grid_dist_deg": 0.1,
+     "source": "BOM 2016 IFD (CC BY 4.0)"
+    },
+    "flood_depth": null
+   },
+   "live_v1_score": 70,
+   "live_v1_label": "Low Risk",
+   "live_v1_official_layer": "checked_no_hit"
+  }
+ ]
+}

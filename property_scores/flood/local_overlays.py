@@ -21,8 +21,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from threading import Lock
 
+from property_scores.common import model_version
 from property_scores.flood.shards import ShardReader
 
 log = logging.getLogger(__name__)
@@ -120,8 +122,97 @@ def _hazard_class(props: dict) -> str | None:
     return None
 
 
+# --- score model v2: council / statutory layers with verified semantics ------
+# Gated on model_version.at_least("v2"): v1 (Foundit's pinned model) never
+# sees these. Every entry is (a) on the da_leads hazard geometry allowlist
+# (web/property_intel_routes._HAZARD_GEOMETRY_SOURCES, item-level CC BY from
+# the 2026-08-04/05 rights audit) AND (b) checked against the publisher's own
+# record for what the polygon means. Mapping follows the existing scale:
+# a 1% AEP extent or flood planning area is "flood" (same as NSW EPI "Flood
+# Planning Area" and VIC LSIO); overland-flow planning areas and statutory
+# inundation areas that publish no severity are "moderate" (same as the
+# remote VIC SBO entry). Matching is on the exact baked category string, so a
+# re-bake that renames a category drops out of the score instead of being
+# guessed at.
+#
+# Deliberately NOT here (still display-only), with the reason:
+#   nsw_hazard_flood_ses          content is the Hornsby FRMSP depth extent
+#                                 (SES dataset licence "3rd"), not the Northern
+#                                 Lakes study the audit cleared; rights finding
+#   qld_hazard_flood_gold_coast   "Flood assessment required": a code trigger
+#                                 with no published extent definition
+#   qld_hazard_flood_logan_city   "Flood assessment area": TLPI trigger area
+#   qld_hazard_flood_redland_city CC BY-SA 4.0; a score derived from it is a
+#                                 share-alike question for Bo, not a mapping
+#   qld_hazard_flood_floodplain   SPP floodplain assessment overlay: whole
+#                                 sub-basins (Phase 1/2/3), not an extent
+#   qld QFMP basin extents        not yet rights-audited
+#   nsw_hazard_flood_georges_river 1% AEP extent, but the baked multipolygon
+#                                 is self-intersecting: point-in-polygon on it
+#                                 disagrees with ST_MakeValid on 14 of 42 hits
+#                                 (2026-11-05 G-NAF sample). Repair at ingest
+#                                 first, then add it here as "flood".
+_V2_KRG_MAINSTREAM = {
+    "Lovers Jump Creek - Mainstream Flow", "Blackbutt Creek - Mainstream Flow",
+    "Middle Harbour South - Mainstream Flow",
+    "Middle Harbour North - Mainstream Flow",
+}
+_V2_KRG_OVERLAND = {
+    "Lovers Jump Creek - Overland FPA", "Blackbutt Creek - Overland FPA",
+    "Middle Harbour South - Overland FPA", "Middle Harbour North - Overland FPA",
+}
+# source -> {baked category: (kind, label)}
+_V2_COUNCIL_LAYERS: dict[str, dict[str, tuple[str, str]]] = {
+    # Ku-ring-gai Hydrology service: council FAQ defines the FPA as the 1% AEP
+    # flood plus 500 mm freeboard (mainstream) / 300 mm (overland flow).
+    "nsw_hazard_flood_ku_ring_gai": {
+        **{c: ("flood", f"Ku-ring-gai mainstream flood planning area "
+                        f"({c.split(' - ')[0]})") for c in _V2_KRG_MAINSTREAM},
+        **{c: ("moderate", f"Ku-ring-gai overland flow flood planning area "
+                           f"({c.split(' - ')[0]})") for c in _V2_KRG_OVERLAND},
+    },
+    # SES record hawkesbury-frmsp2025-flood-planning-area (cc-by): the
+    # harvester labels it "1% AEP Flood Extent"; the dataset is the FRMSP 2025
+    # Flood Planning Area.
+    "nsw_hazard_flood_hawkesbury": {
+        "1% AEP Flood Extent": ("flood", "Hawkesbury flood planning area "
+                                         "(FRMSP 2025, 1% AEP)"),
+    },
+    # SES record design_flood_extents (cc-by), file 1AEP_Extent.
+    "nsw_hazard_flood_campbelltown": {
+        "1% AEP flood extent": ("flood", "Campbelltown 1% AEP flood extent"),
+    },
+    # SCC Planning Scheme 2014 Flood Hazard Overlay "Flooding and Inundation
+    # Area": modelled DFE / storm-tide inundation, and the publisher says it
+    # "does not specify a level of hazard" -> moderate, never flood.
+    "qld_hazard_flood_sunshine_coast": {
+        "Land Subject to Flood Hazard Overlay": (
+            "moderate", "Sunshine Coast flooding and inundation area"),
+    },
+    # VicPlan layer 16 Special Building Overlay (overland flow), the same
+    # "moderate" the remote ENDPOINTS entry has always used. Dormant until the
+    # library carries it; until then check() asks VicPlan (see
+    # _vic_sbo_supplement).
+    "vic_hazard_flood_sbo": {
+        "*": ("moderate", "SBO - Special Building Overlay"),
+    },
+}
+
+
+def _classify_v2(source: str, props: dict) -> tuple[str, str] | None:
+    layer = _V2_COUNCIL_LAYERS.get(source)
+    if layer is None:
+        return None
+    cat = str(props.get("category") or "").strip()
+    return layer.get(cat) or layer.get("*")
+
+
 def _classify(source: str, props: dict) -> tuple[str, str] | None:
     """(severity_kind, label) for a whitelisted source hit, else None."""
+    if model_version.at_least("v2"):
+        v2 = _classify_v2(source, props)
+        if v2 is not None:
+            return v2
     # reg-09: graded hazard sources (suffix _flood_hazard) carry an H-class
     # that drives severity; a coarse-extent hit on the same council is
     # superseded by the graded read where present.
@@ -300,7 +391,95 @@ def check(state: str, lat: float, lng: float) -> dict | None:
     result = {"worst": worst, "hit_zones": labels, "trust": trust}
     if hazard is not None:
         result["hazard"] = hazard
+    if st == "vic" and model_version.at_least("v2"):
+        _vic_sbo_supplement(result, reader, rows, lat, lng)
     return result
+
+
+_VIC_SBO_SOURCE = "vic_hazard_flood_sbo"
+_SBO_WARNING = "Could not reach VicPlan SBO (layer 16)"
+_SBO_SKIPPED = "VicPlan SBO (layer 16) not checked: recent failures, retrying shortly"
+# (connect, read) seconds. A VIC lookup must not hang on VicPlan: the remote
+# path's 10 s TIMEOUT is too long for a call made on every VIC address.
+_SBO_TIMEOUT = (3.0, 3.5)
+# Process-local circuit breaker: after this many consecutive failures, skip the
+# call for _SBO_OPEN_S seconds (the answer is then reported as incomplete, not
+# clean). Bounds the cost of a VicPlan outage to one short window per worker.
+_SBO_FAILS_TO_OPEN = 3
+_SBO_OPEN_S = 300.0
+_sbo_lock = Lock()
+_sbo_state = {"fails": 0, "open_until": 0.0}
+
+
+def _sbo_breaker_open(now: float) -> bool:
+    with _sbo_lock:
+        return now < _sbo_state["open_until"]
+
+
+def _sbo_record(ok: bool, now: float) -> None:
+    with _sbo_lock:
+        if ok:
+            _sbo_state["fails"] = 0
+            return
+        _sbo_state["fails"] += 1
+        if _sbo_state["fails"] >= _SBO_FAILS_TO_OPEN:
+            _sbo_state["open_until"] = now + _SBO_OPEN_S
+            _sbo_state["fails"] = 0
+
+
+def _vic_sbo_supplement(result: dict, reader, rows, lat: float, lng: float) -> None:
+    """v2: close the SBO gap in the VIC library, in place.
+
+    VIC is a 'full' trust state, so a library miss is scored as a statewide
+    statutory clean check (90). But the library has never held the Special
+    Building Overlay (da_leads build.py registers LSIO and FO only), so every
+    SBO address was "checked clean" and landed at 70-80 Low (2026-11-05
+    validation: 16 of 36 SBO addresses Low). The remote path this replaced
+    queried SBO as 'moderate'.
+
+    If the library carries the SBO source, _classify already scored it and
+    nothing is done here. Otherwise VicPlan layer 16 is asked directly.
+
+    Asked even when the library already hit LSIO/FO: SBO cannot raise the
+    severity there, but it is one more mapped zone and the multi-zone penalty
+    (-3 per extra zone, same as the pre-2026-07-03 remote path) moves the
+    score, e.g. LSIO alone 40 Moderate vs LSIO + SBO 37 High. Skipping would
+    change the conclusion, and would make the answer depend on whether SBO
+    happens to be baked.
+
+    If VicPlan cannot answer (or the breaker is open), a warning is recorded so
+    the consumer does not pin the result, and a miss is no longer a full
+    statewide check: trust drops to 'hit_only' rather than vouching a clean 90.
+    """
+    if any(src == _VIC_SBO_SOURCE for src, _ in rows):
+        return
+    if reader is not None:
+        try:
+            if _VIC_SBO_SOURCE in ((reader.manifest() or {}).get("sources") or {}):
+                return  # library holds SBO and the point is not in it
+        except Exception:
+            log.warning("feature manifest unreadable for SBO check", exc_info=True)
+    from property_scores.flood.score import VIC_PLAN_BASE, _layer_has_features
+
+    now = time.monotonic()
+    if _sbo_breaker_open(now):
+        hit, warning = None, _SBO_SKIPPED
+    else:
+        hit = _layer_has_features(f"{VIC_PLAN_BASE}/16", lat, lng,
+                                  timeout=_SBO_TIMEOUT)
+        _sbo_record(hit is not None, now)
+        warning = _SBO_WARNING
+    if hit is None:
+        result.setdefault("warnings", []).append(warning)
+        if result["worst"] is None:
+            result["trust"] = "hit_only"
+        return
+    if hit:
+        kind, label = _V2_COUNCIL_LAYERS[_VIC_SBO_SOURCE]["*"]
+        if label not in result["hit_zones"]:
+            result["hit_zones"].append(label)
+        if result["worst"] is None or _SEVERITY_RANK[kind] < _SEVERITY_RANK[result["worst"]]:
+            result["worst"] = kind
 
 
 # ---------------------------------------------------------------------------

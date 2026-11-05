@@ -13,6 +13,16 @@ import pytest
 from property_scores.noise import surface as ns
 
 
+@pytest.fixture(autouse=True)
+def _rasters_cover_every_node(monkeypatch):
+    """Default: the transfer model's rasters cover every node (inner Melbourne).
+
+    So an off-path node in the tests below is unexplained unless a test says
+    otherwise, which is what each of them was written to assert.
+    """
+    monkeypatch.setattr(ns, "_coverage_gap", lambda lat, lng: False)
+
+
 def _stub(monkeypatch, value=60.0, path="transfer", fail_at=None):
     """Record every node the grid asks for and answer it."""
     calls = []
@@ -246,7 +256,82 @@ def test_partial_fallback_is_reported_without_condemning_the_grid(monkeypatch):
     out = ns.noise_surface(-37.8, 144.96, cells=5, require_path="transfer")
     assert out["model_path"] == {"transfer": 20, "physics": 5}
     assert out["model_path_uniform"] is False
+    # Rasters cover those five nodes, so their fallback is unexplained.
     assert out["model_path_as_configured"] is False
+    assert out["model_path_coverage_gap_nodes"] == 0
+
+
+def test_fallback_explained_by_raster_coverage_is_not_a_misconfiguration(monkeypatch):
+    """2026-11-06 Foundit preflight: Geraldton, Port Augusta, Alice Springs.
+
+    The production land-cover mosaic stops short of those towns, so every node
+    there is physics BY DESIGN of the transfer model, and the API withheld the
+    layer as a deployment incident on 8 of 120 addresses. Physics nodes that
+    the rasters explain are counted, not condemned.
+    """
+    seq = iter(["transfer"] * 20 + ["physics"] * 5)
+
+    def fake(lat, lng):
+        return {"lden_db": 60.0, "score": 50, "lden_source": next(seq)}
+
+    monkeypatch.setattr(ns, "noise_score", fake)
+    monkeypatch.setattr(ns, "transfer_inputs_ok", lambda: True)
+    asked = []
+    monkeypatch.setattr(ns, "_coverage_gap",
+                        lambda lat, lng: asked.append((lat, lng)) or True)
+    out = ns.noise_surface(-37.8, 144.96, cells=5, require_path="transfer")
+    assert out["model_path_as_configured"] is True
+    assert out["model_path_coverage_gap_nodes"] == 5
+    assert out["model_path_expected_nodes"] == 20
+    # Only the off-path nodes are probed: transfer nodes need no excuse.
+    assert len(asked) == 5
+
+
+def test_whole_grid_outside_coverage_is_reported_as_such(monkeypatch):
+    _stub(monkeypatch, path="physics")
+    monkeypatch.setattr(ns, "transfer_inputs_ok", lambda: True)
+    monkeypatch.setattr(ns, "_coverage_gap", lambda lat, lng: True)
+    out = ns.noise_surface(-28.78, 114.61, cells=5, require_path="transfer")
+    assert out["model_path"] == {"physics": 25}
+    assert out["model_path_as_configured"] is True
+    assert out["model_path_expected_nodes"] == 0
+    assert out["model_path_coverage_gap_nodes"] == 25
+
+
+def test_coverage_gap_does_not_excuse_unreadable_transfer_inputs(monkeypatch):
+    """With the model's own inputs unreadable, every node is physics for a
+    reason unrelated to the place; a coverage gap must not launder that."""
+    _stub(monkeypatch, path="physics")
+    monkeypatch.setattr(ns, "transfer_inputs_ok", lambda: False)
+    monkeypatch.setattr(ns, "_coverage_gap", lambda lat, lng: True)
+    out = ns.noise_surface(-28.78, 114.61, cells=5, require_path="transfer")
+    assert out["model_path_as_configured"] is False
+    assert out["model_path_coverage_gap_nodes"] == 0
+
+
+def test_mixed_grid_with_one_unexplained_node_is_still_caught(monkeypatch):
+    seq = iter(["physics"] * 25)
+    gaps = iter([True] * 24 + [False])
+
+    def fake(lat, lng):
+        return {"lden_db": 60.0, "score": 50, "lden_source": next(seq)}
+
+    monkeypatch.setattr(ns, "noise_score", fake)
+    monkeypatch.setattr(ns, "transfer_inputs_ok", lambda: True)
+    monkeypatch.setattr(ns, "_coverage_gap", lambda lat, lng: next(gaps))
+    out = ns.noise_surface(-28.78, 114.61, cells=5, require_path="transfer")
+    assert out["model_path_as_configured"] is False
+    assert out["model_path_coverage_gap_nodes"] == 24
+
+
+def test_coverage_probe_failure_is_not_a_gap(monkeypatch):
+    from property_scores.noise import transfer
+
+    monkeypatch.undo()   # drop the autouse stub: exercise the real probe
+    def boom(lat, lng):
+        raise OSError("vrt unreadable")
+    monkeypatch.setattr(transfer, "raster_coverage_ok", boom)
+    assert ns._coverage_gap(-28.78, 114.61) is False
 
 
 def test_estimated_db_is_used_when_lden_db_is_absent(monkeypatch):

@@ -237,6 +237,24 @@ def transfer_feats(db, lat: float, lng: float) -> tuple[dict, bool]:
     f["poi_n300"] = sum(1 for d in pd if d <= 300)
     f["poi_n500"] = sum(1 for d in pd if d <= 500)
 
+    rf, raster_ok = raster_feats(lat, lng)
+    f.update(rf)
+    return f, raster_ok
+
+
+def raster_feats(lat: float, lng: float) -> tuple[dict, bool]:
+    """The DEM and land-cover features, and whether both rasters cover the point.
+
+    Split out of transfer_feats (2026-11-06) so the noise surface can ask WHY a
+    node came back on the physics chain without re-implementing the coverage
+    rule: a node whose window falls outside data/global/{dem,lc}.vrt is a
+    coverage gap of the transfer model, not a misconfigured process. The
+    production lc.vrt holds 47 ESA WorldCover tiles, which leave regional WA
+    (Geraldton/Dongara), SA (Port Augusta) and most of the NT outside it
+    (checked on the server 2026-11-06). The values are unchanged from the
+    inline code they replace.
+    """
+    f: dict = {}
     # --- DEM (single value + window range) ---
     raster_ok = True
     elev = rs.sample(DEM, lat, lng, default=float("nan"))
@@ -261,6 +279,11 @@ def transfer_feats(db, lat: float, lng: float) -> tuple[dict, bool]:
     f["lc_built_100"] = lc100.get("frac_50", 0.0)
 
     return f, raster_ok
+
+
+def raster_coverage_ok(lat: float, lng: float) -> bool:
+    """True when the DEM and land cover both cover this point's window."""
+    return raster_feats(lat, lng)[1]
 
 
 def transfer_lden(db, lat: float, lng: float, state: str | None) -> tuple[float, float, bool]:

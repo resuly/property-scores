@@ -119,12 +119,43 @@ def _deg_per_m(lat: float) -> tuple[float, float]:
             1.0 / (111_320.0 * max(math.cos(math.radians(lat)), 0.1)))
 
 
-def _node(lat: float, lng: float) -> dict | None:
+def _coverage_gap(lat: float, lng: float) -> bool:
+    """True when the transfer model's DEM or land cover does not cover here.
+
+    Asked only of a node that came back off the transfer path. Such a node is
+    one of two different things: the transfer model could not run on this
+    point because its rasters stop short of it (a property of the place, the
+    same answer on every retry and on every correctly configured deployment),
+    or it could have and did not (the misconfiguration this module exists to
+    catch). The rasters are probed directly with the rule transfer_feats
+    applies, so the two cannot drift apart. A probe that itself fails counts
+    as NOT a coverage gap: an unexplained fallback stays an incident.
+    """
     try:
-        return noise_score(lat, lng)
+        from property_scores.noise import transfer
+        return not transfer.raster_coverage_ok(lat, lng)
+    except Exception:
+        logger.warning("raster coverage probe failed at %s,%s", lat, lng,
+                       exc_info=True)
+        return False
+
+
+def _node(lat: float, lng: float, expected: str | None = None):
+    """(noise_score result or None, off-path node explained by a coverage gap).
+
+    The second item is only ever True for a transfer expectation: physics has
+    no raster inputs to be out of coverage of.
+    """
+    try:
+        got = noise_score(lat, lng)
     except Exception:
         logger.warning("noise surface node failed at %s,%s", lat, lng, exc_info=True)
-        return None
+        return None, False
+    gap = False
+    if (expected == "transfer" and isinstance(got, dict)
+            and (got.get("lden_source") or "physics") != "transfer"):
+        gap = _coverage_gap(lat, lng)
+    return got, gap
 
 
 def noise_surface(lat: float, lng: float, radius_m: int = RADIUS_DEFAULT_M,
@@ -166,19 +197,21 @@ def noise_surface(lat: float, lng: float, radius_m: int = RADIUS_DEFAULT_M,
     lden = [[None] * cells for _ in range(cells)]
     score = [[None] * cells for _ in range(cells)]
     paths: dict[str, int] = {}
+    # Off-expected nodes whose fallback the rasters explain (see _coverage_gap).
+    coverage_gaps = 0
     started = time.monotonic()
 
     # Not a `with` block: ThreadPoolExecutor.__exit__ joins every running
     # worker, which would make the deadline decorative.
     pool = ThreadPoolExecutor(max_workers=CONCURRENCY)
     try:
-        futures = {pool.submit(_node, nlat, nlng): (r, c)
+        futures = {pool.submit(_node, nlat, nlng, expected): (r, c)
                    for r, c, nlat, nlng in nodes}
         try:
             for fut in as_completed(futures, timeout=deadline_s):
                 r, c = futures[fut]
                 try:
-                    got = fut.result()
+                    got, gap = fut.result()
                 except Exception:
                     continue
                 if not isinstance(got, dict):
@@ -193,6 +226,8 @@ def noise_surface(lat: float, lng: float, radius_m: int = RADIUS_DEFAULT_M,
                     score[r][c] = int(got["score"])
                 path = got.get("lden_source") or "physics"
                 paths[path] = paths.get(path, 0) + 1
+                if path != expected and gap:
+                    coverage_gaps += 1
         except (TimeoutError, FuturesTimeoutError):
             logger.warning("noise surface hit its %.0fs deadline at %s,%s",
                            deadline_s, lat, lng)
@@ -203,6 +238,12 @@ def noise_surface(lat: float, lng: float, radius_m: int = RADIUS_DEFAULT_M,
     if not filled:
         return None
     missing = cells * cells - filled
+    on_expected = paths.get(expected, 0)
+    # A node off the expected path is excused ONLY by a raster coverage gap,
+    # and only while the transfer inputs are readable: with the inputs
+    # unreadable every node is physics for a reason that has nothing to do
+    # with the place, and a coverage gap must not launder that.
+    unexplained = filled - on_expected - (coverage_gaps if inputs_ok else 0)
 
     out = {
         "bbox": [round(lng - half * dlng, 6), round(lat - half * dlat, 6),
@@ -227,11 +268,18 @@ def noise_surface(lat: float, lng: float, radius_m: int = RADIUS_DEFAULT_M,
         # physics means the transfer model IS available and simply switched
         # off, which is a configuration mistake in production, not a data gap.
         "transfer_inputs_ok": inputs_ok,
-        # False means the run did NOT use the model it was supposed to. Some
-        # nodes legitimately fall back (no DEM or land-cover coverage), so this
-        # is a flag on the grid rather than a refusal; model_path counts how
-        # much of it fell back.
-        "model_path_as_configured": paths.get(expected, 0) == filled,
+        # False means some node did NOT use the model it was supposed to for
+        # a reason the place does not explain. Nodes that fall back because
+        # the transfer model's DEM or land cover does not reach them are the
+        # model working as designed, not a deployment fault, and are counted
+        # in model_path_coverage_gap_nodes instead (2026-11-06: before this,
+        # every node in regional WA/SA/NT tripped this flag and the API
+        # withheld the layer as an incident). A grid in which NO node is on
+        # the expected path and every node is a coverage gap is reported as
+        # such: the caller decides whether to ship a physics-only grid.
+        "model_path_as_configured": unexplained == 0,
+        "model_path_coverage_gap_nodes": coverage_gaps if inputs_ok else 0,
+        "model_path_expected_nodes": on_expected,
     }
     if not out["model_path_as_configured"]:
         logger.error(

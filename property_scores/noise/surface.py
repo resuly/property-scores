@@ -88,7 +88,13 @@ def transfer_inputs_ok() -> bool:
         if not transfer._load():
             return False
         roads = transfer._DATA_DIR / "overture_roads.parquet"
-        return roads.exists() and roads.stat().st_size > 0
+        if not (roads.exists() and roads.stat().st_size > 0):
+            return False
+        # The DEM / land-cover mosaics too: a coverage gap only excuses a
+        # physics node while these are readable (see _coverage_gap), so a lost
+        # or unreadable VRT must surface here as an incident instead of
+        # making every node look like it sits outside the mosaic.
+        return transfer.rasters_readable()
     except Exception:
         logger.warning("transfer input preflight failed", exc_info=True)
         return False
@@ -240,9 +246,19 @@ def noise_surface(lat: float, lng: float, radius_m: int = RADIUS_DEFAULT_M,
     missing = cells * cells - filled
     on_expected = paths.get(expected, 0)
     # A node off the expected path is excused ONLY by a raster coverage gap,
-    # and only while the transfer inputs are readable: with the inputs
-    # unreadable every node is physics for a reason that has nothing to do
-    # with the place, and a coverage gap must not launder that.
+    # and only while the transfer inputs (RF, calibration, road parquet AND
+    # the DEM / land-cover mosaics) are readable: with the inputs unreadable
+    # every node is physics for a reason that has nothing to do with the
+    # place, and a coverage gap must not launder that.
+    #
+    # NOISE_TRANSFER unset (the 2026-08-05 misconfiguration) is still caught
+    # wherever the rasters DO cover a node: that node is physics, covered, so
+    # unexplained, and the grid fails. Only nodes outside the mosaic are
+    # excused, and there a correctly configured process returns the very same
+    # physics value, so the excuse cannot change what ships. A grid lying
+    # wholly outside the mosaic therefore passes under an unset NOISE_TRANSFER;
+    # that deployment fault is caught on every covered address instead, and
+    # by scores.noise / the model stamp, not by this flag.
     unexplained = filled - on_expected - (coverage_gaps if inputs_ok else 0)
 
     out = {

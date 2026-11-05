@@ -281,8 +281,41 @@ def raster_feats(lat: float, lng: float) -> tuple[dict, bool]:
     return f, raster_ok
 
 
+def rasters_readable() -> bool:
+    """Can the DEM and land-cover mosaics be opened, sources included?
+
+    raster_sample swallows a missing or unreadable file and answers NaN / {},
+    which is indistinguishable from "this point is outside the mosaic". So a
+    deployment that lost dem.vrt or lc.vrt (or a tile a VRT points at) would
+    otherwise turn every node into a coverage gap and hide the incident. Opened
+    fresh with rasterio, not through raster_sample's per-thread handle cache,
+    and every file the dataset names (the VRT plus its sources) must exist.
+    """
+    import os
+    import rasterio
+    for path in (DEM, LC):
+        try:
+            with rasterio.open(path) as src:
+                files = list(src.files or [path])
+        except Exception:
+            logger.warning("transfer raster %s cannot be opened", path, exc_info=True)
+            return False
+        missing = [f for f in files if not os.path.exists(f)]
+        if missing:
+            logger.warning("transfer raster %s names %d missing source file(s), "
+                           "first %s", path, len(missing), missing[0])
+            return False
+    return True
+
+
 def raster_coverage_ok(lat: float, lng: float) -> bool:
-    """True when the DEM and land cover both cover this point's window."""
+    """True when the DEM and land cover both cover this point's window.
+
+    Raises when either raster cannot be opened at all: an unreadable file is
+    an incident, never "outside coverage" (raster_feats alone cannot tell).
+    """
+    if rs._src(DEM) is None or rs._src(LC) is None:
+        raise OSError("transfer DEM or land-cover raster cannot be opened")
     return raster_feats(lat, lng)[1]
 
 

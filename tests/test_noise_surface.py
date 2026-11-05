@@ -238,8 +238,14 @@ def test_transfer_inputs_probe_reads_files_not_the_environment(monkeypatch, tmp_
     monkeypatch.setattr(transfer, "_load", lambda: True)
     assert ns.transfer_inputs_ok() is False
 
-    # Everything present -> True, so the probe is not just always False.
+    # Road parquet fine but the DEM / land-cover mosaics unreadable: a lost
+    # VRT must fail the preflight, or every node would pass as a coverage gap.
     (good / "overture_roads.parquet").write_bytes(b"not empty")
+    monkeypatch.setattr(transfer, "rasters_readable", lambda: False)
+    assert ns.transfer_inputs_ok() is False
+
+    # Everything present -> True, so the probe is not just always False.
+    monkeypatch.setattr(transfer, "rasters_readable", lambda: True)
     assert ns.transfer_inputs_ok() is True
 
 

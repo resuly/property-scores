@@ -370,12 +370,141 @@ def run_anchors(base: str, only_domain: str | None) -> list[dict]:
     return results
 
 
+def _get_bytes(url: str, timeout: int = 30, attempts: int = 2,
+               retry_wait: float = 5.0) -> bytes | None:
+    """Raw-bytes twin of _get for binary endpoints (vector tiles).
+
+    None means "no 2xx answer after the retry". An empty body is a real answer
+    (an ArcGIS vector tile with nothing in it is HTTP 200 + 0 bytes) and is
+    returned as b"", never conflated with unreachable.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "truth-probe"})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read()
+        except Exception:
+            if attempt < attempts:
+                time.sleep(retry_wait)
+    return None
+
+
+def tile_xy(c: dict) -> tuple[int, int]:
+    """Web-mercator (x, y) of the tile holding c's lat/lng at zoom c['z']."""
+    n = 2 ** int(c["z"])
+    fx, fy = _tile_frac(c["lat"], c["lng"], n)
+    return int(fx), int(fy)
+
+
+def _tile_frac(lat: float, lng: float, n: int) -> tuple[float, float]:
+    import math
+    fx = (lng + 180.0) / 360.0 * n
+    fy = (1.0 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2.0 * n
+    return fx, fy
+
+
+def tile_url(c: dict) -> str:
+    x, y = tile_xy(c)
+    return c["url"].format(z=int(c["z"]), x=x, y=y)
+
+
+def check_vector_tile_point(c: dict, body: bytes) -> tuple[bool, str]:
+    """Point-in-polygon on one Mapbox vector tile, plus a schema fingerprint.
+
+    Added 2026-11-06 for the QLD BPA 2026 service, which is tiles only. HTTP
+    200 proves nothing on its own: the fingerprint (exactly one source-layer
+    named c['source_layer'], every feature carrying c['attribute'], every value
+    inside c['allowed_values']) turns a rename or recode red the day it lands.
+    c['assert'] is 'value=N' (the point must sit in a polygon whose attribute
+    is N, so an empty tile fails) or 'empty' (the point sits in no polygon;
+    an empty tile passes, a non-empty one is still fingerprinted).
+    """
+    try:
+        import mapbox_vector_tile
+        from shapely.geometry import Point, shape
+    except Exception as exc:
+        # Fail closed: a box without the dependency must not read as healthy.
+        return False, f"dependency missing: {type(exc).__name__}: {exc}"[:120]
+
+    import gzip
+    if body[:2] == b"\x1f\x8b":
+        try:
+            body = gzip.decompress(body)
+        except Exception as exc:
+            return False, f"bad gzip tile: {type(exc).__name__}"
+    if body.lstrip()[:1] in (b"{", b"<"):
+        return False, f"not a vector tile (text body): {body[:60]!r}"
+    layers = {}
+    if body:
+        try:
+            # MVT rows run top-down; the library's default flips y to bottom-up.
+            layers = mapbox_vector_tile.decode(
+                body, default_options={"y_coord_down": True})
+        except Exception as exc:
+            return False, f"not a vector tile: {type(exc).__name__}"
+
+    want_layer, attr = c["source_layer"], c["attribute"]
+    allowed = set(c["allowed_values"])
+    if layers and set(layers) != {want_layer}:
+        return False, f"schema drift: layers={sorted(layers)} expected [{want_layer!r}]"
+    feats = layers.get(want_layer, {}).get("features", []) if layers else []
+    if layers and not feats:
+        return False, f"schema drift: layer {want_layer} present with no features"
+    missing = sum(1 for f in feats if attr not in f["properties"])
+    if missing:
+        return False, f"schema drift: {missing}/{len(feats)} features lack {attr}"
+    values = {f["properties"][attr] for f in feats}
+    if not values <= allowed:
+        return False, (f"schema drift: {attr} values={sorted(values, key=str)} "
+                       f"outside {sorted(allowed)}")
+
+    hits = []
+    if feats:
+        extent = layers[want_layer].get("extent", 4096)
+        x, y = tile_xy(c)
+        fx, fy = _tile_frac(c["lat"], c["lng"], 2 ** int(c["z"]))
+        pt = Point((fx - x) * extent, (fy - y) * extent)
+        for f in feats:
+            geom = shape(f["geometry"])
+            if not geom.is_valid:
+                geom = geom.buffer(0)
+            if geom.covers(pt):
+                hits.append(f["properties"][attr])
+    fp = f"layer={want_layer if feats else '(empty tile)'} {attr}_values={sorted(values)}"
+    hit_note = (f"hit {attr}={','.join(map(str, sorted(set(hits))))}" if hits
+                else "no polygon at point")
+
+    expr = c.get("assert", "")
+    if expr == "empty":
+        return (not hits), f"{hit_note}; {fp}; expected empty"
+    m = re.fullmatch(r"value\s*=\s*(-?\d+)", expr)
+    if m:
+        want = int(m.group(1))
+        return (want in hits), f"{hit_note}; {fp}; expected {attr}={want}"
+    return False, f"unknown vector_tile_point assert {expr!r}"
+
+
+def _run_vector_tile_canary(c: dict) -> dict:
+    body = _get_bytes(tile_url(c))
+    time.sleep(1.0)
+    if body is None:
+        ok, note = False, "no response"
+    else:
+        ok, note = check_vector_tile_point(c, body)
+    return {"domain": "canary", "key": c["name"],
+            "status": "PASS" if ok else "FAIL", "note": note,
+            "expected": c.get("assert", "")}
+
+
 def run_canaries() -> list[dict]:
     if not CANARIES.exists():
         return []
     out = []
     for c in json.loads(CANARIES.read_text()):
         if not c.get("active", True):
+            continue
+        if c.get("kind") == "vector_tile_point":
+            out.append(_run_vector_tile_canary(c))
             continue
         url = c["url"]
         data = _get(url, timeout=30, headers=c.get("headers"))

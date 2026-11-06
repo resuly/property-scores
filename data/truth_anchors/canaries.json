@@ -62,11 +62,40 @@
     "active": true
   },
   {
-    "name": "QLD bushfire Tamborine known-positive (QFD BPA proxy)",
-    "url": "https://utility.arcgis.com/usrsvcs/servers/3ec80e95fa084ef9901205df0a7a74ec/rest/services/Hosted/BPA/FeatureServer/0/query?geometry=153.20378,-27.97564&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&returnCountOnly=true&f=json",
-    "assert": "count>0",
+    "name": "QLD bushfire Tamborine known-positive (QFD BPA 2026 vector tiles)",
+    "kind": "vector_tile_point",
+    "url": "https://tiles.arcgis.com/tiles/vkTwD8kHw2woKBqV/arcgis/rest/services/BPA_2026/VectorTileServer/tile/{z}/{y}/{x}.pbf",
+    "z": 14,
+    "source_layer": "WOS_BPA_sp",
+    "attribute": "_symbol",
+    "allowed_values": [
+      0,
+      1,
+      2
+    ],
+    "lat": -27.97564,
+    "lng": 153.20378,
+    "assert": "value=2",
     "active": true,
-    "note": "Proxy item id rotated 2026-08-21, after the old 8ac1ba8e... had been dead for a month: last PASS 2026-07-22, then 30 consecutive FAILs from 07-23 on 'Error generating token' (HTTP 200 with an error body, service root included). QFD published the replacement 3ec80e95... on 2026-08-05, two weeks AFTER the break, so the rebuild was the fix and not the cause. Verified on the new id before the swap: Tamborine count=1, Brisbane CBD count=0, class='Very High Potential Bushfire Intensity' version='July 2017'. Two traps for a future resolver: both items are still publicly listed AND share the title 'Bushfire Prone Area (BPA) Dynamic Limited', so it must probe for liveness rather than match on name or pick the newest; and this canary sat red for 30 days unnoticed because the sentinel only alerts on NEW failures, so it pinged once on 07-23 and then went quiet."
+    "note": "Moved 2026-11-06 off the QFD 'BPA Dynamic Limited' proxy: item 3ec80e95... now answers 400 CONT_0001 'Item does not exist' (the earlier 8ac1ba8e... likewise). PublicSafetyQld_Data published 'BPA Whole of State' (item 3d238527c75c4a7db89be66b1daf2009, service BPA_2026) on 2026-10-29 as a vector tile service only, no queryable FeatureServer, so this canary decodes the z14 tile and tests the point against its polygons. _symbol per the service style: 0=High, 1=Medium, 2=Very High Potential Bushfire Intensity. Schema fingerprint is part of the check: the tile must carry exactly source-layer WOS_BPA_sp, every feature must have _symbol, and every value must be in {0,1,2}; a rename or recode is red even when the HTTP status is 200. The bushfire scorer's QLD fallback still points at the deleted item (separate follow-up). Prior history: 8ac1ba8e... died 2026-07-23 and sat red 30 days unnoticed before the stale-red reminder existed."
+  },
+  {
+    "name": "QLD bushfire Brisbane CBD known-negative (QFD BPA 2026 vector tiles)",
+    "kind": "vector_tile_point",
+    "url": "https://tiles.arcgis.com/tiles/vkTwD8kHw2woKBqV/arcgis/rest/services/BPA_2026/VectorTileServer/tile/{z}/{y}/{x}.pbf",
+    "z": 14,
+    "source_layer": "WOS_BPA_sp",
+    "attribute": "_symbol",
+    "allowed_values": [
+      0,
+      1,
+      2
+    ],
+    "lat": -27.4698,
+    "lng": 153.0251,
+    "assert": "empty",
+    "active": true,
+    "note": "Control for the Tamborine canary: the CBD z14 tile was HTTP 200 with 0 bytes on 2026-11-06. An empty tile passes; a non-empty one must still match the schema fingerprint and the point must sit in no polygon. Liveness comes from the positive, since a dead service returning empty tiles would also pass here."
   },
   {
     "name": "WA contamination Bellevue known-positive (DWER register)",

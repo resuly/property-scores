@@ -10,6 +10,7 @@ _symbol 取值集合), 不只看 HTTP 200。
   tamborine_z14_9519_15164.pbf      Tamborine 所在瓦片, 4841 字节
   brisbane_cbd_z14_9493_15156.pbf   Brisbane CBD 所在瓦片, HTTP 200 + 0 字节
 """
+import gzip
 import importlib.util
 import json
 import sys
@@ -142,6 +143,27 @@ def test_a_point_outside_every_polygon_is_not_a_hit():
     assert ok_neg and not ok_pos, note
 
 
+def test_gzip_wrapped_tile_still_passes():
+    ok, note = probes.check_vector_tile_point(POS, gzip.compress(TAMBORINE))
+    assert ok, note
+    assert "_symbol=2" in note
+
+
+def test_unknown_assert_value_is_not_ok():
+    ok, note = probes.check_vector_tile_point({**POS, "assert": "foo"}, TAMBORINE)
+    assert not ok and "unknown" in note, note
+
+
+def test_tile_xy_truncates_instead_of_rounding():
+    # z14, n=16384. Pick the in-tile fractions fx=15164.8, fy=9519.9 (both > .5,
+    # so round() would give (15165, 9520)). Invert web mercator:
+    #   lng = fx/n*360-180 = 153.21094
+    #   lat = degrees(atan(sinh(pi*(1-2*fy/n)))) = -27.99246
+    # tile_xy must truncate to (15164, 9519), the same tile as Tamborine.
+    c = {**POS, "lat": -27.99246, "lng": 153.21094}
+    assert probes.tile_xy(c) == (15164, 9519)
+
+
 # ---- schema fingerprint ---------------------------------------------------
 
 @pytest.mark.parametrize("drift", [
@@ -242,3 +264,18 @@ def test_missing_dependency_fails_closed(monkeypatch):
     for c in (POS, NEG):
         ok, note = probes.check_vector_tile_point(c, CBD)
         assert not ok and "dependency missing" in note, note
+
+
+def test_check_exception_fails_that_canary_without_aborting_the_run(monkeypatch, tmp_path):
+    real = probes.check_vector_tile_point
+
+    def boom(c, body):
+        if c is POS or c["name"] == POS["name"]:
+            raise RuntimeError("decoder blew up")
+        return real(c, body)
+
+    monkeypatch.setattr(probes, "check_vector_tile_point", boom)
+    tiles = {probes.tile_url(POS): TAMBORINE, probes.tile_url(NEG): CBD}
+    out, _ = _run(monkeypatch, tmp_path, lambda u: _Resp(tiles[u]))
+    assert [r["status"] for r in out] == ["FAIL", "PASS"], out
+    assert "check error: RuntimeError" in out[0]["note"]

@@ -490,7 +490,10 @@ def _run_vector_tile_canary(c: dict) -> dict:
     if body is None:
         ok, note = False, "no response"
     else:
-        ok, note = check_vector_tile_point(c, body)
+        try:
+            ok, note = check_vector_tile_point(c, body)
+        except Exception as exc:  # one sentinel must not abort the whole run
+            ok, note = False, f"check error: {type(exc).__name__}"
     return {"domain": "canary", "key": c["name"],
             "status": "PASS" if ok else "FAIL", "note": note,
             "expected": c.get("assert", "")}

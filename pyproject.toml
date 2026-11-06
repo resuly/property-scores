@@ -21,7 +21,7 @@ dependencies = [
 [project.optional-dependencies]
 api = ["fastapi>=0.110", "uvicorn>=0.29", "gunicorn>=26.2", "uvicorn-worker>=0.4"]
 ml = ["xgboost>=2.0", "scikit-learn==1.7.2"]  # == the version that pickled the active noise rf.pkl; tests/test_model_sklearn_version_pin.py
-dev = ["pytest>=8.0", "ruff>=0.4"]
+dev = ["pytest>=8.0", "ruff>=0.4", "mapbox-vector-tile>=2.1,<3"]  # tests/test_qld_bpa_vector_tile_canary.py imports it directly
 # truth sentinel: QLD BPA 2026 is vector tiles only (scripts/score_truth_probes.py vector_tile_point canaries).
 # Without it those canaries fail closed with "dependency missing". Pulls protobuf + pyclipper.
 probes = ["mapbox-vector-tile>=2.1,<3", "shapely>=2.0"]

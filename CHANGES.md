@@ -1,5 +1,35 @@
 # 本对话改动说明
 
+## 2026-11-09 Walkability：重建车站表补回 Sydney Metro；公园改用 OSM 多边形
+
+### 问题
+
+- 车站：`build_rail_stops.py` 的 route_type 修复（b8c3435/04a4977，10-19/20，Metro 401
+  保留、VIC 改按 route_type、电车归 tram_bus）已在 master 并已部署，但
+  `data/au_rail_stops.parquet` 一直是 06-10 用旧脚本生成的版本（生产 md5 与仓库一致），
+  所以生产仍没有 Crows Nest、Victoria Cross 等 Metro 站。
+- 公园：只来自 Overture places，大悉尼 park 类 4,575 条里 4,280 条（94%）来自 Meta
+  （Facebook 页面），按页面填的粗地址落点："Loftus, Royal National Park" 落在
+  Crows Nest，"Ayers Rock, Uluru NT" 落在 CBD。confidence 分不开真假（这两个
+  0.70/0.73；≥0.9 且落在 OSM 公园外的抽样 10 个里仍有 3 个错位）。
+
+### 改法
+
+- 用 master 的脚本重建 `data/au_rail_stops.parquet`（2026-11-09 feed，2,103 行；旧 3,688）。
+  新增真实 NSW GTFS 字节夹具测试 `tests/test_build_rail_stops_nsw.py`。
+- 新增 `scripts/build_osm_parks.py`：从 Overture 2026-10-21.0 base `land_use`
+  （OSM 多边形，ODbL）取有名字的 park/village_green/national_park/nature_reserve/
+  recreation_ground 及像公共花园的 garden，写 `data/au_osm_parks.parquet`
+  （37,169 个，57 MB，本机 34 s、峰值 RSS 约 1 GB；不入 git，部署时生成或 scp）。
+- `osm_parks_near()`：到公园边界的距离（在园内=0），同名多块只取最近一块。
+- 有公园文件时，walkability 丢掉 Meta 来源的 park 类 Overture 点，并入 OSM 公园，
+  `osm_amenity_categories` 增加 `park`。Foursquare/Microsoft 来源保留。没有文件时
+  行为不变（逐步部署安全）。
+
+### 遗留
+
+- view_quality / heat_island 的 park-POI 兜底仍读未过滤的 Overture 点。
+
 ## 2026-08-25 API 服务进程管理从 uvicorn multiprocess 换成 gunicorn+UvicornWorker
 
 ### 问题（生产实证，2026-08-25 调研闭环）

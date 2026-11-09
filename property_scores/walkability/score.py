@@ -9,7 +9,9 @@ Uses straight-line distance as a baseline. Road-network distance (via Valhalla
 or OSRM) can be substituted for higher accuracy.
 """
 
-from property_scores.common.overture import (get_db, osm_amenities_near, pois_near,
+from property_scores.common.overture import (get_db, osm_amenities_near,
+                                              osm_parks_available, osm_parks_near,
+                                              pois_near,
                                               pois_near_detailed, rail_stops_near,
                                               road_crossings, sports_fields_near,
                                               transit_stops_near, walking_trails_near,
@@ -310,7 +312,19 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
         pois = pois_near(db, lat, lng, radius_m, source=source)
         detailed = False
     else:
-        pois_full = pois_near_detailed(db, lat, lng, radius_m)
+        # Parks come from OSM polygons when they are deployed: Overture's
+        # park-class places are 94% Meta pages pinned to whatever address the
+        # page owner typed ("Loftus, Royal National Park" beside Crows Nest
+        # station, "Ayers Rock" in the CBD), so those are dropped and the
+        # distance to the nearest real park boundary merges in instead.
+        # Foursquare/Microsoft-backed park places stay.
+        _osm_parks = osm_parks_available()
+        pois_full = pois_near_detailed(db, lat, lng, radius_m,
+                                       drop_meta_parks=_osm_parks)
+        if _osm_parks:
+            _park_rows = osm_parks_near(db, lat, lng, radius_m)
+            pois_full = pois_full + _park_rows
+            _osm_cats |= {"park"} if _park_rows else set()
         # GTFS bus/tram stops: Overture places have essentially no AU bus
         # stops (zero within 1500 m of Turramurra's bus interchange), so the
         # tram_bus scenario reads official GTFS stops. Same 5-tuple shape,

@@ -839,12 +839,41 @@ GENERIC_SCHOOL_IS_PRIMARY_SQL = f"""(
 )"""
 
 
+# Overture categories the walkability park scenario reads (walkability
+# CATEGORY_MAP entries mapping to "park"; a test keeps the two in step).
+PARK_CATEGORIES = ("park", "memorial_park", "garden", "botanical_garden",
+                   "recreation_area", "nature_reserve", "national_park")
+
+# A park-class place sourced from a Meta (Facebook) page. Pages carry
+# whatever address their owner typed, and a bare "Sydney, NSW" geocodes to the
+# locality centroid: "Loftus, Royal National Park" 160 m from Crows Nest
+# station, "Ayers Rock, Uluru NT" in the CBD. In greater Sydney 94% of
+# park-class places are Meta pages and their confidence does not separate the
+# ghosts (both examples score 0.70-0.73; even at >= 0.9, 3 of 10 sampled pages
+# outside an OSM park were misplaced; 2026-11-09 audit). No Australian record
+# merges Meta with another provider (the only other entry is Overture's own
+# confidence stamp), so "has a Meta source" is "Meta-only".
+# coalesce: a NULL category must read as "not a park", not as NULL, or the
+# NOT around this predicate would drop every uncategorised place too.
+META_PARK_SQL = f"""coalesce(
+    categories.primary IN ({", ".join(f"'{c}'" for c in PARK_CATEGORIES)})
+    AND list_contains(list_transform(coalesce(sources, []), s -> s.dataset), 'meta'),
+    false)"""
+
+
 def pois_near_detailed(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
-                       radius_m: int = 1500) -> list[tuple]:
-    """Like pois_near but returns (category, dist_m, lng, lat, name)."""
+                       radius_m: int = 1500, *,
+                       drop_meta_parks: bool = False) -> list[tuple]:
+    """Like pois_near but returns (category, dist_m, lng, lat, name).
+
+    drop_meta_parks: leave out park-class places sourced from a Meta page
+    (META_PARK_SQL). Walkability sets it when the OSM park polygons
+    (osm_parks_near) are there to stand in for them.
+    """
     pois_path = data_path(POIS_FILE)
     if not pois_path.exists():
         return []
+    meta_filter = f"AND NOT {META_PARK_SQL}" if drop_meta_parks else ""
     delta = radius_m / 111_000 * 1.5
     import math
     m_per_deg = 111_320 * math.cos(math.radians(lat))
@@ -867,6 +896,7 @@ def pois_near_detailed(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
                 WHERE bbox.xmin BETWEEN {lng - delta} AND {lng + delta}
                   AND bbox.ymin BETWEEN {lat - delta} AND {lat + delta}
                   AND ST_Distance(geometry, ST_Point({lng}, {lat})) < {deg_thresh}
+                  {meta_filter}
             )
         )
         WHERE dist_m < {radius_m}
@@ -951,6 +981,53 @@ def osm_amenities_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
               AND lng BETWEEN {lng - dlng} AND {lng + dlng}
         )
         WHERE dist_m < {radius_m}
+        ORDER BY dist_m
+    """
+    return db.sql(sql).fetchall()
+
+
+PARKS_FILE = "au_osm_parks.parquet"
+
+
+def osm_parks_available(source: str | None = None) -> bool:
+    import os
+    return os.path.exists(str(source or data_path(PARKS_FILE)))
+
+
+def osm_parks_near(db: duckdb.DuckDBPyConnection, lat: float, lng: float,
+                   radius_m: int = 1500, *, source: str | None = None) -> list[tuple]:
+    """Named OSM park / green-space polygons near a point: POI 5-tuple shape.
+
+    Distance is to the nearest point of the park itself (0 inside it), and the
+    returned lng/lat is that point, so the road/water crossing tests aim at
+    the park edge rather than a centroid that may be kilometres inside a
+    national park. A park split into several polygons with one name comes
+    back once, at its nearest part. Polygons from scripts/build_osm_parks.py
+    (OSM via Overture base land_use, ODbL). Returns [] when the parquet is
+    absent.
+    """
+    path = source or data_path(PARKS_FILE)
+    if not osm_parks_available(str(path)):
+        return []
+    import math
+    m_per_deg = 111_320 * math.cos(math.radians(lat))
+    dlat = radius_m / _M_PER_DEG_LAT
+    dlng = radius_m / m_per_deg
+    sql = f"""
+        SELECT 'park' AS category, dist_m, ST_X(cp) AS plng, ST_Y(cp) AS plat, name
+        FROM (
+            SELECT name, cp,
+                   {_metres_from_closest_point(lng, lat, m_per_deg)} AS dist_m
+            FROM (
+                SELECT name,
+                       {_closest_point_sql('ST_GeomFromWKB(geometry)', lng, lat)} AS cp
+                FROM read_parquet('{path}')
+                WHERE xmin <= {lng + dlng} AND xmax >= {lng - dlng}
+                  AND ymin <= {lat + dlat} AND ymax >= {lat - dlat}
+            )
+        )
+        WHERE dist_m < {radius_m}
+        QUALIFY row_number() OVER (PARTITION BY lower(name) ORDER BY dist_m) = 1
         ORDER BY dist_m
     """
     return db.sql(sql).fetchall()

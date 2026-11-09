@@ -117,7 +117,8 @@ def test_school_options_are_complete_while_other_categories_stay_bounded(monkeyp
     monkeypatch.setattr(walk, "get_db", lambda: object())
     monkeypatch.setattr(walk, "pois_near_detailed", lambda *a, **k: rows)
     for name in ("transit_stops_near", "sports_fields_near",
-                 "osm_amenities_near", "rail_stops_near", "walking_trails_near"):
+                 "osm_amenities_near", "rail_stops_near", "walking_trails_near",
+                 "osm_parks_near"):
         monkeypatch.setattr(walk, name, lambda *a, **k: [])
     monkeypatch.setattr(walk, "road_crossings", lambda *a, **k: set())
     monkeypatch.setattr(walk, "water_crossings", lambda *a, **k: set())
@@ -160,7 +161,8 @@ def test_school_option_dedup_does_not_move_score_baseline(monkeypatch):
     monkeypatch.setattr(walk, "get_db", lambda: object())
     monkeypatch.setattr(walk, "pois_near_detailed", lambda *a, **k: rows)
     for name in ("transit_stops_near", "sports_fields_near",
-                 "osm_amenities_near", "rail_stops_near", "walking_trails_near"):
+                 "osm_amenities_near", "rail_stops_near", "walking_trails_near",
+                 "osm_parks_near"):
         monkeypatch.setattr(walk, name, lambda *a, **k: [])
     monkeypatch.setattr(walk, "road_crossings", lambda *a, **k: set())
     monkeypatch.setattr(walk, "water_crossings", lambda *a, **k: set())
@@ -193,7 +195,8 @@ def test_road_query_failure_is_conservative_and_disclosed(monkeypatch):
     monkeypatch.setattr(walk, "get_db", lambda: object())
     monkeypatch.setattr(walk, "pois_near_detailed", lambda *a, **k: rows)
     for name in ("transit_stops_near", "sports_fields_near",
-                 "osm_amenities_near", "rail_stops_near", "walking_trails_near"):
+                 "osm_amenities_near", "rail_stops_near", "walking_trails_near",
+                 "osm_parks_near"):
         monkeypatch.setattr(walk, name, lambda *a, **k: [])
     monkeypatch.setattr(walk, "road_crossings", lambda *a, **k: None)
     monkeypatch.setattr(walk, "water_crossings", lambda *a, **k: set())
@@ -218,7 +221,8 @@ def _stub_walk_sources(monkeypatch, walk, rows):
     monkeypatch.setattr(walk, "get_db", lambda: object())
     monkeypatch.setattr(walk, "pois_near_detailed", lambda *a, **k: rows)
     for name in ("transit_stops_near", "sports_fields_near",
-                 "osm_amenities_near", "rail_stops_near", "walking_trails_near"):
+                 "osm_amenities_near", "rail_stops_near", "walking_trails_near",
+                 "osm_parks_near"):
         monkeypatch.setattr(walk, name, lambda *a, **k: [])
     monkeypatch.setattr(walk, "road_crossings", lambda *a, **k: set())
     monkeypatch.setattr(walk, "water_crossings", lambda *a, **k: set())

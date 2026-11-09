@@ -1,0 +1,7 @@
+route_id,agency_id,route_short_name,route_long_name,route_desc,route_type,route_color,route_text_color,exact_times
+1-SC0-1-sj2-1,701,SC01,Kiama to Bomaderry,Illawarra Buses Network,700,00B5EF,FFFFFF,1
+2-T1-N-sj2-1,x0001,T1,T1 North Shore and Western Line,Sydney Trains Network,2,F99D1C,FFFFFF,1
+3-M1-sj2-1,SMNW,M1,M1 Metro North West and Bankstown Line,Sydney Metro Network,401,168388,FFFFFF,0
+76-135-sj2-1,711,135,Broadmeadow to Taree Town,Regional Trains and Coaches Network,204,732A82,FFFFFF,1
+76-223-sj2-1,711,223,223,Regional Trains and Coaches Network,106,E56E0F,FFFFFF,1
+78-L2-sj2-1,SLR,L2,L2 Randwick Line,Sydney Light Rail Network,900,DD1E25,FFFFFF,0

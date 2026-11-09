@@ -1,0 +1,7 @@
+route_id,service_id,trip_id,shape_id,trip_headsign,direction_id,block_id,wheelchair_accessible,route_direction,trip_note,bikes_allowed
+1-SC0-1-sj2-1,AA61#1+1,1.AA61.1-SC0-1-sj2-1.1.R,1-SC0-1-sj2-1.1.R,Kiama,1,,1,Bomaderry to Kiama,,
+2-T1-N-sj2-1,TA+4x+7,101A.2010.103.128.T.8.91040144,2-T1-N-sj2-1.13.R,Penrith Via Gordon,1,7+3306,1,Berowra to City via Gordon,,
+3-M1-sj2-1,TA+TT21+11,0266-001-101-002:1000,3-M1-sj2-1.4.R,Bankstown,1,,1,Tallawong to Bankstown,,
+76-135-sj2-1,TA+pF+40,135.091126.63.1750,76-135-sj2-1.1.H,Taree Town,0,,1,Broadmeadow to Taree Town,,
+76-223-sj2-1,TA+s4600+40,NP23.1054.021226.124.P.6.36984194,76-223-sj2-1.2.H,Armidale Via Strathfield,0,,1,Central to Armidale,,
+78-L2-sj2-1,TA+4e+42,47197-10017:1000,78-L2-sj2-1.10.H,Randwick,0,,1,Circular Quay to Randwick,,

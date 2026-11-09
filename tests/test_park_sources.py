@@ -122,6 +122,9 @@ def test_walkability_nearest_park_is_a_real_park(monkeypatch):
     assert park["distance_m"] == 89
     names = {o["name"] for o in park.get("options", [])}
     assert "Loftus, Royal National Park" not in names
+    # Options must start at the nearest park, not at the Overture rows that
+    # happen to come first in the merged stream.
+    assert park["options"][0]["name"] == park["nearest"]["name"]
     assert "park" in result["osm_amenity_categories"]
 
 

@@ -378,7 +378,11 @@ def walkability_score(lat: float, lng: float, radius_m: int = 1500,
     nearest_detail: dict[str, dict] = {}
     top_pois: dict[str, list] = {}
     cat_counts: dict[str, int] = {}
-    items = pois_full if detailed else [(c, d, None, None, None) for c, d in pois]
+    # The merged stream is several distance-sorted lists appended together
+    # (Overture, GTFS, OSM ...). Options are filled in iteration order and
+    # capped, so sort once or a far Overture park crowds out a 0 m OSM park.
+    items = (sorted(pois_full, key=lambda r: r[1]) if detailed
+             else [(c, d, None, None, None) for c, d in pois])
     seen_names: dict[str, set] = {}
     for poi_cat, dist_m, plng, plat, pname in items:
         matched = _match_category(poi_cat, pname)

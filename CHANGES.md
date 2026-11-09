@@ -15,7 +15,7 @@
 
 ### 改法
 
-- 用 master 的脚本重建 `data/au_rail_stops.parquet`（2026-11-09 feed，2,103 行；旧 3,688）。
+- 用 master 的脚本重建 `data/au_rail_stops.parquet`（2026-11-09 feed，2,103 行；旧 3,648）。
   新增真实 NSW GTFS 字节夹具测试 `tests/test_build_rail_stops_nsw.py`。
 - 新增 `scripts/build_osm_parks.py`：从 Overture 2026-10-21.0 base `land_use`
   （OSM 多边形，ODbL）取有名字的 park/village_green/national_park/nature_reserve/

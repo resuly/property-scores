@@ -310,11 +310,19 @@ from property_scores.flood import local_overlays as _lo
 
 def _write_manifest(path, sources):
     """Written the way build.py writes it: a new file renamed over the old
-    one, so the inode moves just as it does in production."""
+    one, so the inode moves just as it does in production.
+    The top-level build_id and generated_at change on every write, as they do
+    whenever ANY source is ingested in production, so a stamp that hashed them
+    would move on an unrelated rebuild and the test for that would go red."""
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(_json.dumps({"version": 1, "build_id": "x",
+    n = next(_manifest_writes)
+    tmp.write_text(_json.dumps({"version": 1, "build_id": f"top-{n}",
+                                "generated_at": f"2026-11-17T00:00:{n:02d}",
                                 "sources": sources}, sort_keys=True))
     os.replace(tmp, path)
+
+
+_manifest_writes = __import__("itertools").count(1)
 
 
 def _entry(category, state, build_id, rows=10, nbytes=4096):
@@ -429,4 +437,24 @@ def test_a_missing_or_corrupt_manifest_does_not_break_the_stamp(monkeypatch,
     assert stamp.model_stamp() != absent
 
     _write_manifest(manifest, _base_sources())
+    assert stamp.components()["feature_shards"].startswith("shards:")
+
+
+def test_a_transient_manifest_read_error_is_not_cached(monkeypatch, tmp_path):
+    """One failed read must not pin the worker to "unreadable" until the next
+    ingest: the manifest on disk is fine and the very next request sees it."""
+    manifest = tmp_path / "manifest.json"
+    _write_manifest(manifest, _base_sources())
+    _point_at(monkeypatch, manifest)
+    real = _lo.load_manifest
+    calls = {"n": 0}
+
+    def flaky(path):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError(24, "Too many open files")
+        return real(path)
+
+    monkeypatch.setattr(_lo, "load_manifest", flaky)
+    assert stamp.components()["feature_shards"] == "unreadable"
     assert stamp.components()["feature_shards"].startswith("shards:")

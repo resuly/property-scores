@@ -719,9 +719,14 @@ def score_shards_token() -> str:
         token = ("absent" if manifest is None
                  else "shards:" + _manifest_shards_token(manifest))
     except Exception:
+        # Not cached on purpose. A one-off read error (EMFILE, EIO) would
+        # otherwise pin this worker to "unreadable" until the next ingest
+        # rewrites the manifest, while its ShardReader and every other worker
+        # carry on normally: two stamps live at once and cached payloads
+        # flap. Re-reading a truly corrupt 28 KB manifest per request is cheap.
         log.warning("feature manifest unreadable for the score stamp",
                     exc_info=True)
-        token = "unreadable"
+        return "unreadable"
     with _shards_token_lock:
         _shards_token_cache = (key, token)
     return token

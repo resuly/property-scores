@@ -25,12 +25,19 @@ import time
 from threading import Lock
 
 from property_scores.common import model_version
-from property_scores.flood.shards import ShardReader
+from property_scores.flood.shards import (ShardReader, load_manifest,
+                                          manifest_stamp, select_sources)
 
 log = logging.getLogger(__name__)
 
 FEATURES_DB = os.environ.get("FEATURES_DB", "/data/features/features.duckdb")
 FEATURES_MANIFEST = os.environ.get("FEATURES_MANIFEST", "/data/features/manifest.json")
+
+# The feature categories the two score paths below query. Named once because
+# the score stamp (score_shards_token) must follow exactly the shards check()
+# and check_bushfire() read; a second hand-kept list would drift from them.
+_FLOOD_CATEGORY = "flood"
+_BUSHFIRE_CATEGORY = "bushfire"
 
 _SEVERITY_RANK = {"floodway": 0, "flood": 1, "moderate": 2}
 
@@ -337,9 +344,10 @@ def check(state: str, lat: float, lng: float) -> dict | None:
         try:
             rows = reader.query(
                 "source, props",
-                "state = ? AND category = 'flood' AND ST_Contains(geom, ST_Point(?, ?))",
+                f"state = ? AND category = '{_FLOOD_CATEGORY}' "
+                "AND ST_Contains(geom, ST_Point(?, ?))",
                 [st, float(lng), float(lat)],
-                categories=["flood"],
+                categories=[_FLOOD_CATEGORY],
                 states=[st],
             )
         except Exception:
@@ -352,7 +360,7 @@ def check(state: str, lat: float, lng: float) -> dict | None:
         try:
             rows = conn.execute(
                 "SELECT source, props FROM features "
-                "WHERE state = ? AND category = 'flood' "
+                f"WHERE state = ? AND category = '{_FLOOD_CATEGORY}' "
                 "AND ST_Contains(geom, ST_Point(?, ?))",
                 [st, float(lng), float(lat)],
             ).fetchall()
@@ -573,9 +581,10 @@ def check_bushfire(state: str, lat: float, lng: float) -> dict | None:
         try:
             rows = reader.query(
                 "source, props",
-                "state = ? AND category = 'bushfire' AND ST_Contains(geom, ST_Point(?, ?))",
+                f"state = ? AND category = '{_BUSHFIRE_CATEGORY}' "
+                "AND ST_Contains(geom, ST_Point(?, ?))",
                 [st, float(lng), float(lat)],
-                categories=["bushfire"],
+                categories=[_BUSHFIRE_CATEGORY],
                 states=[st],
             )
         except Exception:
@@ -588,7 +597,7 @@ def check_bushfire(state: str, lat: float, lng: float) -> dict | None:
         try:
             rows = conn.execute(
                 "SELECT source, props FROM features "
-                "WHERE state = ? AND category = 'bushfire' "
+                f"WHERE state = ? AND category = '{_BUSHFIRE_CATEGORY}' "
                 "AND ST_Contains(geom, ST_Point(?, ?))",
                 [st, float(lng), float(lat)],
             ).fetchall()
@@ -619,3 +628,100 @@ def check_bushfire(state: str, lat: float, lng: float) -> dict | None:
             else:
                 category = label
     return {"worst": worst, "hit_zones": labels, "category": category, "trust": trust}
+
+
+# ---------------------------------------------------------------------------
+# Score stamp input: which shards these scores read, and which build of each.
+# ---------------------------------------------------------------------------
+
+_shards_token_lock = Lock()
+_shards_token_cache: tuple[tuple[str, str], str] | None = None
+
+
+def score_bearing_shards(manifest: dict) -> list[str]:
+    """Manifest sources whose rebuild can move a flood or bushfire score.
+
+    Exactly the shard selections check() and check_bushfire() make, over every
+    state they will answer for: the same select_sources() call, the same
+    category constants, the same TRUST tables. Plus the VIC SBO source by name,
+    because _vic_sbo_supplement changes behaviour on its mere PRESENCE in the
+    manifest (library answer instead of a VicPlan call), whatever its category.
+
+    Coarser than the whitelist in _classify on purpose: a display-only flood
+    layer (a council trigger area) is in here even though it cannot move the
+    number. Narrowing to _classify would mean a second list of source names
+    that has to track _classify by hand, and the failure when it drifts is a
+    wrong score cached for a month. The cost of the coarse cut is a wasted
+    recompute when a display-only flood or bushfire layer is rebuilt; zoning,
+    heritage and every other category stay out.
+    """
+    names = set(select_sources(manifest, categories=[_FLOOD_CATEGORY],
+                               states=list(TRUST)))
+    names |= set(select_sources(manifest, categories=[_BUSHFIRE_CATEGORY],
+                                states=list(BUSHFIRE_TRUST)))
+    if _VIC_SBO_SOURCE in (manifest.get("sources") or {}):
+        names.add(_VIC_SBO_SOURCE)
+    return sorted(names)
+
+
+def _manifest_shards_token(manifest: dict) -> str:
+    import hashlib
+
+    sources = manifest.get("sources") or {}
+    digest = hashlib.blake2s(digest_size=8)
+    names = score_bearing_shards(manifest)
+    for name in names:
+        entry = sources.get(name)
+        entry = entry if isinstance(entry, dict) else {}
+        # build_id is inode:mtime of the shard file, and build.py only ever
+        # replaces a shard by rename, so it moves on every rebuild even when
+        # rows and bytes come out identical (a geometry fix that keeps the row
+        # count). rows/bytes/file ride along for entries written without one.
+        digest.update("{}\t{}\t{}\t{}\t{}\n".format(
+            name, entry.get("file", ""), entry.get("rows", ""),
+            entry.get("bytes", ""), entry.get("build_id", "")).encode())
+    return f"{len(names)}:{digest.hexdigest()}"
+
+
+def score_shards_token() -> str:
+    """Stamp term for the local overlay library, as the score paths see it.
+
+    Never raises: the stamp is computed on every /scores response.
+
+      shards:<n>:<hash>  manifest readable; hash over the score-bearing entries
+      unreadable         manifest exists but does not parse; check() then
+                         cannot answer and scores fall back to the remote path,
+                         which is a different scoring state
+      legacy:<ino:mtime:size> / absent
+                         no manifest: the scores read the single-file
+                         FEATURES_DB (or nothing), so that file's identity is
+                         what moves them
+
+    Parsed at most once per manifest generation: build.py replaces the
+    manifest by rename, so manifest_stamp() (one stat) changes on every ingest
+    and is a sound cache key.
+    """
+    global _shards_token_cache
+    path = FEATURES_MANIFEST
+    stat_key = manifest_stamp(path)
+    if not stat_key:
+        try:
+            st = os.stat(FEATURES_DB)
+            return f"legacy:{st.st_ino}:{int(st.st_mtime)}:{st.st_size}"
+        except OSError:
+            return "absent"
+    key = (path, stat_key)
+    with _shards_token_lock:
+        if _shards_token_cache is not None and _shards_token_cache[0] == key:
+            return _shards_token_cache[1]
+    try:
+        manifest = load_manifest(path)
+        token = ("absent" if manifest is None
+                 else "shards:" + _manifest_shards_token(manifest))
+    except Exception:
+        log.warning("feature manifest unreadable for the score stamp",
+                    exc_info=True)
+        token = "unreadable"
+    with _shards_token_lock:
+        _shards_token_cache = (key, token)
+    return token

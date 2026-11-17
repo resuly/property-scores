@@ -25,7 +25,9 @@ WHAT IT COVERS, and what it does not:
   covered  the noise config signature (model version + transfer/ML/recal flags
            and their tunables), the resolved noise model artefact id, the
            scoring code, and the declared input ARTEFACTS below (content-hashed
-           where they are small, size+mtime for the 114 MB model pickle).
+           where they are small, size+mtime for the 114 MB model pickle), and
+           the feature shard manifest entries of the flood and bushfire
+           layers the overlay scores read (local_overlays.score_shards_token).
   NOT covered  changes to the raster TILES underneath lc.vrt. The .vrt is a
            catalogue: rewriting the COGs it points at changes no byte of the
            .vrt itself, and walking a continent of tiles on every poll is not
@@ -244,6 +246,19 @@ def components() -> dict[str, str]:
         logger.exception("noise model id unavailable for the score stamp")
         parts["noise_model"] = "unavailable"
     parts.update(_artefact_tokens())
+    # The flood and bushfire overlay library. A per-source shard rebuild
+    # rewrites one shard and the manifest, and touches nothing else this
+    # function looks at, so without this term a rebuilt flood layer left every
+    # cached flood score in place for the full downstream TTL (2026-11-17,
+    # eight flood layers rebuilt, stamp unchanged). Scoped to the shards the
+    # score paths actually read, so a zoning rebuild does not flush anything:
+    # see local_overlays.score_bearing_shards.
+    try:
+        from property_scores.flood import local_overlays
+        parts["feature_shards"] = local_overlays.score_shards_token()
+    except Exception:
+        logger.exception("feature shard manifest unavailable for the score stamp")
+        parts["feature_shards"] = "unavailable"
     return parts
 
 

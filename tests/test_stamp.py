@@ -299,3 +299,134 @@ def test_the_static_exclusion_is_a_path_prefix_not_a_substring(monkeypatch,
     monkeypatch.setattr(stamp, "_code_revision", None)
     assert stamp.code_revision() != before, (
         "static_helpers.py is a scoring source and must be in the stamp")
+
+
+# --- feature shard manifest (flood/bushfire overlay library) ---------------
+
+import json as _json
+
+from property_scores.flood import local_overlays as _lo
+
+
+def _write_manifest(path, sources):
+    """Written the way build.py writes it: a new file renamed over the old
+    one, so the inode moves just as it does in production."""
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(_json.dumps({"version": 1, "build_id": "x",
+                                "sources": sources}, sort_keys=True))
+    os.replace(tmp, path)
+
+
+def _entry(category, state, build_id, rows=10, nbytes=4096):
+    return {"category": category, "state": state, "rows": rows,
+            "bytes": nbytes, "build_id": build_id,
+            # Constant per source in production (shards/<source>.duckdb),
+            # so it must not be what tells two builds apart here either.
+            "file": "shards/source.duckdb",
+            "ingested_at": "2026-11-17T00:00:00"}
+
+
+def _base_sources():
+    return {
+        "nsw_hazard_flood_hawkesbury": _entry("flood", "nsw", "a1"),
+        "vic_hazard_bushfire": _entry("bushfire", "vic", "b1"),
+        "nsw_zoning": _entry("zoning", "nsw", "z1"),
+        "lga_boundaries": _entry("boundary", "au", "l1"),
+    }
+
+
+def _point_at(monkeypatch, manifest, db=None):
+    monkeypatch.setattr(_lo, "FEATURES_MANIFEST", str(manifest))
+    monkeypatch.setattr(_lo, "FEATURES_DB", str(db or manifest.parent / "none.duckdb"))
+    monkeypatch.setattr(_lo, "_shards_token_cache", None)
+
+
+def test_a_rebuilt_flood_shard_moves_the_stamp(monkeypatch, tmp_path):
+    """The 2026-11-17 gap: eight flood layers rebuilt, stamp unchanged, every
+    cached flood score kept for the full downstream TTL. Same rows and bytes
+    on purpose: a geometry fix that keeps the row count is still a rebuild,
+    and only the shard's build_id records it."""
+    manifest = tmp_path / "manifest.json"
+    sources = _base_sources()
+    _write_manifest(manifest, sources)
+    _point_at(monkeypatch, manifest)
+    before = stamp.model_stamp()
+    token = stamp.components()["feature_shards"]
+    assert token.startswith("shards:")
+
+    sources["nsw_hazard_flood_hawkesbury"] = _entry("flood", "nsw", "a2")
+    _write_manifest(manifest, sources)
+    assert stamp.components()["feature_shards"] != token
+    assert stamp.model_stamp() != before
+
+
+def test_a_rebuilt_bushfire_shard_moves_the_stamp(monkeypatch, tmp_path):
+    """check_bushfire reads the same library, so it has the same gap."""
+    manifest = tmp_path / "manifest.json"
+    sources = _base_sources()
+    _write_manifest(manifest, sources)
+    _point_at(monkeypatch, manifest)
+    before = stamp.model_stamp()
+
+    sources["vic_hazard_bushfire"] = _entry("bushfire", "vic", "b2", rows=11)
+    _write_manifest(manifest, sources)
+    assert stamp.model_stamp() != before
+
+
+def test_an_unrelated_shard_rebuild_does_not_move_the_stamp(monkeypatch,
+                                                            tmp_path):
+    """A zoning or boundary rebuild cannot move a flood or bushfire score, and
+    the manifest is rewritten on every ingest of every source. Hashing the
+    whole file would flush every downstream cache each time any of 150
+    sources refreshes."""
+    manifest = tmp_path / "manifest.json"
+    sources = _base_sources()
+    _write_manifest(manifest, sources)
+    _point_at(monkeypatch, manifest)
+    before = stamp.model_stamp()
+
+    sources["nsw_zoning"] = _entry("zoning", "nsw", "z2", rows=99, nbytes=1)
+    sources["lga_boundaries"] = _entry("boundary", "au", "l2")
+    sources["nsw_heritage"] = _entry("heritage", "nsw", "h1")
+    _write_manifest(manifest, sources)
+    assert stamp.model_stamp() == before
+
+
+def test_score_bearing_shards_follow_the_query_selection(tmp_path):
+    """The stamp's shard set is the score paths' own selection, not a list
+    kept beside them: flood in a TRUST state, bushfire in a BUSHFIRE_TRUST
+    state, and the SBO source by presence. A flood shard for a state check()
+    never answers (SA) is not in it."""
+    manifest = {"sources": {
+        **_base_sources(),
+        "sa_hazard_flood": _entry("flood", "sa", "s1"),
+        "vic_hazard_flood_sbo": _entry("overlay", "vic", "o1"),
+    }}
+    assert _lo.score_bearing_shards(manifest) == [
+        "nsw_hazard_flood_hawkesbury", "vic_hazard_bushfire",
+        "vic_hazard_flood_sbo"]
+
+
+def test_a_missing_or_corrupt_manifest_does_not_break_the_stamp(monkeypatch,
+                                                               tmp_path):
+    """No manifest means the scores read the legacy single file (or nothing),
+    and a corrupt one makes check() fall back to the remote path. Each is a
+    real, distinct scoring state; none may raise out of the stamp, which is
+    computed on every /scores response."""
+    manifest = tmp_path / "manifest.json"
+    _point_at(monkeypatch, manifest)
+    assert stamp.components()["feature_shards"] == "absent"
+    absent = stamp.model_stamp()
+
+    legacy = tmp_path / "features.duckdb"
+    legacy.write_bytes(b"legacy")
+    _point_at(monkeypatch, manifest, db=legacy)
+    assert stamp.components()["feature_shards"].startswith("legacy:")
+
+    manifest.write_text("{not json")
+    _point_at(monkeypatch, manifest, db=legacy)
+    assert stamp.components()["feature_shards"] == "unreadable"
+    assert stamp.model_stamp() != absent
+
+    _write_manifest(manifest, _base_sources())
+    assert stamp.components()["feature_shards"].startswith("shards:")

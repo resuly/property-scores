@@ -54,6 +54,19 @@ _METHOD_SOURCE = {
     "url": tables.GA_BAL_TOOLBOX_URL,
 }
 
+# v2: states where the official layer the screen checks is the statutory
+# bushfire prone area, or wholly contains it, so "outside" means no BAL
+# applies. NSW Bushfire Prone Land (EP&A Act s10.3), ACT Bushfire Prone Area,
+# WA Map of Bush Fire Prone Areas (designated under FES Act 1998 s18P; the
+# Building and Energy guidance: a building entirely outside it is not
+# required to comply with additional bushfire building requirements), SA
+# Hazards (Bushfire) overlays (NCC SA G5D5: the designated area is the
+# General/Medium/High risk areas plus Urban Interface near High risk, all of
+# which sit inside the six overlays checked). Excluded: VIC (BMO is a subset
+# of the BPA), TAS (the code also captures unmapped land near bushfire-prone
+# vegetation), QLD (2017 QFD proxy), NT (no layer).
+_OUTSIDE_IS_STATUTORY = frozenset({"NSW", "ACT", "WA", "SA"})
+
 # BAL ordering for "take the worst" and for banding.
 _BAL_ORDER = ["BAL-LOW", "BAL-12.5", "BAL-19", "BAL-29", "BAL-40", "BAL-FZ"]
 
@@ -317,9 +330,12 @@ def _pixel_slope(mag, measured, e_site, e_veg, *, dist_m=None,
 
     if direction == "downslope":
         if mag > 20:
+            note = (" (>20 deg: beyond Method 1, Method 2 required; screened "
+                    "on the 15-20 deg row, range to BAL-FZ)"
+                    if model_version.at_least("v2")
+                    else " (>20 deg: Method 1 invalid -> BAL-FZ)")
             return {"band": ">20", "deg": mag, "direction": direction,
-                    "basis": basis + " (>20 deg: Method 1 invalid -> BAL-FZ)",
-                    "measured": True}
+                    "basis": basis + note, "measured": True}
         return {"band": _slope_band(mag), "deg": mag, "direction": direction,
                 "basis": basis, "measured": True}
     return {"band": "flat", "deg": mag, "direction": direction,
@@ -468,7 +484,6 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
                                            terrain.elevation, terrain.resolution_m)
         c_slope = _pixel_slope(mag, measured, e_site, e_veg, dist_m=c_dist,
                                local_deg=local_deg)
-        beyond_method1 = beyond_method1 or c_slope["band"] == ">20"
         # GA's Method 1 implementation excludes grassland at >=50 m for every
         # FDI except 50. It still assesses closer grassland; the former
         # implementation incorrectly discarded all grassland in those
@@ -480,6 +495,7 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
             # slope (flat as the mild end; one-steeper as the harsh end).
             c_band_candidates = ["BAL-LOW"]
         else:
+            beyond_method1 = beyond_method1 or c_slope["band"] == ">20"
             c_point_bal = _bal_for(c_slope["band"], c_point, c_dist)
             harsh_band = (steeper.get(c_slope["band"], c_slope["band"])
                           if c_slope["measured"] else c_slope["band"])
@@ -533,24 +549,19 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
         conf = "low"
     if _bal_rank(hi) - _bal_rank(lo) >= 3:
         conf = "low"
-    if steep_as_d20 and beyond_method1:
-        assumptions.append(
-            "Some vegetation within 100 m sits on a downslope steeper than 20 "
-            "deg, beyond Method 1 (Method 2 required). Those pixels use the "
-            "steepest Method 1 row (15-20 deg) as a floor; the range extends "
-            "to BAL-FZ.")
-
     satellite_screen = None
-    if steep_as_d20 and overlay_status == "outside":
-        # v2 (2026-11-18): the official state mapping says this lot is OUTSIDE
-        # bushfire prone land, i.e. no BAL applies to it. That mapping already
-        # applies the vegetation rules 10 m land cover cannot see (low-threat
-        # street trees, gardens and maintained parkland, AS 3959 2.2.3.2), so
-        # a WorldCover "tree" pixel must not out-rank it. v1 let a leafy
-        # Campbell ACT street (officially outside the ACT BPA) read BAL-FZ,
-        # range [BAL-FZ, BAL-FZ], with the site pixel itself read as forest.
-        # Same principle as the risk score's _OFFICIAL_CLEAR_FLOOR; the
-        # satellite-only result is kept under inputs for transparency.
+    if (steep_as_d20 and overlay_status == "outside"
+            and state in _OUTSIDE_IS_STATUTORY):
+        # v2 (2026-11-18): in these states the layer we check IS (or wholly
+        # contains) the statutory bushfire prone area, so "outside" means no
+        # BAL applies to the lot. That mapping already applies the vegetation
+        # rules 10 m land cover cannot see (low-threat street trees, gardens
+        # and maintained parkland, AS 3959 2.2.3.2), so a WorldCover "tree"
+        # pixel must not out-rank it. v1 let a leafy Campbell ACT street
+        # (officially outside the ACT BPA) read BAL-FZ, range [BAL-FZ,
+        # BAL-FZ], with the site pixel itself read as forest. Same principle
+        # as the risk score's _OFFICIAL_CLEAR_FLOOR; the satellite-only result
+        # is kept under inputs for transparency.
         satellite_screen = {"bal": point_bal, "range": [lo, hi]}
         point_bal, lo = "BAL-LOW", "BAL-LOW"
         hi = "BAL-12.5" if _bal_rank(hi) >= _bal_rank("BAL-12.5") else "BAL-LOW"
@@ -561,11 +572,30 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
             f"(satellite-only screen {satellite_screen['bal']}), most likely "
             "low-threat urban trees or gardens the official map excludes. The "
             "range keeps BAL-12.5 for that residual uncertainty.")
-    # overlay disagreement lowers confidence
-    elif overlay_status == "outside" and _bal_rank(point_bal) >= _bal_rank("BAL-29"):
-        conf = "low"
-        assumptions.append("Official overlay says OUTSIDE mapped bushfire-prone land "
-                           "yet WorldCover fuel is close, treat with caution.")
+    else:
+        if steep_as_d20 and beyond_method1:
+            assumptions.append(
+                "Some vegetation within 100 m sits on a downslope steeper than "
+                "20 deg, beyond Method 1 (Method 2 required). Those pixels use "
+                "the steepest Method 1 row (15-20 deg) as a floor; the range "
+                "extends to BAL-FZ.")
+        # overlay disagreement lowers confidence
+        if overlay_status == "outside" and _bal_rank(point_bal) >= _bal_rank("BAL-29"):
+            conf = "low"
+            if steep_as_d20:
+                # VIC/TAS/QLD: the layer checked is not the whole statutory
+                # prone area (VIC BMO is a subset of the BPA; TAS counts
+                # unmapped land within 100 m of >=1 ha of bushfire-prone
+                # vegetation; QLD is the 2017 QFD proxy), so not being on it
+                # is no statement that the lot is outside prone land.
+                assumptions.append(
+                    "The site is not on the state overlay checked here, but "
+                    "that overlay is not the full statutory bushfire prone "
+                    "area in this state; WorldCover fuel is close, treat with "
+                    "caution.")
+            else:
+                assumptions.append("Official overlay says OUTSIDE mapped bushfire-prone land "
+                                   "yet WorldCover fuel is close, treat with caution.")
 
     result = {
         "indicative_bal": point_bal,

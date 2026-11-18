@@ -21,6 +21,7 @@ import logging
 import math
 
 from property_scores.bal_prescreen import tables
+from property_scores.common import model_version
 
 logger = logging.getLogger(__name__)
 
@@ -417,9 +418,22 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
         {"wc_class": veg["wc_class"], "distance_m": veg["distance_m"],
          "veg_lat": veg["veg_lat"], "veg_lng": veg["veg_lng"]}]
 
+    # v2 (2026-11-18): a downslope steeper than 20 deg is outside Method 1.
+    # GA's toolbox marks such a pixel with its own value 200 ("Method 2
+    # required"), which is not BAL-FZ; v1 relabelled it BAL-FZ at ANY distance
+    # up to 100 m, so a Darwin CBD apartment 53-97 m from a vegetated
+    # escarpment read BAL-FZ although the steepest Method 1 row (15-20 deg)
+    # gives BAL-19 there. v2 uses that row as the point (a floor: steeper
+    # ground only burns harder) and keeps BAL-FZ as the harsh end of the
+    # range, because Method 1 cannot bound it. v1 stays as it was (Foundit is
+    # pinned to v1, see common/model_version).
+    steep_as_d20 = model_version.at_least("v2")
+
     def _bal_for(band, veg_class, distance_m):
         if band == ">20":
-            return "BAL-FZ"
+            if not steep_as_d20:
+                return "BAL-FZ"
+            band = "d20"
         return tables.lookup_bal(fdi_table, band, veg_class, distance_m)
 
     # a steeper downslope is the plausible-worse case for slope uncertainty
@@ -439,6 +453,7 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
     worst = None      # severest candidate overall
     by_class = {}     # severest candidate per vegetation class (for reporting)
     hi = "BAL-LOW"    # harsh end of the confidence band across ALL candidates
+    beyond_method1 = False  # any assessed pixel on a >20 deg downslope
     for pix in pixels:
         c_dist = pix["distance_m"]
         wc_cls = pix["wc_class"]
@@ -453,6 +468,7 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
                                            terrain.elevation, terrain.resolution_m)
         c_slope = _pixel_slope(mag, measured, e_site, e_veg, dist_m=c_dist,
                                local_deg=local_deg)
+        beyond_method1 = beyond_method1 or c_slope["band"] == ">20"
         # GA's Method 1 implementation excludes grassland at >=50 m for every
         # FDI except 50. It still assesses closer grassland; the former
         # implementation incorrectly discarded all grassland in those
@@ -467,10 +483,13 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
             c_point_bal = _bal_for(c_slope["band"], c_point, c_dist)
             harsh_band = (steeper.get(c_slope["band"], c_slope["band"])
                           if c_slope["measured"] else c_slope["band"])
+            c_harsh = (
+                "BAL-FZ" if harsh_band == ">20"           # beyond Method 1: unbounded
+                else _bal_for(harsh_band, c_point, c_dist))
             c_band_candidates = [
                 _bal_for("flat", c_light, c_dist),        # mild: lighter formation, flat
                 c_point_bal,                              # point estimate
-                _bal_for(harsh_band, c_point, c_dist),    # harsh: heavier formation, steeper
+                c_harsh,                                  # harsh: heavier formation, steeper
             ]
         cand = {
             "wc": wc_cls, "dist": c_dist, "point_class": c_point,
@@ -514,8 +533,36 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
         conf = "low"
     if _bal_rank(hi) - _bal_rank(lo) >= 3:
         conf = "low"
+    if steep_as_d20 and beyond_method1:
+        assumptions.append(
+            "Some vegetation within 100 m sits on a downslope steeper than 20 "
+            "deg, beyond Method 1 (Method 2 required). Those pixels use the "
+            "steepest Method 1 row (15-20 deg) as a floor; the range extends "
+            "to BAL-FZ.")
+
+    satellite_screen = None
+    if steep_as_d20 and overlay_status == "outside":
+        # v2 (2026-11-18): the official state mapping says this lot is OUTSIDE
+        # bushfire prone land, i.e. no BAL applies to it. That mapping already
+        # applies the vegetation rules 10 m land cover cannot see (low-threat
+        # street trees, gardens and maintained parkland, AS 3959 2.2.3.2), so
+        # a WorldCover "tree" pixel must not out-rank it. v1 let a leafy
+        # Campbell ACT street (officially outside the ACT BPA) read BAL-FZ,
+        # range [BAL-FZ, BAL-FZ], with the site pixel itself read as forest.
+        # Same principle as the risk score's _OFFICIAL_CLEAR_FLOOR; the
+        # satellite-only result is kept under inputs for transparency.
+        satellite_screen = {"bal": point_bal, "range": [lo, hi]}
+        point_bal, lo = "BAL-LOW", "BAL-LOW"
+        hi = "BAL-12.5" if _bal_rank(hi) >= _bal_rank("BAL-12.5") else "BAL-LOW"
+        conf = "moderate"
+        assumptions.append(
+            "Official overlay says OUTSIDE mapped bushfire-prone land, so the "
+            "screen reports BAL-LOW; WorldCover shows vegetation within 100 m "
+            f"(satellite-only screen {satellite_screen['bal']}), most likely "
+            "low-threat urban trees or gardens the official map excludes. The "
+            "range keeps BAL-12.5 for that residual uncertainty.")
     # overlay disagreement lowers confidence
-    if overlay_status == "outside" and _bal_rank(point_bal) >= _bal_rank("BAL-29"):
+    elif overlay_status == "outside" and _bal_rank(point_bal) >= _bal_rank("BAL-29"):
         conf = "low"
         assumptions.append("Official overlay says OUTSIDE mapped bushfire-prone land "
                            "yet WorldCover fuel is close, treat with caution.")
@@ -556,6 +603,8 @@ def bal_prescreen(lat: float, lng: float, *, state=None, elevation=None,
         "disclaimer": _DISCLAIMER,
         "lat": lat, "lng": lng,
     }
+    if satellite_screen is not None:
+        result["inputs"]["satellite_only_screen"] = satellite_screen
     return result
 
 

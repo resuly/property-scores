@@ -329,6 +329,37 @@ def _get_reader() -> ShardReader | None:
         return _reader
 
 
+def _manifest_answers(reader: ShardReader, category: str, st: str,
+                      required_source: str | None = None) -> bool:
+    """Whether the shard manifest holds this state's layer for ``category``.
+
+    A shard query over sources that are not there returns no rows, which the
+    score paths read as "outside every overlay": for a 'full' trust state a
+    clean miss, so one rebuild that dropped a state's shard would silently
+    score the whole state as outside the official zone (bushfire: score at
+    its floor, v2 BAL shown as BAL-LOW). Without the state's own shard the
+    library cannot answer and the caller must fall back to the remote
+    endpoints, exactly as for a state it has no trust class for.
+
+    ``required_source`` names the one source that can classify a hit (the
+    bushfire whitelist is one statewide source per state); otherwise any
+    shard of the category for the state counts. The national 'au' layers
+    that select_sources admits with every state do not.
+    """
+    with reader.lock:
+        manifest = reader.manifest() or {}
+    for name, entry in (manifest.get("sources") or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("category", "")).lower() != category:
+            continue
+        if str(entry.get("state", "")).lower() != st:
+            continue
+        if required_source is None or name == required_source:
+            return True
+    return False
+
+
 def check(state: str, lat: float, lng: float) -> dict | None:
     """Query the library for whitelisted flood overlay hits at a point.
 
@@ -342,6 +373,9 @@ def check(state: str, lat: float, lng: float) -> dict | None:
     reader = _get_reader()
     if reader is not None:
         try:
+            if not _manifest_answers(reader, _FLOOD_CATEGORY, st):
+                log.warning("no %s flood shard in the manifest; remote fallback", st)
+                return None
             rows = reader.query(
                 "source, props",
                 f"state = ? AND category = '{_FLOOD_CATEGORY}' "
@@ -508,6 +542,10 @@ BUSHFIRE_TRUST: dict[str, str] = {
     "tas": "full",   # Bushfire-prone Areas Code overlay (LIST layer 14)
 }
 
+# The one source per state that _classify_bushfire scores. A state's library
+# answer exists only while this shard is in the manifest (_manifest_answers).
+_BUSHFIRE_SOURCE: dict[str, str] = {st: f"{st}_hazard_bushfire" for st in BUSHFIRE_TRUST}
+
 # Bushfire severities rank on the score module's scale — NOT the flood
 # _SEVERITY_RANK above, which ranks flood overlay kinds.
 _BUSHFIRE_SEVERITY_RANK = {"extreme": 0, "high": 1, "moderate": 2, "low": 3}
@@ -579,6 +617,11 @@ def check_bushfire(state: str, lat: float, lng: float) -> dict | None:
     reader = _get_reader()
     if reader is not None:
         try:
+            if not _manifest_answers(reader, _BUSHFIRE_CATEGORY, st,
+                                     required_source=_BUSHFIRE_SOURCE[st]):
+                log.warning("no %s bushfire shard (%s) in the manifest; remote fallback",
+                            st, _BUSHFIRE_SOURCE[st])
+                return None
             rows = reader.query(
                 "source, props",
                 f"state = ? AND category = '{_BUSHFIRE_CATEGORY}' "

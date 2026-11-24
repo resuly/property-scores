@@ -115,3 +115,72 @@ def test_sharded_concurrency(fake_shards_library):
 
     assert results.count("flood_hit") == 16
     assert results.count("fire_hit") == 16
+
+
+def _drop_source(manifest_path, name):
+    m = json.loads(manifest_path.read_text())
+    m["sources"].pop(name)
+    m["build_id"] = "test_build_dropped"
+    manifest_path.write_text(json.dumps(m, indent=2))
+    # A new file, so the reader's inode/mtime stamp moves as a rebuild's would.
+    os.utime(manifest_path, (1, 1))
+
+
+def test_missing_bushfire_shard_is_no_answer_not_outside(fake_shards_library):
+    """A rebuild that drops a state's bushfire shard must hand the point to
+    the remote endpoints (None), not score the whole state as outside the
+    official zone (worst None, which bushfire scoring reads as a clean miss
+    for a 'full' trust state)."""
+    assert lo.check_bushfire("qld", *INSIDE)["worst"] == "moderate"
+    _drop_source(fake_shards_library, "qld_hazard_bushfire")
+    assert lo.check_bushfire("qld", *INSIDE) is None
+    assert lo.check_bushfire("qld", *OUTSIDE) is None
+    # The flood layer of the same state still answers.
+    assert lo.check("qld", *INSIDE)["worst"] == "flood"
+
+
+def test_present_bushfire_shard_still_vouches_a_clean_miss(fake_shards_library):
+    outside = lo.check_bushfire("qld", *OUTSIDE)
+    assert outside is not None
+    assert outside["worst"] is None and outside["hit_zones"] == []
+
+
+def test_a_states_bushfire_needs_its_own_shard_not_another_states(fake_shards_library):
+    # NSW is a 'full' trust state; only the QLD shard is in this manifest.
+    assert lo.check_bushfire("nsw", -33.87, 151.21) is None
+
+
+def test_missing_flood_shard_is_no_answer_not_outside(fake_shards_library):
+    _drop_source(fake_shards_library, "qld_hazard_flood_brisbane_fam")
+    assert lo.check("qld", *INSIDE) is None
+    assert lo.check_bushfire("qld", *INSIDE)["worst"] == "moderate"
+
+
+def test_every_required_bushfire_source_is_one_the_classifier_scores():
+    for st, source in lo._BUSHFIRE_SOURCE.items():
+        assert lo._classify_bushfire(source, {}) is not None, (st, source)
+    assert set(lo._BUSHFIRE_SOURCE) == set(lo.BUSHFIRE_TRUST)
+
+
+def test_a_non_scoring_bushfire_shard_does_not_stand_in(fake_shards_library):
+    """Another bushfire layer of the state (display-only, not the statewide
+    source the classifier scores) cannot vouch a miss on its own."""
+    extra = fake_shards_library.parent / "shards" / "qld_hazard_bushfire_council.duckdb"
+    c = duckdb.connect(str(extra))
+    c.execute("LOAD spatial")
+    c.execute("CREATE TABLE features (category VARCHAR, source VARCHAR, state VARCHAR, "
+              "props JSON, geom GEOMETRY)")
+    c.close()
+    m = json.loads(fake_shards_library.read_text())
+    m["sources"]["qld_hazard_bushfire_council"] = {
+        "category": "bushfire", "state": "qld",
+        "file": "shards/qld_hazard_bushfire_council.duckdb",
+        "rows": 0, "bytes": extra.stat().st_size, "build_id": "b3"}
+    fake_shards_library.write_text(json.dumps(m, indent=2))
+    _drop_source(fake_shards_library, "qld_hazard_bushfire")
+    assert lo.check_bushfire("qld", *INSIDE) is None
+
+
+def test_another_states_flood_shard_does_not_answer_for_this_state(fake_shards_library):
+    # VIC is a 'full' flood trust state; only a QLD flood shard is present.
+    assert lo.check("vic", -37.81, 144.96) is None

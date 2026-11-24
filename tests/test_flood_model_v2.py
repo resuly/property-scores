@@ -15,6 +15,7 @@ fixture's `_provenance`.
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -218,6 +219,11 @@ class _Resp:
         return json.loads(self._body)
 
 
+# Manifest fields of a VIC flood shard. local_overlays.check() answers for a
+# state only while its manifest holds a flood shard of that state.
+_VIC_FLOOD = {"category": "flood", "state": "vic"}
+
+
 @pytest.fixture
 def vic_library(monkeypatch):
     """The real VIC library shape: LSIO/FO sources, no SBO source. Returns
@@ -228,8 +234,11 @@ def vic_library(monkeypatch):
         def query(self, *a, **k):
             return self.rows
 
+        lock = threading.Lock()
+
         def manifest(self):
-            return {"sources": {"vic_hazard_flood": {}, "vic_hazard_flood_fo": {}}}
+            return {"sources": {"vic_hazard_flood": dict(_VIC_FLOOD),
+                                "vic_hazard_flood_fo": dict(_VIC_FLOOD)}}
     reader = Reader()
     monkeypatch.setattr(lo, "_get_reader", lambda: reader)
     return reader
@@ -327,11 +336,13 @@ def test_sbo_breaker_opens_after_repeated_failures(version, vic_library, monkeyp
 
 def _library_rows(monkeypatch, rows, sources):
     class Reader:
+        lock = threading.Lock()
+
         def query(self, *a, **k):
             return rows
 
         def manifest(self):
-            return {"sources": {s: {} for s in sources}}
+            return {"sources": {s: dict(_VIC_FLOOD) for s in sources}}
     monkeypatch.setattr(lo, "_get_reader", lambda: Reader())
 
 
@@ -394,12 +405,14 @@ def test_unknown_version_stops_startup(version):
 def test_sbo_from_library_when_baked(version, monkeypatch):
     """Once da_leads bakes SBO, the library row scores and VicPlan is not asked."""
     class Reader:
+        lock = threading.Lock()
+
         def query(self, *a, **k):
             return [("vic_hazard_flood_sbo",
                      json.dumps({"category": "SBO - Special Building Overlay"}))]
 
         def manifest(self):
-            return {"sources": {"vic_hazard_flood_sbo": {}}}
+            return {"sources": {"vic_hazard_flood_sbo": dict(_VIC_FLOOD)}}
     monkeypatch.setattr(lo, "_get_reader", lambda: Reader())
     monkeypatch.setattr(fs.requests, "get",
                         lambda *a, **k: pytest.fail("VicPlan must not be asked"))

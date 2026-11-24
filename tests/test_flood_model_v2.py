@@ -342,7 +342,10 @@ def _library_rows(monkeypatch, rows, sources):
             return rows
 
         def manifest(self):
-            return {"sources": {s: dict(_VIC_FLOOD) for s in sources}}
+            # The statewide LSIO and FO shards are always there in the real
+            # library; `sources` adds the ones a test is about (SBO).
+            names = {"vic_hazard_flood", "vic_hazard_flood_fo", *sources}
+            return {"sources": {s: dict(_VIC_FLOOD) for s in names}}
     monkeypatch.setattr(lo, "_get_reader", lambda: Reader())
 
 
@@ -412,7 +415,8 @@ def test_sbo_from_library_when_baked(version, monkeypatch):
                      json.dumps({"category": "SBO - Special Building Overlay"}))]
 
         def manifest(self):
-            return {"sources": {"vic_hazard_flood_sbo": dict(_VIC_FLOOD)}}
+            return {"sources": {s: dict(_VIC_FLOOD) for s in (
+                "vic_hazard_flood", "vic_hazard_flood_fo", "vic_hazard_flood_sbo")}}
     monkeypatch.setattr(lo, "_get_reader", lambda: Reader())
     monkeypatch.setattr(fs.requests, "get",
                         lambda *a, **k: pytest.fail("VicPlan must not be asked"))

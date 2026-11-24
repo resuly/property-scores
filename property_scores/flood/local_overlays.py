@@ -41,6 +41,14 @@ _BUSHFIRE_CATEGORY = "bushfire"
 
 _SEVERITY_RANK = {"floodway": 0, "flood": 1, "moderate": 2}
 
+# For each 'full' trust state, the statewide flood sources its clean miss
+# rests on (names as _classify scores them): every group must be in the shard
+# manifest or check() hands the point to the remote endpoints.
+_FLOOD_REQUIRED: dict[str, tuple[tuple[str, ...], ...]] = {
+    "vic": (("vic_hazard_flood", "vic_hazard_flood_lsio"), ("vic_hazard_flood_fo",)),
+    "act": (("act_hazard_flood",),),
+}
+
 # state -> trust class. Absent state = library cannot answer, fall back to
 # the remote endpoints.
 TRUST: dict[str, str] = {
@@ -330,7 +338,7 @@ def _get_reader() -> ShardReader | None:
 
 
 def _manifest_answers(reader: ShardReader, category: str, st: str,
-                      required_source: str | None = None) -> bool:
+                      required: tuple[tuple[str, ...], ...] | None = None) -> bool:
     """Whether the shard manifest holds this state's layer for ``category``.
 
     A shard query over sources that are not there returns no rows, which the
@@ -341,23 +349,25 @@ def _manifest_answers(reader: ShardReader, category: str, st: str,
     library cannot answer and the caller must fall back to the remote
     endpoints, exactly as for a state it has no trust class for.
 
-    ``required_source`` names the one source that can classify a hit (the
-    bushfire whitelist is one statewide source per state); otherwise any
-    shard of the category for the state counts. The national 'au' layers
-    that select_sources admits with every state do not.
+    ``required`` lists groups of source names; each group needs one of its
+    names present (VIC flood: LSIO under either name, and FO). It is set
+    where a clean miss is vouched for (a 'full' trust state), because losing
+    one of several statewide layers leaves the rest answering "outside" for
+    every address only the lost layer covers. Without it any shard of the
+    category for the state counts. The national 'au' layers that
+    select_sources admits with every state never count.
     """
     with reader.lock:
         manifest = reader.manifest() or {}
-    for name, entry in (manifest.get("sources") or {}).items():
-        if not isinstance(entry, dict):
-            continue
-        if str(entry.get("category", "")).lower() != category:
-            continue
-        if str(entry.get("state", "")).lower() != st:
-            continue
-        if required_source is None or name == required_source:
-            return True
-    return False
+    present = {
+        name for name, entry in (manifest.get("sources") or {}).items()
+        if isinstance(entry, dict)
+        and str(entry.get("category", "")).lower() == category
+        and str(entry.get("state", "")).lower() == st
+    }
+    if required is None:
+        return bool(present)
+    return all(present & set(group) for group in required)
 
 
 def check(state: str, lat: float, lng: float) -> dict | None:
@@ -373,7 +383,8 @@ def check(state: str, lat: float, lng: float) -> dict | None:
     reader = _get_reader()
     if reader is not None:
         try:
-            if not _manifest_answers(reader, _FLOOD_CATEGORY, st):
+            if not _manifest_answers(reader, _FLOOD_CATEGORY, st,
+                                     required=_FLOOD_REQUIRED.get(st)):
                 log.warning("no %s flood shard in the manifest; remote fallback", st)
                 return None
             rows = reader.query(
@@ -618,7 +629,7 @@ def check_bushfire(state: str, lat: float, lng: float) -> dict | None:
     if reader is not None:
         try:
             if not _manifest_answers(reader, _BUSHFIRE_CATEGORY, st,
-                                     required_source=_BUSHFIRE_SOURCE[st]):
+                                     required=((_BUSHFIRE_SOURCE[st],),)):
                 log.warning("no %s bushfire shard (%s) in the manifest; remote fallback",
                             st, _BUSHFIRE_SOURCE[st])
                 return None

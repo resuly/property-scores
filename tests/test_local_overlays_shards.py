@@ -184,3 +184,36 @@ def test_a_non_scoring_bushfire_shard_does_not_stand_in(fake_shards_library):
 def test_another_states_flood_shard_does_not_answer_for_this_state(fake_shards_library):
     # VIC is a 'full' flood trust state; only a QLD flood shard is present.
     assert lo.check("vic", -37.81, 144.96) is None
+
+
+def test_full_trust_flood_needs_every_statewide_layer(monkeypatch):
+    """VIC with its FO shard but not LSIO (or the reverse) cannot vouch a
+    clean miss: an address only LSIO covers would read outside."""
+    class Reader:
+        import threading
+        lock = threading.Lock()
+
+        def __init__(self, names):
+            self.names = names
+
+        def query(self, *a, **k):
+            return []
+
+        def manifest(self):
+            return {"sources": {n: {"category": "flood", "state": "vic"}
+                                for n in self.names}}
+    for names, answers in ((["vic_hazard_flood_fo"], False),
+                           (["vic_hazard_flood"], False),
+                           (["vic_hazard_flood", "vic_hazard_flood_fo"], True),
+                           (["vic_hazard_flood_lsio", "vic_hazard_flood_fo"], True)):
+        monkeypatch.setattr(lo, "_get_reader", lambda r=Reader(names): r)
+        res = lo.check("vic", -37.81, 144.96)
+        assert (res is not None) is answers, names
+
+
+def test_every_required_flood_source_is_one_the_classifier_scores():
+    for st, groups in lo._FLOOD_REQUIRED.items():
+        assert lo.TRUST[st] == "full", st
+        for group in groups:
+            for source in group:
+                assert lo._classify(source, {}) is not None, (st, source)

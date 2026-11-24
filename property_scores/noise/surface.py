@@ -146,14 +146,16 @@ def _coverage_gap(lat: float, lng: float) -> bool:
         return False
 
 
-def _node(lat: float, lng: float, expected: str | None = None):
+def _node(lat: float, lng: float, expected: str | None = None,
+          exclude_aircraft: bool = False):
     """(noise_score result or None, off-path node explained by a coverage gap).
 
     The second item is only ever True for a transfer expectation: physics has
     no raster inputs to be out of coverage of.
     """
     try:
-        got = noise_score(lat, lng)
+        got = (noise_score(lat, lng, exclude_aircraft=True) if exclude_aircraft
+               else noise_score(lat, lng))
     except Exception:
         logger.warning("noise surface node failed at %s,%s", lat, lng, exc_info=True)
         return None, False
@@ -167,7 +169,8 @@ def _node(lat: float, lng: float, expected: str | None = None):
 def noise_surface(lat: float, lng: float, radius_m: int = RADIUS_DEFAULT_M,
                   cells: int = CELLS_DEFAULT,
                   deadline_s: float = DEADLINE_S,
-                  require_path: str | None = None) -> dict | None:
+                  require_path: str | None = None,
+                  exclude_aircraft: bool = False) -> dict | None:
     """Grid of modelled Lden around a point.
 
     Row 0 is the northern edge and column 0 the western edge (row-major, the
@@ -179,6 +182,13 @@ def noise_surface(lat: float, lng: float, radius_m: int = RADIUS_DEFAULT_M,
     expectation this function will not second-guess; without it the function
     falls back to its own environment, which cannot detect a deployment that
     was never configured in the first place.
+
+    `exclude_aircraft=True` computes every node with no aircraft term (road,
+    rail and ambient only; see noise_score). A grid's level steps trace the
+    shape of any ANEF contour inside the window, so a caller that may not
+    redistribute that contour asks for the grid without it. The response
+    echoes the flag as `aircraft_excluded`; a caller must check the echo
+    rather than assume, because an older build ignores the parameter.
     """
     if cells not in CELLS_ALLOWED:
         cells = CELLS_DEFAULT
@@ -211,7 +221,8 @@ def noise_surface(lat: float, lng: float, radius_m: int = RADIUS_DEFAULT_M,
     # worker, which would make the deadline decorative.
     pool = ThreadPoolExecutor(max_workers=CONCURRENCY)
     try:
-        futures = {pool.submit(_node, nlat, nlng, expected): (r, c)
+        futures = {pool.submit(_node, nlat, nlng, expected,
+                               exclude_aircraft): (r, c)
                    for r, c, nlat, nlng in nodes}
         try:
             for fut in as_completed(futures, timeout=deadline_s):
@@ -296,7 +307,12 @@ def noise_surface(lat: float, lng: float, radius_m: int = RADIUS_DEFAULT_M,
         "model_path_as_configured": unexplained == 0,
         "model_path_coverage_gap_nodes": coverage_gaps if inputs_ok else 0,
         "model_path_expected_nodes": on_expected,
+        # Echo of the request, set only from what every node was actually
+        # asked for (no node path computes aircraft when this is True).
+        "aircraft_excluded": bool(exclude_aircraft),
     }
+    if exclude_aircraft:
+        out["aircraft_assessment"] = "not_assessed"
     if not out["model_path_as_configured"]:
         logger.error(
             "noise surface at %s,%s expected lden_source=%s (from %s) but got "

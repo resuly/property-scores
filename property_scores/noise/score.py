@@ -775,9 +775,44 @@ _AIRCRAFT_NOT_ASSESSED_NOTE = (
     "airport.")
 
 
+# Stand-in for aircraft_noise_penalty when the caller asks for the level
+# WITHOUT the aircraft term (noise_score(exclude_aircraft=True)). Same keys as
+# the real result so every downstream use (penalty, zone, facade, dominant
+# source) reads it unchanged and contributes nothing.
+_AIRCRAFT_EXCLUDED = {
+    "penalty_db": 0.0,
+    "assessment": "not_assessed",
+    "zone_code": None,
+    "zone_desc": None,
+    "anef_min": None,
+    "anef_max": None,
+    "lga": None,
+    "impact": None,
+    "source": None,
+    "airport_type": None,
+}
+
+_AIRCRAFT_EXCLUDED_NOTE = (
+    "Aircraft noise is not included in this level: it was computed from road "
+    "and rail sources only.")
+
+
 def noise_score(lat: float, lng: float, radius_m: int = 500,
-                *, source: str | None = None) -> dict:
+                *, source: str | None = None,
+                exclude_aircraft: bool = False) -> dict:
+    """Modelled noise at a point.
+
+    `exclude_aircraft=True` computes the level with no aircraft term at all:
+    no ANEF source is queried and the result carries
+    aircraft_assessment "not_assessed" plus aircraft_excluded True. Used by
+    the noise surface where a caller may not redistribute anything shaped by
+    an airport's contours (DA Leads Property API, Brisbane and Perth airport
+    boxes, Bo 2026-11-24). The default path is unchanged, and so is its cache
+    key: the flag only adds a suffix when set.
+    """
     _ck = f"{round(lat, 5)}:{round(lng, 5)}:{radius_m}:{source or ''}:{_CONFIG_SIG}"
+    if exclude_aircraft:
+        _ck += ":noair"
     _hit = _cache_get(_CACHE_DB, _ck, _RESULT_CACHE_TTL)
     if _hit is not None:
         return {**_hit, "cached": True}
@@ -787,8 +822,10 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     # depends only on lat/lng, so run it in a thread while the DuckDB road/rail
     # queries below execute — the external latency hides behind that work
     # instead of adding to it (Bo, 2026-07-15). Joined at its use site (~L760).
-    _air_pool = ThreadPoolExecutor(max_workers=1)
-    _air_future = _air_pool.submit(aircraft_noise_penalty, lat, lng)
+    _air_pool = None
+    if not exclude_aircraft:
+        _air_pool = ThreadPoolExecutor(max_workers=1)
+        _air_future = _air_pool.submit(aircraft_noise_penalty, lat, lng)
 
     db = get_db()
     state = detect_state(lat, lng)
@@ -1019,8 +1056,11 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     rail_db = 10 * math.log10(rail_energy) if rail_energy > 0 else 0.0
 
     # --- Aircraft noise ---
-    aircraft = _air_future.result()
-    _air_pool.shutdown(wait=False)
+    if exclude_aircraft:
+        aircraft = dict(_AIRCRAFT_EXCLUDED)
+    else:
+        aircraft = _air_future.result()
+        _air_pool.shutdown(wait=False)
     aircraft_db = 0.0
     if aircraft["penalty_db"] > 0:
         aircraft_db = AMBIENT_DB + aircraft["penalty_db"]
@@ -1429,7 +1469,10 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     # flushed from the result cache by the "air2" token in _CONFIG_SIG.
     if aircraft.get("assessment") == "not_assessed":
         result["aircraft_assessment"] = "not_assessed"
-        _air_note = _AIRCRAFT_NOT_ASSESSED_NOTE
+        _air_note = (_AIRCRAFT_EXCLUDED_NOTE if exclude_aircraft
+                     else _AIRCRAFT_NOT_ASSESSED_NOTE)
+        if exclude_aircraft:
+            result["aircraft_excluded"] = True
         result["confidence_note"] = (f"{confidence_note} {_air_note}"
                                      if confidence_note else _air_note)
 

@@ -532,6 +532,10 @@ def get_noise_surface(
         None, description="Model path this deployment is supposed to run "
                           "('transfer' in production). The response reports "
                           "whether the grid actually used it."),
+    exclude_aircraft: bool = Query(
+        False, description="Compute every node without the aircraft term "
+                           "(road and rail only). Echoed as "
+                           "aircraft_excluded in the response."),
 ):
     """Modelled Lden on a grid around a point, for the licensed property API's
     per-property noise surface.
@@ -554,7 +558,8 @@ def get_noise_surface(
         return JSONResponse({"error": "Rate limit exceeded."}, status_code=429)
     try:
         grid = noise_surface(lat, lng, radius_m=radius, cells=cells,
-                             require_path=require_path)
+                             require_path=require_path,
+                             exclude_aircraft=exclude_aircraft)
         if not grid:
             return JSONResponse({"error": "no noise coverage"}, status_code=404)
         return grid

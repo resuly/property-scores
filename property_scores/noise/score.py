@@ -85,6 +85,16 @@ _ML_CORRECTION_ENABLED = os.environ.get("NOISE_ML_CORRECTION", "0") == "1"
 # to physics on any failure or when DEM/landcover coverage is missing.
 _TRANSFER_ENABLED = os.environ.get("NOISE_TRANSFER", "0") == "1"
 
+# Observed aircraft overflights (adsb.lol ADS-B grids, AIRCRAFT_ACTIVITY_DIR;
+# property_scores/aircraft_activity). Off by default, and OFF means this module
+# behaves byte-for-byte as before: no block, no estimate, no change to either
+# cache signature (tests/test_aircraft_activity_noise.py asserts all three).
+#   show      adds the `aircraft_activity` counts block; no dB or score moves.
+#   estimate  (or 1) also fills the aircraft term from fixed-wing counts where
+#             NO official ANEF contour applies; official contours always win.
+_AA_MODE = {"1": "estimate", "estimate": "estimate", "show": "show"}.get(
+    os.environ.get("NOISE_AIRCRAFT_ACTIVITY", "0").strip().lower(), "off")
+
 
 def _transfer_model_token() -> str:
     """Grid-stamp token for WHICH transfer model this process will load.
@@ -199,7 +209,10 @@ NOISE_MODEL_VERSION = (_MODEL_DATE
                        + (f"-nswrail{_RAIL_RECAL_DB:g}" if _RAIL_RECAL_ENABLED else "")
                        + ("-transfer" if _TRANSFER_ENABLED else "")
                        + _transfer_model_token()
-                       + ("-ml" if _ML_CORRECTION_ENABLED else ""))
+                       + ("-ml" if _ML_CORRECTION_ENABLED else "")
+                       # Only the estimate moves numbers; `show` adds a block the
+                       # overlay grids do not carry, so it leaves them valid.
+                       + ("-aa1" if _AA_MODE == "estimate" else ""))
 
 # The version string as it was composed before the 2026-08-18 fold, used ONLY
 # as the first field of _CONFIG_SIG below. Deliberate, and the reason is blast
@@ -264,6 +277,14 @@ _CONFIG_SIG = ":".join((
     f"k{_AADT_ADJUST_K:g}" if _AADT_ADJUST_ENABLED else "k-",
     os.environ.get("NOISE_MODEL_ID", ""),
 ))
+# Appended only when the aircraft-activity flag is on, so the default signature
+# (and through api/stamp.py the DA Leads per-parcel cache key) is unchanged.
+# Carries the mode, the estimate method and the data release, so a new 12-month
+# drop or a method change cannot be answered from a cached result.
+if _AA_MODE != "off":
+    from property_scores.aircraft_activity import noise as _aa_noise
+    _CONFIG_SIG += (f":aa-{_AA_MODE}-{_aa_noise.METHOD}"
+                    f"@{_aa_noise.data_token()}")
 
 # Quiet-end physics anchor: the per-state affine is fit on urban facade samples
 # (~46-78 dB Lden) and extrapolates badly below that support, lifting genuinely
@@ -792,6 +813,16 @@ _AIRCRAFT_EXCLUDED = {
     "airport_type": None,
 }
 
+_AIRCRAFT_ESTIMATED_NOTE = (
+    "No official aircraft-noise contour is available for this area; the "
+    "aircraft part of this level is estimated from observed overflights "
+    "(adsb.lol ADS-B, ODbL) and is more likely to understate than overstate.")
+
+_AIRCRAFT_ESTIMATED_OUTSIDE_NOTE = (
+    "This location is outside the official aircraft-noise contours; the "
+    "aircraft part of this level is estimated from observed overflights "
+    "(adsb.lol ADS-B, ODbL) and is more likely to understate than overstate.")
+
 _AIRCRAFT_EXCLUDED_NOTE = (
     "Aircraft noise is not included in this level: it was computed from road "
     "and rail sources only.")
@@ -1064,6 +1095,36 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     aircraft_db = 0.0
     if aircraft["penalty_db"] > 0:
         aircraft_db = AMBIENT_DB + aircraft["penalty_db"]
+
+    # Observed overflights (flag-gated, see _AA_MODE). The counts block never
+    # moves a number. The estimate fills the aircraft term only where no
+    # official contour hit (zone_code None: no_overlay or not_assessed), never
+    # with exclude_aircraft, and only above APPLY_FLOOR_DB.
+    _aa_block = _aa_estimate = None
+    if _AA_MODE != "off":
+        from property_scores.aircraft_activity import noise as _aa_noise
+        _aa_block, _aa_est = _aa_noise.activity_at(lat, lng)
+        if (_AA_MODE == "estimate" and _aa_est and not exclude_aircraft
+                and not aircraft.get("zone_code")
+                and _aa_est["lden_db"] >= _aa_noise.APPLY_FLOOR_DB):
+            # The counts block is NOT marked here on purpose: it must be built
+            # from the overflight data alone, so nothing in it changes at an
+            # official contour edge (Perth and Brisbane contours are withheld
+            # from customers, and a field that flips at the edge would trace
+            # them). Whether the level used the estimate is aircraft_estimate.
+            aircraft_db = _aa_est["lden_db"] - _aa_noise.LDEN_MINUS_FLAT_LEQ
+            _aa_estimate = {
+                "lden_db": _aa_est["lden_db"],
+                "leq_db": round(aircraft_db, 1),
+                "classes": _aa_est["classes"],
+                "method": _aa_est["method"],
+                "basis": ("observed fixed-wing overflights; used because no "
+                          "official aircraft-noise contour applies here"),
+                "source": _aa_block["source"],
+                "licence": _aa_block["licence"],
+                "licence_url": _aa_block["licence_url"],
+                "attribution": _aa_block["attribution"],
+            }
 
     # --- Terrain screening (DEM-based, for dominant source >200m) ---
     terrain_screening = 0.0
@@ -1470,9 +1531,16 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     if aircraft.get("assessment") == "not_assessed":
         result["aircraft_assessment"] = "not_assessed"
         _air_note = (_AIRCRAFT_EXCLUDED_NOTE if exclude_aircraft
+                     else _AIRCRAFT_ESTIMATED_NOTE if _aa_estimate
                      else _AIRCRAFT_NOT_ASSESSED_NOTE)
         if exclude_aircraft:
             result["aircraft_excluded"] = True
+        result["confidence_note"] = (f"{confidence_note} {_air_note}"
+                                     if confidence_note else _air_note)
+    elif _aa_estimate:
+        # Outside every official contour (no_overlay): say where the aircraft
+        # part of the level came from.
+        _air_note = _AIRCRAFT_ESTIMATED_OUTSIDE_NOTE
         result["confidence_note"] = (f"{confidence_note} {_air_note}"
                                      if confidence_note else _air_note)
 
@@ -1527,6 +1595,11 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
             "lga": aircraft["lga"],
         }
         result["aircraft_db"] = round(aircraft_db, 1)
+    elif _aa_estimate:
+        result["aircraft_db"] = round(aircraft_db, 1)
+        result["aircraft_estimate"] = _aa_estimate
+    if _aa_block is not None:
+        result["aircraft_activity"] = _aa_block
 
     # Ocean proximity (informational, does not affect score)
     try:

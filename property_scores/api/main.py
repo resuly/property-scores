@@ -375,7 +375,27 @@ def get_all_scores(
             # Grep-able ops signal: leaked threads accumulate until restart.
             logger.error("STRAGGLER score threads abandoned at deadline: %s",
                          ", ".join(stuck))
+    _gate_aircraft_activity_export(out)
     return out
+
+
+def _gate_aircraft_activity_export(out: dict) -> None:
+    """Keep the per-address overflight counts out of /scores unless enabled.
+
+    /scores is the batch the licensed Property API is built from. The counts
+    block is an extract of an ODbL derived database: delivering it per address
+    through the API publishes that database, which ODbL then requires to be
+    offered under ODbL too. Whether to do that is Bo's call, so the block is
+    withheld here unless AIRCRAFT_ACTIVITY_API_EXPORT=1, independent of the
+    noise flag that creates it (the map panel reads /scores/noise, which this
+    does not touch). Read per request so flipping the env needs no code path
+    change, only a restart.
+    """
+    if os.environ.get("AIRCRAFT_ACTIVITY_API_EXPORT", "0") == "1":
+        return
+    noise = out.get("noise")
+    if isinstance(noise, dict) and "aircraft_activity" in noise:
+        out["noise"] = {k: v for k, v in noise.items() if k != "aircraft_activity"}
 
 
 @app.get("/scores/noise")
@@ -645,6 +665,149 @@ def get_aircraft_noise(lat: Lat, lng: Lng):
     except Exception as e:
         logger.exception("aircraft noise query failed")
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ---------------------------------------------------------------------------
+# Observed aircraft overflights (adsb.lol ADS-B grids, ODbL 1.0).
+# Read-only; data from AIRCRAFT_ACTIVITY_DIR. Unset or missing -> 503 with
+# status "unavailable", and nothing else in the service is affected. Shapes
+# follow the limon-ops prototype (labs/aircraft-activity) so the map front end
+# can be pointed at either; see docs/aircraft-activity.md.
+# ---------------------------------------------------------------------------
+def _aa_store_or_503():
+    from property_scores.aircraft_activity import store as aas
+    st = aas.get_store()
+    if not st.available:
+        return st, JSONResponse({"status": "unavailable",
+                                 "message": aas.UNAVAILABLE_MESSAGE}, status_code=503)
+    return st, None
+
+
+def _aa_json(obj, status_code: int = 200):
+    from property_scores.aircraft_activity.store import clean
+    return JSONResponse(clean(obj), status_code=status_code)
+
+
+@app.get("/scores/aircraft-activity/cities")
+def get_aircraft_activity_cities(
+    helipads: bool = Query(True, description="include each city's landing sites "
+                           "(prototype behaviour); false returns only helipad_count, "
+                           "fetch them with /scores/aircraft-activity/helipads"),
+):
+    try:
+        st, unavailable = _aa_store_or_503()
+        if unavailable:
+            return unavailable
+        from property_scores.aircraft_activity import store as aas
+        return _aa_json({
+            "status": "ok",
+            "cities": [c.describe(include_helipads=helipads) for c in st.cities.values()],
+            "errors": st.errors,
+            "attribution": aas.ATTRIBUTION,
+            "licence": aas.LICENCE,
+            "licence_url": aas.LICENCE_URL,
+        })
+    except Exception:
+        logger.exception("aircraft activity cities failed")
+        return JSONResponse({"status": "error", "error": "internal error"}, status_code=500)
+
+
+@app.get("/scores/aircraft-activity/lookup")
+def get_aircraft_activity_lookup(lat: Lat, lng: Lng):
+    try:
+        st, unavailable = _aa_store_or_503()
+        if unavailable:
+            return unavailable
+        return _aa_json(st.lookup(lat, lng))
+    except Exception:
+        logger.exception("aircraft activity lookup failed")
+        return JSONResponse({"status": "error", "error": "internal error"}, status_code=500)
+
+
+def _aa_bbox(bbox: str | None):
+    """(box, error_response). box is (w, s, e, n) or None."""
+    if not bbox:
+        return None, None
+    try:
+        box = tuple(float(x) for x in bbox.split(","))
+    except ValueError:
+        box = ()
+    if len(box) != 4 or not all(math.isfinite(x) for x in box):
+        return None, JSONResponse({"status": "error",
+                                   "error": "bbox must be west,south,east,north"},
+                                  status_code=400)
+    return box, None
+
+
+@app.get("/scores/aircraft-activity/helipads")
+def get_aircraft_activity_helipads(
+    city: str = Query(...),
+    bbox: str | None = Query(None, description="west,south,east,north"),
+    min_movements: int = Query(0, ge=0),
+):
+    try:
+        st, unavailable = _aa_store_or_503()
+        if unavailable:
+            return unavailable
+        from property_scores.aircraft_activity import store as aas
+        c = st.cities.get(city)
+        if c is None:
+            return JSONResponse({"status": "error", "error": f"unknown city '{city}'"},
+                                status_code=400)
+        box, err = _aa_bbox(bbox)
+        if err:
+            return err
+        pads = c.public_helipads(box, min_movements)
+        out = {"status": c.coverage, "city": city,
+               "period": {"date_start": c.meta.get("date_start"),
+                          "date_end": c.meta.get("date_end"),
+                          "valid_days": c.meta.get("n_days")},
+               "night_hours_local": "22:00-06:00",
+               "total_in_city": len(c._public_helipads()),
+               "count": len(pads), "helipads": pads,
+               "attribution": aas.ATTRIBUTION, "licence": aas.LICENCE}
+        if c.coverage != aas.COVERAGE_OK:
+            out["message"] = (aas.INSUFFICIENT_MESSAGE if c.coverage == aas.COVERAGE_INSUFFICIENT
+                              else aas.LARGE_ONLY_MESSAGE)
+        return _aa_json(out)
+    except Exception:
+        logger.exception("aircraft activity helipads failed")
+        return JSONResponse({"status": "error", "error": "internal error"}, status_code=500)
+
+
+@app.get("/scores/aircraft-activity/grid")
+def get_aircraft_activity_grid(
+    city: str = Query(...),
+    metric: str = Query("passes_per_day"),
+    bbox: str | None = Query(None, description="west,south,east,north"),
+    max: int = Query(180, alias="max", description="max rows/cols, 8..480"),
+):
+    try:
+        st, unavailable = _aa_store_or_503()
+        if unavailable:
+            return unavailable
+        from property_scores.aircraft_activity import store as aas
+        c = st.cities.get(city)
+        if c is None:
+            return JSONResponse({"status": "error", "error": f"unknown city '{city}'"},
+                                status_code=400)
+        if c.coverage == aas.COVERAGE_INSUFFICIENT:
+            return _aa_json({"status": c.coverage, "city": city, "metric": metric,
+                             "message": aas.INSUFFICIENT_MESSAGE,
+                             "rows": 0, "cols": 0, "values": []})
+        if not c.has_metric(metric):
+            msg = f"unknown metric '{metric}'"
+            if c.coverage == aas.COVERAGE_LARGE_ONLY:
+                msg = (f"metric '{metric}' is not available for {city}: "
+                       + aas.LARGE_ONLY_MESSAGE)
+            return JSONResponse({"status": "error", "error": msg}, status_code=400)
+        box, err = _aa_bbox(bbox)
+        if err:
+            return err
+        return _aa_json(c.grid(metric, box, max))
+    except Exception:
+        logger.exception("aircraft activity grid failed")
+        return JSONResponse({"status": "error", "error": "internal error"}, status_code=500)
 
 
 app.mount("/css", StaticFiles(directory=STATIC_DIR / "css"), name="css")

@@ -1,0 +1,128 @@
+{
+ "city": "melbourne",
+ "date_start": "2025-11-27",
+ "date_end": "2026-11-26",
+ "n_days": 359,
+ "n_weekdays": 255,
+ "n_weekend_days": 104,
+ "radius_m": 1000,
+ "ceiling_ft_agl": 3000,
+ "timezone": "Australia/Melbourne",
+ "source": "adsb.lol globe_history (ODbL 1.0)",
+ "fixture": false,
+ "coverage": "ok",
+ "coverage_note": "12 months: YMML 99% of Airservices movements, Essendon 93-94%, Moorabbin fixed-wing 69-84% and helicopters 26-70% by month; approaches seen below 200 ft: YMML 100%, Moorabbin 52-71%. Label from the 12-month validation (2025-12..2026-07 Airservices months, monthly approach coverage).",
+ "sampling": "every available day (no subsampling)",
+ "window": "2025-11-27..2026-11-26 local dates",
+ "months_included": [
+  "2025-11",
+  "2025-12",
+  "2026-01",
+  "2026-02",
+  "2026-03",
+  "2026-04",
+  "2026-05",
+  "2026-06",
+  "2026-07",
+  "2026-08",
+  "2026-09",
+  "2026-10",
+  "2026-11"
+ ],
+ "partial": false,
+ "missing_days": [
+  "2026-05-05",
+  "2026-05-06",
+  "2026-05-07",
+  "2026-05-08",
+  "2026-06-11",
+  "2026-06-12"
+ ],
+ "quarters": {
+  "q1": {
+   "months": [
+    "2026-01",
+    "2026-02",
+    "2026-03"
+   ],
+   "n_days": 90
+  },
+  "q2": {
+   "months": [
+    "2026-04",
+    "2026-05",
+    "2026-06"
+   ],
+   "n_days": 85
+  },
+  "q3": {
+   "months": [
+    "2026-07",
+    "2026-08",
+    "2026-09"
+   ],
+   "n_days": 92
+  },
+  "q4": {
+   "months": [
+    "2025-11",
+    "2025-12",
+    "2026-10",
+    "2026-11"
+   ],
+   "n_days": 92
+  }
+ },
+ "quarter_definition": "calendar quarters of the local date (q1 Jan-Mar, q2 Apr-Jun, q3 Jul-Sep, q4 Oct-Dec; q4 mixes 2025-11-27..12-31 with 2026-10-01..11-26)",
+ "airports": [
+  {
+   "icao": "YMAV",
+   "name": "Melbourne Avalon International Airport",
+   "lat": -38.040269,
+   "lon": 144.467196,
+   "official_month": "2025-12..2026-07 (8 months)",
+   "fixed_wing_visible_ratio_low": 1.025,
+   "fixed_wing_visible_ratio_high": 1.278,
+   "heli_visible_ratio_low": 1.032,
+   "heli_visible_ratio_high": 1.063
+  },
+  {
+   "icao": "YMEN",
+   "name": "Melbourne Essendon Airport",
+   "lat": -37.7281,
+   "lon": 144.901993,
+   "official_month": "2025-12..2026-07 (8 months)",
+   "fixed_wing_visible_ratio_low": 0.927,
+   "fixed_wing_visible_ratio_high": 0.944,
+   "heli_visible_ratio_low": 0.927,
+   "heli_visible_ratio_high": 0.989
+  },
+  {
+   "icao": "YMMB",
+   "name": "Melbourne Moorabbin Airport",
+   "lat": -37.977765,
+   "lon": 145.099799,
+   "official_month": "2025-12..2026-07 (8 months)",
+   "fixed_wing_visible_ratio_low": 0.689,
+   "fixed_wing_visible_ratio_high": 0.842,
+   "heli_visible_ratio_low": 0.411,
+   "heli_visible_ratio_high": 0.513
+  },
+  {
+   "icao": "YMML",
+   "name": "Melbourne Airport",
+   "lat": -37.670732,
+   "lon": 144.837898,
+   "official_month": "2025-12..2026-07 (8 months)",
+   "fixed_wing_visible_ratio_low": 0.991,
+   "fixed_wing_visible_ratio_high": 0.995,
+   "heli_visible_ratio_low": null,
+   "heli_visible_ratio_high": null
+  }
+ ],
+ "fixture_window": {
+  "i0": 253,
+  "j0": 151,
+  "n": 13
+ }
+}

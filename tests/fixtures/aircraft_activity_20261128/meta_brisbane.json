@@ -1,0 +1,106 @@
+{
+ "city": "brisbane",
+ "date_start": "2025-11-27",
+ "date_end": "2026-11-26",
+ "n_days": 359,
+ "n_weekdays": 255,
+ "n_weekend_days": 104,
+ "radius_m": 1000,
+ "ceiling_ft_agl": 3000,
+ "timezone": "Australia/Brisbane",
+ "source": "adsb.lol globe_history (ODbL 1.0)",
+ "fixture": false,
+ "coverage": "large_aircraft_only",
+ "coverage_note": "12 months: YBBN 97-99% of Airservices; Archerfield fixed-wing 36-90% and helicopters 16-38%, so light aircraft and helicopters are undercounted. Label from the 12-month validation (2025-12..2026-07 Airservices months, monthly approach coverage).",
+ "sampling": "every available day (no subsampling)",
+ "window": "2025-11-27..2026-11-26 local dates",
+ "months_included": [
+  "2025-11",
+  "2025-12",
+  "2026-01",
+  "2026-02",
+  "2026-03",
+  "2026-04",
+  "2026-05",
+  "2026-06",
+  "2026-07",
+  "2026-08",
+  "2026-09",
+  "2026-10",
+  "2026-11"
+ ],
+ "partial": false,
+ "missing_days": [
+  "2026-05-05",
+  "2026-05-06",
+  "2026-05-07",
+  "2026-05-08",
+  "2026-06-11",
+  "2026-06-12"
+ ],
+ "quarters": {
+  "q1": {
+   "months": [
+    "2026-01",
+    "2026-02",
+    "2026-03"
+   ],
+   "n_days": 90
+  },
+  "q2": {
+   "months": [
+    "2026-04",
+    "2026-05",
+    "2026-06"
+   ],
+   "n_days": 85
+  },
+  "q3": {
+   "months": [
+    "2026-07",
+    "2026-08",
+    "2026-09"
+   ],
+   "n_days": 92
+  },
+  "q4": {
+   "months": [
+    "2025-11",
+    "2025-12",
+    "2026-10",
+    "2026-11"
+   ],
+   "n_days": 92
+  }
+ },
+ "quarter_definition": "calendar quarters of the local date (q1 Jan-Mar, q2 Apr-Jun, q3 Jul-Sep, q4 Oct-Dec; q4 mixes 2025-11-27..12-31 with 2026-10-01..11-26)",
+ "airports": [
+  {
+   "icao": "YBAF",
+   "name": "Brisbane Archerfield Airport",
+   "lat": -27.572351,
+   "lon": 153.004167,
+   "official_month": "2025-12..2026-07 (8 months)",
+   "fixed_wing_visible_ratio_low": 0.36,
+   "fixed_wing_visible_ratio_high": 0.895,
+   "heli_visible_ratio_low": 0.207,
+   "heli_visible_ratio_high": 0.326
+  },
+  {
+   "icao": "YBBN",
+   "name": "Brisbane International Airport",
+   "lat": -27.38419914245605,
+   "lon": 153.11700439453125,
+   "official_month": "2025-12..2026-07 (8 months)",
+   "fixed_wing_visible_ratio_low": 0.968,
+   "fixed_wing_visible_ratio_high": 0.995,
+   "heli_visible_ratio_low": 1.022,
+   "heli_visible_ratio_high": 1.64
+  }
+ ],
+ "fixture_window": {
+  "i0": 224,
+  "j0": 216,
+  "n": 7
+ }
+}

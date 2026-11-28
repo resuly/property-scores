@@ -1,0 +1,106 @@
+{
+ "city": "hobart",
+ "date_start": "2025-11-27",
+ "date_end": "2026-11-26",
+ "n_days": 359,
+ "n_weekdays": 255,
+ "n_weekend_days": 104,
+ "radius_m": 1000,
+ "ceiling_ft_agl": 3000,
+ "timezone": "Australia/Hobart",
+ "source": "adsb.lol globe_history (ODbL 1.0)",
+ "fixture": false,
+ "coverage": "insufficient",
+ "coverage_note": "No take-offs or landings detected in 12 months; receiver coverage near YMHB ends around 1,100 ft AGL. Label from the 12-month validation (2025-12..2026-07 Airservices months, monthly approach coverage).",
+ "sampling": "every available day (no subsampling)",
+ "window": "2025-11-27..2026-11-26 local dates",
+ "months_included": [
+  "2025-11",
+  "2025-12",
+  "2026-01",
+  "2026-02",
+  "2026-03",
+  "2026-04",
+  "2026-05",
+  "2026-06",
+  "2026-07",
+  "2026-08",
+  "2026-09",
+  "2026-10",
+  "2026-11"
+ ],
+ "partial": false,
+ "missing_days": [
+  "2026-05-05",
+  "2026-05-06",
+  "2026-05-07",
+  "2026-05-08",
+  "2026-06-11",
+  "2026-06-12"
+ ],
+ "quarters": {
+  "q1": {
+   "months": [
+    "2026-01",
+    "2026-02",
+    "2026-03"
+   ],
+   "n_days": 90
+  },
+  "q2": {
+   "months": [
+    "2026-04",
+    "2026-05",
+    "2026-06"
+   ],
+   "n_days": 85
+  },
+  "q3": {
+   "months": [
+    "2026-07",
+    "2026-08",
+    "2026-09"
+   ],
+   "n_days": 92
+  },
+  "q4": {
+   "months": [
+    "2025-11",
+    "2025-12",
+    "2026-10",
+    "2026-11"
+   ],
+   "n_days": 92
+  }
+ },
+ "quarter_definition": "calendar quarters of the local date (q1 Jan-Mar, q2 Apr-Jun, q3 Jul-Sep, q4 Oct-Dec; q4 mixes 2025-11-27..12-31 with 2026-10-01..11-26)",
+ "airports": [
+  {
+   "icao": "YCBG",
+   "name": "Cambridge Aerodrome",
+   "lat": -42.827498,
+   "lon": 147.478337,
+   "official_month": "2025-12..2026-07 (8 months)",
+   "fixed_wing_visible_ratio_low": 0.0,
+   "fixed_wing_visible_ratio_high": 0.0,
+   "heli_visible_ratio_low": 0.0,
+   "heli_visible_ratio_high": 0.0
+  },
+  {
+   "icao": "YMHB",
+   "name": "Hobart International Airport",
+   "lat": -42.837032,
+   "lon": 147.513022,
+   "official_month": "2025-12..2026-07 (8 months)",
+   "fixed_wing_visible_ratio_low": 0.0,
+   "fixed_wing_visible_ratio_high": 0.0,
+   "heli_visible_ratio_low": 0.0,
+   "heli_visible_ratio_high": 0.0
+  }
+ ],
+ "fixture_window": {
+  "i0": 212,
+  "j0": 172,
+  "n": 7
+ }
+}

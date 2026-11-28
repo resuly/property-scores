@@ -65,7 +65,8 @@ HELIPAD_RADIUS_KM = 5.0
 PUBLIC_MIN_MOVEMENTS_UNNAMED = 20
 UNNAMED_SITE = "Unidentified landing site"
 # name_kind values (from the naming step) that settle the public kind.
-NAME_KIND_TO_KIND = {"hospital": "hospital", "other": "other", "airport": "other"}
+# Naming-step working fields: never part of a public response.
+NAMING_INTERNAL_FIELDS = ("name_source", "name_kind", "name_dist_m", "name_candidates")
 GRID_MAX_CELLS = 480
 EARTH_R_M = 6371008.8
 
@@ -130,9 +131,12 @@ def helipad_name(h):
 
 
 def helipad_kind(h):
-    """Public kind: the naming step's name_kind wins when it is definite
-    (older files without name_kind keep their kind)."""
-    return NAME_KIND_TO_KIND.get(h.get("name_kind"), h.get("kind"))
+    """Public kind: the naming step can raise a site to hospital, never
+    lower one (a pad the pipeline already tied to a hospital stays one
+    whatever its OSM name says; older files without name_kind keep their kind)."""
+    if h.get("name_kind") == "hospital":
+        return "hospital"
+    return h.get("kind")
 
 
 def is_public_helipad(h) -> bool:
@@ -368,7 +372,7 @@ class CityGrid:
         for h in self._public_helipads():
             d = haversine_m(lat, lng, h["lat"], h["lon"]) / 1000
             if d <= radius_km:
-                item = dict(h)
+                item = {k: v for k, v in h.items() if k not in NAMING_INTERNAL_FIELDS}
                 item["distance_km"] = round(d, 2)
                 item["movements"] = helipad_movements(h)
                 item["kind"] = helipad_kind(h)

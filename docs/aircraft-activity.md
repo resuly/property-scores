@@ -47,8 +47,8 @@ with coverage enforced and attribution added.
   **Public landing sites** (every list and count: `cities`, `helipads`, `lookup`): a site is returned only when it is named
   or has at least `PUBLIC_MIN_MOVEMENTS_UNNAMED = 20` movements (arrivals + departures) over the period, because an
   unnamed cluster with a few touchdowns a year is a paddock or a one-off job, not a landing site; the files keep every site.
-  When a site has `name_kind` from the naming step (`hospital`, `other`, `airport`), the public `kind` follows it
-  (`hospital` -> `hospital` and `is_hospital: true`, the others -> `other`); files without `name_kind` keep their `kind`.
+  When the naming step gives a site `name_kind: hospital`, the public `kind` is `hospital` (`is_hospital: true`). The naming step never lowers a kind;
+  files without `name_kind` keep their `kind`. The naming working fields (`name_source`, `name_kind`, `name_dist_m`, `name_candidates`) are never served.
   `airports[]`: `icao, name, lat, lon, official_month` (Airservices months compared),
   `fixed_wing_visible_ratio_low/high`, `heli_visible_ratio_low/high` (our counted movements / Airservices
   published movements; low = 100 ft threshold, high = 250 ft), `observed_movements_12m`, `observed_movements_per_day`

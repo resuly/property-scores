@@ -425,3 +425,24 @@ def test_same_name_minor_duplicate_is_not_served_twice(tmp_path):
     got = [(h["name"], st.helipad_movements(h)) for h in st.CityGrid._public_helipads(grid)]
     assert got == [("Royal Childrens Hospital Helipad", 270), ("Frankston Hospital helipad", 17),
                    ("Twin Pad Hospital", 40), ("Twin Pad Hospital", 25)]
+
+
+def test_naming_fields_stay_internal_and_kind_is_never_lowered():
+    import types
+    from property_scores.aircraft_activity import store as st
+
+    assert st.helipad_kind({"kind": "hospital", "name_kind": "other"}) == "hospital"
+    assert st.helipad_kind({"kind": "hospital", "name_kind": "emergency"}) == "hospital"
+    assert st.helipad_kind({"kind": "other", "name_kind": "hospital"}) == "hospital"
+    assert st.helipad_kind({"kind": "other", "name_kind": "airport"}) == "other"
+    assert st.helipad_kind({"kind": "other"}) == "other"
+
+    grid = types.SimpleNamespace(coverage=st.COVERAGE_OK, helipads=[
+        {"name": None, "lat": -37.8, "lon": 145.0, "arrivals": 30, "departures": 0, "kind": "other",
+         "name_source": "ambiguous_hospital", "name_kind": "unknown", "name_dist_m": 40,
+         "name_candidates": ["Hospital A", "Hospital B"]}])
+    grid._public_helipads = lambda: st.CityGrid._public_helipads(grid)
+    near = st.CityGrid.nearby_helipads(grid, -37.8, 145.0, 1.0)
+    assert len(near) == 1
+    assert not set(near[0]) & set(st.NAMING_INTERNAL_FIELDS)
+    assert near[0]["movements"] == 30

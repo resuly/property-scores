@@ -404,3 +404,24 @@ def test_helipads_routes_use_public_rule(named_dir, monkeypatch):
     assert mel["helipad_count"] == 3 and len(mel["helipads"]) == 3
     lk = cl.get("/scores/aircraft-activity/lookup", params={"lat": KEILOR[0], "lng": KEILOR[1]}).json()
     assert len(lk["helipads"]) == 3
+
+
+def test_same_name_minor_duplicate_is_not_served_twice(tmp_path):
+    """A 2-movement cluster named like a 270-movement pad is the same pad: one marker."""
+    import types
+    from property_scores.aircraft_activity import store as st
+
+    def site(name, n, lat):
+        return {"name": name, "lat": lat, "lon": 145.0, "arrivals": n, "departures": 0}
+
+    grid = types.SimpleNamespace(coverage=st.COVERAGE_OK, helipads=[
+        site("Royal Childrens Hospital Helipad", 270, -37.79),
+        site("royal childrens hospital helipad", 2, -37.791),
+        site("Frankston Hospital helipad", 17, -38.15),
+        site("Frankston Hospital Helipad", 6, -38.151),
+        site("Twin Pad Hospital", 40, -37.5),
+        site("Twin Pad Hospital", 25, -37.501),
+    ])
+    got = [(h["name"], st.helipad_movements(h)) for h in st.CityGrid._public_helipads(grid)]
+    assert got == [("Royal Childrens Hospital Helipad", 270), ("Frankston Hospital helipad", 17),
+                   ("Twin Pad Hospital", 40), ("Twin Pad Hospital", 25)]

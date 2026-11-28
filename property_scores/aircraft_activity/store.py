@@ -279,7 +279,22 @@ class CityGrid:
         # Every public list (helipads, lookup, cities, counts) goes through here.
         if self.coverage != COVERAGE_OK:
             return []
-        return [h for h in self.helipads if is_public_helipad(h)]
+        public = [h for h in self.helipads if is_public_helipad(h)]
+        # One name, one marker: a minor cluster (< 20 movements) that carries
+        # the same name as a busier site is the same pad seen twice.
+        best = {}
+        for h in public:
+            key = (helipad_name(h) or "").strip().lower()
+            if key and helipad_movements(h) > best.get(key, -1):
+                best[key] = helipad_movements(h)
+        out = []
+        for h in public:
+            key = (helipad_name(h) or "").strip().lower()
+            mv = helipad_movements(h)
+            if key and mv < PUBLIC_MIN_MOVEMENTS_UNNAMED and mv < best[key]:
+                continue
+            out.append(h)
+        return out
 
     def describe(self, include_helipads: bool = True):
         d = self.meta_summary()

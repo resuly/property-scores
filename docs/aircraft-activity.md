@@ -43,7 +43,12 @@ with coverage enforced and attribution added.
   cell_size_deg, shape, airports, metrics, scales, has_hourly, helipads, message?`.
   `insufficient`: `metrics` and `helipads` empty; `airports` still listed (the low observed share is the evidence for the label). `large_aircraft_only`: `metrics` = `["jet_per_day"]`, no helipads, no hourly.
   (The prototype's `data_dir` is not returned: it is a server path.)
-  `?helipads=false` returns `helipads: null` plus `helipad_count` (the 12-month release has 3,081 sites; fetch them per city below).
+  `?helipads=false` returns `helipads: null` plus `helipad_count` (the 12-month release has 3,081 sites in its files, 241 of them public with the named files; fetch them per city below).
+  **Public landing sites** (every list and count: `cities`, `helipads`, `lookup`): a site is returned only when it is named
+  or has at least `PUBLIC_MIN_MOVEMENTS_UNNAMED = 20` movements (arrivals + departures) over the period, because an
+  unnamed cluster with a few touchdowns a year is a paddock or a one-off job, not a landing site; the files keep every site.
+  When a site has `name_kind` from the naming step (`hospital`, `other`, `airport`), the public `kind` follows it
+  (`hospital` -> `hospital` and `is_hospital: true`, the others -> `other`); files without `name_kind` keep their `kind`.
   `airports[]`: `icao, name, lat, lon, official_month` (Airservices months compared),
   `fixed_wing_visible_ratio_low/high`, `heli_visible_ratio_low/high` (our counted movements / Airservices
   published movements; low = 100 ft threshold, high = 250 ft), `observed_movements_12m`, `observed_movements_per_day`
@@ -52,6 +57,7 @@ with coverage enforced and attribution added.
   `{status, city, period, night_hours_local, total_in_city, count, helipads, attribution, licence, message?}`;
   each site `{name (null when unnamed), kind, is_hospital, lat, lon, movements, arrivals, departures, night_movements}`
   (movements over the period). Empty for `insufficient` and `large_aircraft_only` cities (helicopters not reliably seen).
+  `total_in_city` and `count` are public sites; `min_movements` filters further on top of the public rule.
 - `GET /scores/aircraft-activity/lookup?lat=&lng=` -> `{status, query, city, cell, metrics, hourly, quarters,
   helipads, helipad_radius_km, nearest_airport, attribution, licence, message?, undercounted?}`.
   `status` is the city's coverage label, or `not_covered` (HTTP 200, with `cities`).

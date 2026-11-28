@@ -308,10 +308,14 @@ def test_helipads_endpoint_filters_and_shapes(client):
     j = r.json()
     assert r.status_code == 200 and j["count"] == j["total_in_city"] > 0
     raw = __import__("json").loads((FIX / "helipads_melbourne.json").read_text())
-    assert j["count"] == len(raw)
+    # The fixture sites are all unnamed (old file format, no name_* fields):
+    # only those with >= 20 movements are public.
+    pub = [h for h in raw if h["arrivals"] + h["departures"] >= 20]
+    assert 0 < len(pub) < len(raw)
+    assert j["count"] == len(pub)
     p = j["helipads"][0]
     assert set(p) >= {"name", "is_hospital", "lat", "lon", "movements", "night_movements"}
-    assert p["movements"] == raw[0]["arrivals"] + raw[0]["departures"]
+    assert p["movements"] == pub[0]["arrivals"] + pub[0]["departures"]
     assert all(x["name"] is None or x["name"] != "Unidentified landing site" for x in j["helipads"])
     top = max(x["movements"] for x in j["helipads"])
     r2 = client.get("/scores/aircraft-activity/helipads", params={"city": "melbourne", "min_movements": top})
@@ -319,11 +323,84 @@ def test_helipads_endpoint_filters_and_shapes(client):
     w, s, e, n = 144.80, -37.75, 144.90, -37.70
     r3 = client.get("/scores/aircraft-activity/helipads", params={"city": "melbourne", "bbox": f"{w},{s},{e},{n}"})
     assert all(w <= x["lon"] <= e and s <= x["lat"] <= n for x in r3.json()["helipads"])
-    assert r3.json()["count"] == sum(1 for h in raw if w <= h["lon"] <= e and s <= h["lat"] <= n)
+    assert r3.json()["count"] == sum(1 for h in pub if w <= h["lon"] <= e and s <= h["lat"] <= n)
     r4 = client.get("/scores/aircraft-activity/helipads", params={"city": "brisbane"})
     assert r4.json()["count"] == 0 and "message" in r4.json()
     c = client.get("/scores/aircraft-activity/cities", params={"helipads": "false"}).json()
     mel = [x for x in c["cities"] if x["key"] == "melbourne"][0]
-    assert mel["helipads"] is None and mel["helipad_count"] == len(raw)
+    assert mel["helipads"] is None and mel["helipad_count"] == len(pub)
     hob = [x for x in c["cities"] if x["key"] == "hobart"][0]
     assert hob["airports"] and hob["airports"][0]["observed_movements_12m"] is None
+
+
+# ---- public helipad threshold and naming ------------------------------------
+
+def _pad(name, kind, arr, dep, dlat, **extra):
+    h = {"name": name, "kind": kind, "source": "clustered",
+         "lat": KEILOR[0] + dlat, "lon": KEILOR[1], "arrivals": arr, "departures": dep,
+         "night_movements": 0, "aircraft_count": 1, "hourly": [0] * 24}
+    h.update(extra)
+    return h
+
+
+@pytest.fixture
+def named_dir(tmp_path):
+    """The fixture with melbourne's helipads replaced by four sites near Keilor
+    Park: one in the old format (no name_* fields), three in the named format."""
+    import json
+    d = tmp_path / "aa"
+    d.mkdir()
+    for f in FIX.iterdir():
+        if f.name != "helipads_melbourne.json":
+            (d / f.name).symlink_to(f)
+    pads = [
+        _pad("Unidentified landing site", "other", 10, 9, 0.001),                  # 19, unnamed, old format
+        _pad("Unidentified landing site", "other", 10, 10, 0.002,
+             name_source="none", name_kind="unknown", name_dist_m=None),          # 20, unnamed
+        _pad("Tiny Pad", "other", 1, 1, 0.003,
+             name_source="osm_helipad_tag", name_kind="other", name_dist_m=5),     # 2, named
+        _pad("Keilor Hospital Helipad", "other", 20, 20, 0.004,
+             name_source="osm_helipad_tag", name_kind="hospital", name_dist_m=0),  # 40, named hospital
+    ]
+    (d / "helipads_melbourne.json").write_text(json.dumps(pads))
+    return d
+
+
+def test_public_helipads_threshold_and_kind(named_dir):
+    c = aas.Store(named_dir).cities["melbourne"]
+    assert len(c.helipads) == 4  # the file is kept whole
+    got = {p["name"]: p for p in c.public_helipads()}
+    assert set(got) == {None, "Tiny Pad", "Keilor Hospital Helipad"}
+    assert got[None]["movements"] == 20  # the 19-movement unnamed site is not public
+    assert got["Tiny Pad"]["movements"] == 2 and got["Tiny Pad"]["kind"] == "other"
+    hosp = got["Keilor Hospital Helipad"]
+    assert hosp["kind"] == "hospital" and hosp["is_hospital"] is True
+    # min_movements filters further on top of the public rule.
+    assert {p["name"] for p in c.public_helipads(min_movements=3)} == {None, "Keilor Hospital Helipad"}
+    assert {p["name"] for p in c.public_helipads(min_movements=21)} == {"Keilor Hospital Helipad"}
+    d = c.describe()
+    assert d["helipad_count"] == 3 and len(d["helipads"]) == 3
+
+
+def test_lookup_nearby_helipads_use_public_rule(named_dir):
+    got = aas.Store(named_dir).lookup(*KEILOR)
+    pads = got["helipads"]
+    assert sorted(p["movements"] for p in pads) == [2, 20, 40]
+    assert [p["kind"] for p in pads if p["name"] == "Keilor Hospital Helipad"] == ["hospital"]
+
+
+def test_helipads_routes_use_public_rule(named_dir, monkeypatch):
+    from fastapi.testclient import TestClient
+    from property_scores.api import main
+    monkeypatch.setenv("AIRCRAFT_ACTIVITY_DIR", str(named_dir))
+    cl = TestClient(main.app)
+    j = cl.get("/scores/aircraft-activity/helipads", params={"city": "melbourne"}).json()
+    assert j["total_in_city"] == j["count"] == 3
+    j = cl.get("/scores/aircraft-activity/helipads",
+               params={"city": "melbourne", "min_movements": 20}).json()
+    assert j["total_in_city"] == 3 and j["count"] == 2
+    mel = [x for x in cl.get("/scores/aircraft-activity/cities").json()["cities"]
+           if x["key"] == "melbourne"][0]
+    assert mel["helipad_count"] == 3 and len(mel["helipads"]) == 3
+    lk = cl.get("/scores/aircraft-activity/lookup", params={"lat": KEILOR[0], "lng": KEILOR[1]}).json()
+    assert len(lk["helipads"]) == 3

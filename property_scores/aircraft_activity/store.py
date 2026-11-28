@@ -59,6 +59,13 @@ HOURLY_METRICS = tuple(f"hourly_{h:02d}" for h in range(24))
 # Metrics that stay meaningful where only large aircraft are seen.
 JET_ONLY_METRICS = ("jet_per_day",)
 HELIPAD_RADIUS_KM = 5.0
+# An unnamed site is only shown when it has at least this many movements
+# (arrivals + departures) over the period: a handful of touchdowns is a
+# paddock or a one-off job, not a landing site. Named sites always show.
+PUBLIC_MIN_MOVEMENTS_UNNAMED = 20
+UNNAMED_SITE = "Unidentified landing site"
+# name_kind values (from the naming step) that settle the public kind.
+NAME_KIND_TO_KIND = {"hospital": "hospital", "other": "other", "airport": "other"}
 GRID_MAX_CELLS = 480
 EARTH_R_M = 6371008.8
 
@@ -110,6 +117,27 @@ def clean(value):
     if isinstance(value, np.bool_):
         return bool(value)
     return value
+
+
+def helipad_movements(h) -> int:
+    return (h.get("arrivals") or 0) + (h.get("departures") or 0)
+
+
+def helipad_name(h):
+    """The site's name, or None when unnamed."""
+    name = h.get("name")
+    return None if not name or name == UNNAMED_SITE else name
+
+
+def helipad_kind(h):
+    """Public kind: the naming step's name_kind wins when it is definite
+    (older files without name_kind keep their kind)."""
+    return NAME_KIND_TO_KIND.get(h.get("name_kind"), h.get("kind"))
+
+
+def is_public_helipad(h) -> bool:
+    return (helipad_name(h) is not None
+            or helipad_movements(h) >= PUBLIC_MIN_MOVEMENTS_UNNAMED)
 
 
 def round_sig(x, digits: int = 4):
@@ -248,7 +276,10 @@ class CityGrid:
 
     def _public_helipads(self):
         # Helipad counts are helicopter movements: only where helicopters are seen.
-        return self.helipads if self.coverage == COVERAGE_OK else []
+        # Every public list (helipads, lookup, cities, counts) goes through here.
+        if self.coverage != COVERAGE_OK:
+            return []
+        return [h for h in self.helipads if is_public_helipad(h)]
 
     def describe(self, include_helipads: bool = True):
         d = self.meta_summary()
@@ -300,16 +331,14 @@ class CityGrid:
                 w, s_, e, n = bbox
                 if not (s_ <= lat <= n and w <= lon <= e):
                     continue
-            mv = (h.get("arrivals") or 0) + (h.get("departures") or 0)
+            mv = helipad_movements(h)
             if mv < min_movements:
                 continue
-            name = h.get("name")
-            if not name or name == "Unidentified landing site":
-                name = None
+            kind = helipad_kind(h)
             out.append({
-                "name": name,
-                "kind": h.get("kind"),
-                "is_hospital": h.get("kind") == "hospital",
+                "name": helipad_name(h),
+                "kind": kind,
+                "is_hospital": kind == "hospital",
                 "lat": lat,
                 "lon": lon,
                 "movements": mv,
@@ -326,7 +355,8 @@ class CityGrid:
             if d <= radius_km:
                 item = dict(h)
                 item["distance_km"] = round(d, 2)
-                item["movements"] = (h.get("arrivals") or 0) + (h.get("departures") or 0)
+                item["movements"] = helipad_movements(h)
+                item["kind"] = helipad_kind(h)
                 out.append(item)
         out.sort(key=lambda x: x["distance_km"])
         return out

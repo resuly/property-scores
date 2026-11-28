@@ -90,7 +90,18 @@ def test_estimate_fills_only_without_official_contour(monkeypatch, ns):
     est = ns.noise_score(*KEILOR, 500)
     assert est["aircraft_activity"]["affects_score"] is False  # block never moves a number
     e = est["aircraft_estimate"]
-    assert est["aircraft_db"] == pytest.approx(e["lden_db"] - 6.39, abs=0.06)
+    assert est["aircraft_db"] == e["leq_db"]
+    # the three period Leqs recombine into the estimate's Lden
+    import math
+    lden = 10 * math.log10((12 * 10 ** (e["leq_day_db"] / 10)
+                            + 4 * 10 ** ((e["leq_evening_db"] + 5) / 10)
+                            + 8 * 10 ** ((e["leq_night_db"] + 10) / 10)) / 24)
+    assert lden == pytest.approx(e["lden_db"], abs=0.1)
+    # no road or rail here: each period level is the estimate's own period
+    # Leq (floored at ambient), not one 24 h Leq copied into all three
+    assert est["leq_night_db"] == pytest.approx(max(e["leq_night_db"], 35.0), abs=0.2)
+    assert est["leq_day_db"] == pytest.approx(max(e["leq_day_db"], 35.0), abs=0.2)
+    assert e["leq_day_db"] != e["leq_night_db"]
     assert est["lden_db"] > off["lden_db"] and est["score"] <= off["score"]
     assert est["dominant_source"] == "aircraft"
     assert "observed overflights" in est["confidence_note"]

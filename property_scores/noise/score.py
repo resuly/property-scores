@@ -532,7 +532,8 @@ def _true_metres(lat: float, lng: float, src_lat: float, src_lng: float) -> floa
                      + ((src_lat - lat) * 111_320) ** 2)
 
 
-def _facade_lden(sources: list[tuple[float, float]], aircraft_db: float) -> dict:
+def _facade_lden(sources: list[tuple[float, float]], aircraft_db: float,
+                 aircraft_periods: tuple[float, float, float] | None = None) -> dict:
     """Compute Lden per facade sector from directional sources.
 
     sources: list of (l10_db, bearing_rad) for road sources, or (leq_db, bearing_rad) for rail.
@@ -582,18 +583,20 @@ def _facade_lden(sources: list[tuple[float, float]], aircraft_db: float) -> dict
 
         road_leq = (road_db - L10_TO_LEQ_DB) if road_db > 0 else 0.0
         rail_leq = rail_db
-        aircraft_leq = aircraft_db
+        # One aircraft Leq in all three periods (the ANEF term), unless the
+        # caller passes the overflight estimate's own day/evening/night split.
+        air_d, air_e, air_n = aircraft_periods or (aircraft_db, aircraft_db, aircraft_db)
 
         leq_d = max(_energy_sum(
             road_leq + _DAY_ADJ if road_leq > 0 else 0,
-            rail_leq, aircraft_leq), AMBIENT_DB)
+            rail_leq, air_d), AMBIENT_DB)
         leq_e = max(_energy_sum(
             road_leq + _EVE_ADJ if road_leq > 0 else 0,
             max(rail_leq - 5, 0) if rail_leq > 0 else 0,
-            aircraft_leq), AMBIENT_DB)
+            air_e), AMBIENT_DB)
         leq_n = max(_energy_sum(
             road_leq + _NIGHT_ADJ if road_leq > 0 else 0,
-            max(rail_leq - 10, 0) if rail_leq > 0 else 0, aircraft_leq), AMBIENT_DB)
+            max(rail_leq - 10, 0) if rail_leq > 0 else 0, air_n), AMBIENT_DB)
 
         sector_ldens.append(round(_lden(leq_d, leq_e, leq_n), 1))
 
@@ -1100,7 +1103,7 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     # moves a number. The estimate fills the aircraft term only where no
     # official contour hit (zone_code None: no_overlay or not_assessed), never
     # with exclude_aircraft, and only above APPLY_FLOOR_DB.
-    _aa_block = _aa_estimate = None
+    _aa_block = _aa_estimate = _aa_periods = None
     if _AA_MODE != "off":
         from property_scores.aircraft_activity import noise as _aa_noise
         _aa_block, _aa_est = _aa_noise.activity_at(lat, lng)
@@ -1112,10 +1115,15 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
             # official contour edge (Perth and Brisbane contours are withheld
             # from customers, and a field that flips at the edge would trace
             # them). Whether the level used the estimate is aircraft_estimate.
-            aircraft_db = _aa_est["lden_db"] - _aa_noise.LDEN_MINUS_FLAT_LEQ
+            aircraft_db = _aa_est["leq_24h_db"]
+            _aa_periods = (_aa_est["leq_day_db"], _aa_est["leq_evening_db"],
+                           _aa_est["leq_night_db"])
             _aa_estimate = {
                 "lden_db": _aa_est["lden_db"],
                 "leq_db": round(aircraft_db, 1),
+                "leq_day_db": round(_aa_periods[0], 1),
+                "leq_evening_db": round(_aa_periods[1], 1),
+                "leq_night_db": round(_aa_periods[2], 1),
                 "classes": _aa_est["classes"],
                 "method": _aa_est["method"],
                 "basis": ("observed fixed-wing overflights; used because no "
@@ -1151,6 +1159,12 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     road_leq = (road_db - L10_TO_LEQ_DB) if road_db > 0 else 0.0
     rail_leq = rail_db
     aircraft_leq = aircraft_db
+    # Per-period aircraft Leq. The ANEF term is one Leq used in every period;
+    # the overflight estimate carries its own day/evening/night split, so a
+    # daytime training airfield does not show up in leq_night_db.
+    air_leq_d = air_leq_e = air_leq_n = aircraft_leq
+    if _aa_estimate:
+        air_leq_d, air_leq_e, air_leq_n = _aa_periods
     # Night rail level by type: train/vline carry overnight freight (-10 dB);
     # trams largely stop overnight (-20 dB), so a tram-only facade isn't
     # over-credited at night. Built per source from the selected rail levels.
@@ -1164,17 +1178,17 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     leq_day_val = max(_energy_sum(
         road_leq + _DAY_ADJ if road_leq > 0 else 0,
         rail_leq,
-        aircraft_leq), AMBIENT_DB)
+        air_leq_d), AMBIENT_DB)
     leq_eve_val = max(_energy_sum(
         road_leq + _EVE_ADJ if road_leq > 0 else 0,
         max(rail_leq - 5, 0) if rail_leq > 0 else 0,
-        aircraft_leq), AMBIENT_DB)
+        air_leq_e), AMBIENT_DB)
     # Rail night uses rail_night_leq (per-type: train/vline freight-active,
     # trams mostly stop); Lden then applies its +10 dB night penalty.
     leq_night_val = max(_energy_sum(
         road_leq + _NIGHT_ADJ if road_leq > 0 else 0,
         rail_night_leq,
-        aircraft_leq), AMBIENT_DB)
+        air_leq_n), AMBIENT_DB)
 
     lden = _lden(leq_day_val, leq_eve_val, leq_night_val)
     # Physics over-call guard: the CRTN energy-sum fallback can produce
@@ -1248,15 +1262,15 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
                 # physics above), so rail/tram and aircraft are fully preserved.
                 road_leq_t = road_leq + (t_road_lden - rd_only_lden)
                 leq_day_t = max(_energy_sum(
-                    road_leq_t + _DAY_ADJ, rail_leq, aircraft_leq), AMBIENT_DB)
+                    road_leq_t + _DAY_ADJ, rail_leq, air_leq_d), AMBIENT_DB)
                 leq_eve_t = max(_energy_sum(
                     road_leq_t + _EVE_ADJ,
                     max(rail_leq - 5, 0) if rail_leq > 0 else 0,
-                    aircraft_leq), AMBIENT_DB)
+                    air_leq_e), AMBIENT_DB)
                 leq_night_t = max(_energy_sum(
                     road_leq_t + _NIGHT_ADJ,
                     rail_night_leq,
-                    aircraft_leq), AMBIENT_DB)
+                    air_leq_n), AMBIENT_DB)
                 lden = _lden(leq_day_t, leq_eve_t, leq_night_t)
                 # Return the same chain lden was built from. These _t values
                 # used to be folded into lden and discarded while the response
@@ -1579,7 +1593,8 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
         result["terrain_screening_db"] = round(terrain_screening, 1)
 
     # Facade analysis: per-sector Lden
-    facade = _facade_lden(_all_directional_sources, aircraft_db)
+    facade = _facade_lden(_all_directional_sources, aircraft_db,
+                          _aa_periods if _aa_estimate else None)
     if facade:
         result.update(facade)
 

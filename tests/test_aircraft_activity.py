@@ -191,6 +191,17 @@ def test_estimate_matches_numerical_integration(store):
             for c in ("jet", "light"))
     assert got["lden_db"] == pytest.approx(10 * math.log10(e / 86400), abs=0.05)
     assert 55 < got["lden_db"] < 70  # a busy airport corridor, sanity only
+    # period Leqs: energy over 12 / 4 / 8 h, unweighted
+    E = [0.0, 0.0, 0.0]
+    for hr in range(24):
+        per = 2 if (hr >= 23 or hr < 7) else (1 if hr >= 19 else 0)
+        for c in ("jet", "light"):
+            E[per] += (m[f"{c}_per_day"] * cell["hourly"][hr] / m["passes_per_day"]
+                       * factor * 10 ** (aan.SEL_AT_1000FT_DB[c] / 10))
+    for key, e_, secs in zip(("leq_day_db", "leq_evening_db", "leq_night_db"), E,
+                             (43200, 14400, 28800)):
+        assert got[key] == pytest.approx(10 * math.log10(e_ / secs), abs=0.05), key
+    assert got["leq_24h_db"] == pytest.approx(10 * math.log10(sum(E) / 86400), abs=0.05)
 
 
 def test_estimate_responds_to_counts_height_and_class(store):

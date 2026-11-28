@@ -90,7 +90,7 @@ both sides of a contour edge (tested) and cannot be used to trace one.
 ## `noise.aircraft_estimate` (only with `estimate`, only where used)
 
 Present only when the aircraft term of the level came from overflights:
-`{lden_db, leq_db, classes, method, basis, source, licence, licence_url, attribution}`.
+`{lden_db, leq_db, leq_day_db, leq_evening_db, leq_night_db, classes, method, basis, source, licence, licence_url, attribution}`.
 `aircraft_db` is then set to `leq_db` and `dominant_source` may read `aircraft`.
 A sentence is appended to `confidence_note`.
 
@@ -103,15 +103,31 @@ jets only. Helicopters never become dB. Aircraft Lden below 45 dB is not mixed.
 Every counted pass is an event with SEL = SEL(1,000 ft) by class (jet 86, light
 74 dBA) - 20 log10(d / 305 m), averaged over a sideways offset spread evenly
 from 0 to 1,000 m at the cell's median height; energy summed per hour with
-Lden evening +5 / night +10 weights, divided by 86,400 s. Entered into the
-engine as the flat Leq that gives that Lden (Lden - 6.39), the same form the
-ANEF term already uses. Conservative choices, each biasing low: even sideways
+Lden evening +5 / night +10 weights, divided by 86,400 s. The same energy per
+period gives day (07-19), evening (19-23) and night (23-07) Leqs, which is how
+the estimate enters the engine's period sums (the ANEF term, by contrast, is
+one Leq in all three periods), so a daytime training airfield does not show
+up in `leq_night_db`. `aircraft_db` is the estimate's 24 h Leq. Conservative choices, each biasing low: even sideways
 spread, nothing above 3,000 ft counted, low-end SELs (lowered 2 dB after the
 check below).
 
-Check against official ANEF (`scripts/aircraft_activity_calibrate.py`): see
-the commit message / delivery log for the table. ANEF is a forecast of future
-capacity, so current traffic should read at or below it.
+Check against official ANEF (`scripts/aircraft_activity_calibrate.py`, 12-month
+release, SEL 86/74). Median estimate per band vs ANEF + 35 (the usual ANEF ~
+DNL - 35 relation):
+
+| city | ANEF 20 | 25 | 30 | 35 |
+|---|---|---|---|---|
+| Perth (all cells in band) | 55.1 (+0.1) | 58.5 (-1.5) | 62.4 (-2.6) | 67.3 (-2.7) |
+| Brisbane, jets only | 53.8 (-1.2) | 57.7 (-2.3) | 60.3 (-4.7) | 64.5 (-5.5) |
+| Melbourne MAEO (all cells) | 41.5 (-13.5) | 40.0 (-20.0) | | |
+| Melbourne MAEO, cells with >= 20 jets/day | ~55 | ~57 | | |
+
+Against the dB this engine already uses for each ANEF band (35 + penalty, flat)
+the estimate is 6-12 dB lower everywhere. Melbourne's MAEO is drawn for the
+ultimate airport layout (future runways), so most of its area has little
+current traffic; under today's corridors the estimate lands near ANEF + 35.
+ANEF is a forecast of future capacity, so current traffic should read at or
+below it.
 
 ## Known limits
 

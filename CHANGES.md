@@ -1,5 +1,19 @@
 # 本对话改动说明
 
+## 2026-11-28 头顶航空活动（adsb.lol ADS-B 架次）接入评分服务
+
+详细口径、接口字段与校准表见 `docs/aircraft-activity.md`。
+
+- 新模块 `property_scores/aircraft_activity/`：读 14 城 12 个月网格（`AIRCRAFT_ACTIVITY_DIR`），
+  按需加载（解包后 mmap，否则 2 城 LRU，每城约 43 MB），覆盖标签强制执行。
+- 新只读接口 `/scores/aircraft-activity/{cities,lookup,grid,helipads}`，无数据时 503 `unavailable`。
+- 噪声：`NOISE_AIRCRAFT_ACTIVITY`（默认 0，输出与缓存签名逐位不变）。`show` 只加
+  `noise.aircraft_activity` 架次块；`estimate` 另在没有官方 ANEF 的地方用固定翼架次估航空声级
+  （SEL 简表 + 侧向均匀分布 + 分时段），官方等值线优先，直升机不换算分贝。
+- `/scores` 默认去掉 `noise.aircraft_activity`，`AIRCRAFT_ACTIVITY_API_EXPORT=1` 才对外（ODbL）。
+- 实测（transfer 生产配置）：11 个测试点开关关着时与 origin/master 逐字节相同；主闸门 199 点里
+  只有 17 个悉尼点变化，全体 bias +0.05 / MAE -0.01 dB，NSW MAE -0.035 dB。
+
 ## 2026-11-09 Walkability：重建车站表补回 Sydney Metro；公园改用 OSM 多边形
 
 ### 问题

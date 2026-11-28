@@ -11,7 +11,8 @@ Only source code lives here: no trace data, no grids, no credentials.
 |---|---|---|
 | adsb.lol `globe_history_<year>` GitHub releases (readsb `trace_full` JSON, one archive per UTC day) | all trajectories | ODbL 1.0: keep attribution "adsb.lol"; derived databases that are made public must stay under ODbL |
 | OurAirports `airports.csv`, `runways.csv` | airport and heliport positions, runway ends, names | public domain |
-| OpenStreetMap via the Overpass API | only to tag clustered landing sites as `hospital` (hospital or hospital helipad within 200 m) | ODbL 1.0, "© OpenStreetMap contributors" |
+| OpenStreetMap via the Overpass API | tag clustered landing sites as `hospital` (hospital or hospital helipad within 200 m); `name_helipads.py`: helipad names and hospital polygons around a few sites | ODbL 1.0, "© OpenStreetMap contributors" |
+| OpenStreetMap via our basemap tiles (`tiles.limontech.net`, OpenMapTiles schema) | `name_helipads.py`: hospital / emergency / hotel POIs, aerodrome labels, mapped helipads near landing sites | ODbL 1.0, "© OpenStreetMap contributors" |
 | SRTM 1" DEM (AWS terrain tiles, `elevation-tiles-prod/skadi`) | ground elevation for height above ground | public domain (NASA/USGS) |
 | Airservices Australia "Movements at Australian Airports" monthly PDFs | validation only (visible-movement ratios); never redistributed | Airservices website terms |
 | VicPlan MAEO overlay (only in the earlier Melbourne comparison) | validation only | Victorian Government data terms |
@@ -59,6 +60,7 @@ Only source code lives here: no trace data, no grids, no credentials.
 | `year_pack.py` | VM | background loop: packages finished work into small tarballs and writes `PROGRESS.md` |
 | `year_relay.sh` | Mac | low-frequency poll: downloads new tarballs into the local Google Drive folder |
 | `year_finalize.py` | Mac | annual `grid_/meta_/helipads_<city>` + quarterly grids for the prototype |
+| `name_helipads.py` | Mac | names unnamed landing sites from OSM (helipad tags, else the hospital / facility it sits at, only with a mapped helipad or a busy site; ambiguous -> no name); writes to a separate folder; rules in its docstring |
 | `colab_launch.sh` | Mac | starts or resumes the VM jobs |
 | `parse_airservices.py` | Mac | Airservices monthly PDFs (after `pdftotext -layout`) → CSV |
 | `extract_multi.py`, `nat_run.py` | VM | the 14-day run (2026-11-13..26), kept for reproducibility |
@@ -144,5 +146,6 @@ the days since the last relayed package are recomputed.
   calendar quarter of the local date.
 - `meta_<city>.json`: dates, day counts, `missing_days`, timezone, source, coverage label and note, per-airport
   visible ratios against Airservices (low = 100 ft, high = 250 ft threshold).
+- `helipads_<city>.json` after `name_helipads.py`: also `name_source`, `name_kind`, `name_dist_m` (and `name_candidates` when ambiguous).
 - `helipads_<city>.json`: name (OurAirports name, else "Unidentified landing site"), kind, source, lat, lon, arrivals,
   departures, night_movements, aircraft_count, hourly[24]. No registrations or owners.

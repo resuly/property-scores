@@ -855,8 +855,17 @@ _AIRCRAFT_EXCLUDED_ESTIMATED_NOTE = (
 
 def noise_score(lat: float, lng: float, radius_m: int = 500,
                 *, source: str | None = None,
-                exclude_aircraft: bool = False) -> dict:
+                exclude_aircraft: bool = False,
+                aircraft_estimate: bool = True) -> dict:
     """Modelled noise at a point.
+
+    `aircraft_estimate=False` switches the overflight feature off for this
+    request only: the result is exactly what NOISE_AIRCRAFT_ACTIVITY=0 gives
+    for the same request (no counts block, no estimate, no aircraft_db from
+    it, the same notes). Independent of exclude_aircraft. For a caller that
+    must not let the estimate appear in an area, without moving the numbers
+    it already serves there (DA Leads in WA, where the Perth contour is
+    withheld: Bo 2026-11-29). The engine does no area test of its own.
 
     `exclude_aircraft=True` computes the level with no OFFICIAL aircraft
     term: no ANEF source is queried and the result carries
@@ -870,9 +879,17 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     2026-11-24). The default path is unchanged, and so is its cache key: the
     flag only adds a suffix when set.
     """
+    # This request's aircraft-activity mode: the process flag, unless the
+    # caller turned the feature off for it.
+    _aa_mode = _AA_MODE if aircraft_estimate else "off"
     _ck = f"{round(lat, 5)}:{round(lng, 5)}:{radius_m}:{source or ''}:{_CONFIG_SIG}"
     if exclude_aircraft:
         _ck += ":noair"
+    # Its own slot whenever it changes anything (the flag is on), so a result
+    # with the estimate can never answer a request without it, or the other
+    # way round. With the flag off the key is the pre-existing one.
+    if _aa_mode != _AA_MODE:
+        _ck += ":noaa"
     _hit = _cache_get(_CACHE_DB, _ck, _RESULT_CACHE_TTL)
     if _hit is not None:
         return {**_hit, "cached": True}
@@ -1136,11 +1153,11 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     #   * the official contours were read and none hit (zone_code None:
     #     no_overlay or not_assessed). A hit always keeps the official term.
     _aa_block = _aa_estimate = _aa_periods = None
-    if _AA_MODE != "off":
+    if _aa_mode != "off":
         from property_scores.aircraft_activity import noise as _aa_noise
         _aa_block, _aa_est = _aa_noise.activity_at(lat, lng)
         _aa_use = (_aa_noise.estimate_for_level(_aa_block, _aa_est)
-                   if _AA_MODE == "estimate" else None)
+                   if _aa_mode == "estimate" else None)
         _official_read = not exclude_aircraft
         if _aa_use and (not _official_read or not aircraft.get("zone_code")):
             # The counts block is NOT marked here on purpose: it must be built

@@ -147,15 +147,19 @@ def _coverage_gap(lat: float, lng: float) -> bool:
 
 
 def _node(lat: float, lng: float, expected: str | None = None,
-          exclude_aircraft: bool = False):
+          exclude_aircraft: bool = False, aircraft_estimate: bool = True):
     """(noise_score result or None, off-path node explained by a coverage gap).
 
     The second item is only ever True for a transfer expectation: physics has
     no raster inputs to be out of coverage of.
     """
     try:
-        got = (noise_score(lat, lng, exclude_aircraft=True) if exclude_aircraft
-               else noise_score(lat, lng))
+        kw = {}
+        if exclude_aircraft:
+            kw["exclude_aircraft"] = True
+        if not aircraft_estimate:
+            kw["aircraft_estimate"] = False
+        got = noise_score(lat, lng, **kw)
     except Exception:
         logger.warning("noise surface node failed at %s,%s", lat, lng, exc_info=True)
         return None, False
@@ -170,7 +174,8 @@ def noise_surface(lat: float, lng: float, radius_m: int = RADIUS_DEFAULT_M,
                   cells: int = CELLS_DEFAULT,
                   deadline_s: float = DEADLINE_S,
                   require_path: str | None = None,
-                  exclude_aircraft: bool = False) -> dict | None:
+                  exclude_aircraft: bool = False,
+                  aircraft_estimate: bool = True) -> dict | None:
     """Grid of modelled Lden around a point.
 
     Row 0 is the northern edge and column 0 the western edge (row-major, the
@@ -192,7 +197,8 @@ def noise_surface(lat: float, lng: float, radius_m: int = RADIUS_DEFAULT_M,
     echoes the flag as `aircraft_excluded`; a caller must check the echo
     rather than assume, because an older build ignores the parameter.
     `aircraft_estimate_nodes` (present only when non-zero) counts nodes whose
-    level includes the overflight estimate.
+    level includes the overflight estimate. `aircraft_estimate=False` turns
+    the overflight feature off for every node (see noise_score).
     """
     if cells not in CELLS_ALLOWED:
         cells = CELLS_DEFAULT
@@ -227,7 +233,7 @@ def noise_surface(lat: float, lng: float, radius_m: int = RADIUS_DEFAULT_M,
     pool = ThreadPoolExecutor(max_workers=CONCURRENCY)
     try:
         futures = {pool.submit(_node, nlat, nlng, expected,
-                               exclude_aircraft): (r, c)
+                               exclude_aircraft, aircraft_estimate): (r, c)
                    for r, c, nlat, nlng in nodes}
         try:
             for fut in as_completed(futures, timeout=deadline_s):

@@ -70,7 +70,8 @@ def _solar_with_footprint(lat: float, lng: float) -> dict:
 
 def _noise_for_batch(lat: float, lng: float, source: str | None = None,
                      detail: bool = False,
-                     exclude_aircraft: bool = False) -> dict:
+                     exclude_aircraft: bool = False,
+                     aircraft_estimate: bool = True) -> dict:
     """Batch noise component, optionally carrying its per-source breakdown.
 
     The detail path skips the Overture road segments: they are ODbL-1.0 and the
@@ -81,6 +82,8 @@ def _noise_for_batch(lat: float, lng: float, source: str | None = None,
     # exclude_aircraft is passed only when set, so the default calls are the
     # pre-existing ones (and every existing stub of them keeps working).
     xa = {"exclude_aircraft": True} if exclude_aircraft else {}
+    if not aircraft_estimate:
+        xa["aircraft_estimate"] = False
     if not detail:
         return noise_score(lat, lng, source=source, **xa)
     debug = noise_debug(lat, lng, 500, include_overture_roads=False, **xa)
@@ -341,13 +344,18 @@ def get_all_scores(
                            "request: noise is computed without them (see "
                            "noise_score, echoed as noise.aircraft_excluded) "
                            "and aircraft_noise answers not_assessed."),
+    aircraft_estimate: bool = Query(
+        True, description="false: no overflight estimate or counts block for "
+                          "this request; noise is exactly what the engine "
+                          "gives with the overflight feature off."),
 ):
     from concurrent.futures import ThreadPoolExecutor
 
     components = {
         "noise": lambda: _noise_for_batch(lat, lng, source=source_roads,
                                           detail=noise_detail,
-                                          exclude_aircraft=exclude_aircraft),
+                                          exclude_aircraft=exclude_aircraft,
+                                          aircraft_estimate=aircraft_estimate),
         "walkability": lambda: walkability_score(lat, lng, source=source_pois),
         "solar": lambda: _solar_with_footprint(lat, lng),
         "flood": lambda: flood_score(lat, lng),
@@ -458,19 +466,28 @@ def get_noise(
         False, description="Compute without the official aircraft-noise "
                            "contours (see noise_score). Echoed as "
                            "aircraft_excluded."),
+    aircraft_estimate: bool = Query(
+        True, description="false: no overflight estimate or counts block for "
+                          "this request (see noise_score)."),
 ):
     ip = request.headers.get("x-real-ip") or request.client.host
     limit = 10 if detail else 30
     if not _check_rate(ip, limit=limit):
         return JSONResponse({"error": "Rate limit exceeded."}, status_code=429)
     try:
-        if exclude_aircraft:
+        if exclude_aircraft or not aircraft_estimate:
             # Never the precomputed grid: it was baked with the official
-            # aircraft term in.
+            # aircraft term in, and in estimate mode it only matches the
+            # process stamp if it was baked WITH the estimate (-aa1), so it
+            # can answer neither an excluded nor a no-estimate request.
+            kw = {}
+            if exclude_aircraft:
+                kw["exclude_aircraft"] = True
+            if not aircraft_estimate:
+                kw["aircraft_estimate"] = False
             if detail:
-                return noise_debug(lat, lng, radius, exclude_aircraft=True)
-            return noise_score(lat, lng, radius, source=source,
-                               exclude_aircraft=True)
+                return noise_debug(lat, lng, radius, **kw)
+            return noise_score(lat, lng, radius, source=source, **kw)
         if detail:
             return noise_debug(lat, lng, radius)
         if not nocache and not source:
@@ -616,6 +633,9 @@ def get_noise_surface(
         False, description="Compute every node without the aircraft term "
                            "(road and rail only). Echoed as "
                            "aircraft_excluded in the response."),
+    aircraft_estimate: bool = Query(
+        True, description="false: no node carries the overflight estimate "
+                          "(see noise_score)."),
 ):
     """Modelled Lden on a grid around a point, for the licensed property API's
     per-property noise surface.
@@ -639,7 +659,9 @@ def get_noise_surface(
     try:
         grid = noise_surface(lat, lng, radius_m=radius, cells=cells,
                              require_path=require_path,
-                             exclude_aircraft=exclude_aircraft)
+                             exclude_aircraft=exclude_aircraft,
+                             **({"aircraft_estimate": False}
+                                if not aircraft_estimate else {}))
         if not grid:
             return JSONResponse({"error": "no noise coverage"}, status_code=404)
         return grid

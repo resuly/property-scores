@@ -356,3 +356,136 @@ def test_batch_with_exclude_reads_no_contour_in_any_component(monkeypatch):
     r = client.get("/scores", params={"lat": -31.938, "lng": 115.944})
     assert hits and r.json()["aircraft_noise"]["source"] == "wa_slip"
     assert noise_kw[-1].get("exclude_aircraft") is False
+
+
+# ---- aircraft_estimate=false: no overflight feature for this request --------
+# (DA Leads in WA: Perth contour withheld, numbers must not move; 2026-11-29)
+
+@pytest.mark.parametrize("kw", [{}, {"exclude_aircraft": True}],
+                         ids=["default", "exclude_aircraft"])
+@pytest.mark.parametrize("mode", ["estimate", "show"])
+def test_no_estimate_request_equals_the_flag_off(monkeypatch, ns, kw, mode):
+    _vic(monkeypatch, None)
+    monkeypatch.setattr(ns, "_AA_MODE", "off")
+    off = ns.noise_score(*KEILOR, 500, **kw)
+    monkeypatch.setattr(ns, "_AA_MODE", mode)
+    on = ns.noise_score(*KEILOR, 500, **kw)
+    # sanity: at this point the flag really changes the result
+    assert "aircraft_activity" in on
+    if mode == "estimate":
+        assert "aircraft_estimate" in on and on["aircraft_db"] > 0
+    got = ns.noise_score(*KEILOR, 500, aircraft_estimate=False, **kw)
+    assert got == off
+
+
+def test_no_estimate_request_never_reads_the_overflight_data(monkeypatch, ns):
+    from property_scores.aircraft_activity import noise as aan
+
+    def boom(*a, **k):
+        raise AssertionError("aircraft_estimate=False must not read the data")
+    monkeypatch.setattr(aan, "activity_at", boom)
+    monkeypatch.setattr(ns, "_AA_MODE", "estimate")
+    _vic(monkeypatch, None)
+    ns.noise_score(*KEILOR, 500, aircraft_estimate=False)
+    ns.noise_score(*KEILOR, 500, aircraft_estimate=False, exclude_aircraft=True)
+
+
+def test_cache_keys_separate_the_no_estimate_request(monkeypatch, ns):
+    keys = []
+    monkeypatch.setattr(ns, "_cache_get", lambda db, key, ttl: keys.append(key) or None)
+    _vic(monkeypatch, None)
+    monkeypatch.setattr(ns, "_AA_MODE", "estimate")
+    for kw in ({}, {"aircraft_estimate": False}, {"exclude_aircraft": True},
+               {"exclude_aircraft": True, "aircraft_estimate": False}):
+        ns.noise_score(*KEILOR, 500, **kw)
+    assert len(set(keys)) == 4, keys
+    assert keys[1] == keys[0] + ":noaa" and keys[3] == keys[2] + ":noaa"
+    # flag off: the parameter changes nothing, so the key is the old one
+    keys.clear()
+    monkeypatch.setattr(ns, "_AA_MODE", "off")
+    ns.noise_score(*KEILOR, 500)
+    ns.noise_score(*KEILOR, 500, aircraft_estimate=False)
+    assert keys[0] == keys[1] and not keys[0].endswith(":noaa")
+
+
+def test_result_cache_never_crosses_the_two_requests(monkeypatch, ns):
+    store = {}
+    monkeypatch.setattr(ns, "_cache_get", lambda db, key, ttl: store.get(key))
+    monkeypatch.setattr(ns, "_cache_put", lambda db, key, val: store.__setitem__(key, val))
+    _vic(monkeypatch, None)
+    monkeypatch.setattr(ns, "_AA_MODE", "estimate")
+    a = ns.noise_score(*KEILOR, 500)                          # with estimate, cached
+    b = ns.noise_score(*KEILOR, 500, aircraft_estimate=False)
+    assert "aircraft_estimate" in a and "aircraft_estimate" not in b
+    assert "aircraft_activity" not in b and "aircraft_db" not in b
+    a2 = ns.noise_score(*KEILOR, 500)
+    b2 = ns.noise_score(*KEILOR, 500, aircraft_estimate=False)
+    assert a2.get("cached") and b2.get("cached")
+    assert "aircraft_estimate" in a2 and "aircraft_estimate" not in b2
+
+
+def test_endpoints_forward_aircraft_estimate_and_skip_the_grid(monkeypatch):
+    from fastapi.testclient import TestClient
+    from property_scores.api import main
+    seen = []
+
+    def fake_score(lat, lng, radius_m=500, **kw):
+        seen.append(kw)
+        return {"score": 50}
+
+    def no_grid(*a, **k):
+        raise AssertionError("aircraft_estimate=false must not read the grid")
+    monkeypatch.setattr(main, "noise_score", fake_score)
+    monkeypatch.setattr(main, "noise_cache_lookup", no_grid)
+    monkeypatch.setattr(main, "_check_rate", lambda *a, **k: True)
+    client = TestClient(main.app)
+    r = client.get("/scores/noise", params={"lat": KEILOR[0], "lng": KEILOR[1],
+                                            "aircraft_estimate": "false"})
+    assert r.status_code == 200
+    assert seen[-1] == {"source": None, "aircraft_estimate": False}
+    r = client.get("/scores/noise", params={"lat": KEILOR[0], "lng": KEILOR[1],
+                                            "aircraft_estimate": "false",
+                                            "exclude_aircraft": "true"})
+    assert seen[-1] == {"source": None, "aircraft_estimate": False,
+                        "exclude_aircraft": True}
+    main._noise_for_batch(*KEILOR, aircraft_estimate=False)
+    assert seen[-1].get("aircraft_estimate") is False
+    main._noise_for_batch(*KEILOR)
+    assert "aircraft_estimate" not in seen[-1]
+
+
+def test_batch_endpoint_forwards_aircraft_estimate(monkeypatch):
+    from fastapi.testclient import TestClient
+    from property_scores.api import main
+    noise_kw = []
+    monkeypatch.setattr(main, "_noise_for_batch",
+                        lambda lat, lng, **kw: noise_kw.append(kw) or {"score": 50})
+    monkeypatch.setattr(main, "aircraft_noise_penalty", lambda lat, lng: {"assessment": "no_overlay"})
+    for name in ("walkability_score", "_solar_with_footprint", "flood_score",
+                 "bushfire_score", "heat_island_score", "view_quality_score",
+                 "contamination_score"):
+        monkeypatch.setattr(main, name, lambda *a, **k: {"score": 1})
+    client = TestClient(main.app)
+    client.get("/scores", params={"lat": -31.938, "lng": 115.944,
+                                  "aircraft_estimate": "false"})
+    assert noise_kw[-1]["aircraft_estimate"] is False
+    client.get("/scores", params={"lat": -31.938, "lng": 115.944})
+    assert noise_kw[-1]["aircraft_estimate"] is True
+
+
+def test_surface_forwards_aircraft_estimate(monkeypatch):
+    from property_scores.noise import surface as nsurf
+    seen = []
+
+    def fake(lat, lng, **kw):
+        seen.append(kw)
+        return {"lden_db": 55.0, "score": 50, "lden_source": "transfer"}
+    monkeypatch.setattr(nsurf, "noise_score", fake)
+    monkeypatch.setattr(nsurf, "_coverage_gap", lambda lat, lng: False)
+    nsurf.noise_surface(*KEILOR, radius_m=1500, cells=5, require_path="transfer",
+                        exclude_aircraft=True, aircraft_estimate=False)
+    assert len(seen) == 25 and all(k == {"exclude_aircraft": True,
+                                         "aircraft_estimate": False} for k in seen)
+    seen.clear()
+    nsurf.noise_surface(*KEILOR, radius_m=1500, cells=5, require_path="transfer")
+    assert all(k == {} for k in seen)

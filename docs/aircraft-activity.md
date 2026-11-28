@@ -126,6 +126,14 @@ Rules, in order:
    estimate. No hit (`no_overlay`, or `not_assessed` in the Sydney box and
    SA/TAS/ACT/NT) takes the estimate from step 1.
 
+Before all of these: a request with `aircraft_estimate=false` skips the
+feature entirely (next section). Result-cache keys carry `:noaa` for such a
+request whenever the process flag is on, so a result with the estimate never
+answers one without it, or the other way round; with the flag off the key is
+the old one. `/scores/noise` never reads the precomputed grid for it: in
+estimate mode a grid only matches the process stamp if it was baked with the
+estimate (`-aa1`).
+
 `exclude_aircraft` is accepted by `/scores` (where `aircraft_noise` then
 answers `not_assessed` without reading any contour: a real hit there beside a
 contour-blind noise result would let a consumer that strips
@@ -136,52 +144,51 @@ official term) and
 when non-zero). Without the noise flag on, it behaves exactly as before: road
 and rail only.
 
-## Withheld contours: who decides, and why the estimate cannot trace them
+## Withheld contours: who decides, and what the caller passes
 
 DA Leads decides which official contours it may pass on, per surface
 (`web/aircraft_noise_rights.py`, read 2026-11-29): Sydney Kingsford Smith
 (`syd_masterplan_2033`) and Perth Airport (`wa_slip`) are withheld on every
 surface, Brisbane City Council (`qld_bcc`, Brisbane + Archerfield) on the paid
-API only. This engine has no city list for that and must not grow one: the
-licence decision lives with the caller, and the engine only obeys
-`exclude_aircraft`. (The engine itself has held no Kingsford Smith contour
-since 2026-10-22, so the Sydney box is `not_assessed` for every caller.)
+API only. This engine does no area test for that and must not grow a city
+list: the licence decision lives with the caller, and the engine only obeys
+two request parameters. (The engine itself has held no Kingsford Smith
+contour since 2026-10-22, so the Sydney box is `not_assessed` for every
+caller.)
 
-Without the flag, the estimate appears outside a contour and not inside it,
-and its note says "outside the official contours". Where DA Leads withholds
-the contour that pattern traces the edge, even with every contour field
-removed. With the flag, whether the estimate appears and how big it is are a
-function of the overflight data and the coordinate only: identical on both
-sides of any contour (tested by
-`test_excluded_request_is_the_same_inside_and_outside_a_contour`). The
-estimate is of course louder under real flight paths, which is also where
-contours are drawn; that is our own measurement of the traffic, not their
-dataset.
+Without either parameter the estimate appears outside a contour and not
+inside it, and its note says "outside the official contours". Where the
+contour is withheld that pattern traces the edge, even with every contour
+field removed. Two ways out, both per request:
 
-So the contract for turning `estimate` on is: DA Leads passes
-`exclude_aircraft=true` on every request where it withholds a contour, on
-that surface (website: Sydney box and WA; paid API: those plus the Brisbane
-box; the grid already does this in its two boxes). Requests that do not
-pass it keep the official-first rule, which is only ever right where the
-caller may show the contour anyway. With the 12-month release the hard part
-of that is WA: Perth is coverage `ok`, so without the flag the estimate
-traces the Perth contour on both surfaces. The Sydney box is uniform without
-the flag (the engine holds no Kingsford Smith contour, so no hit can switch
-the estimate off there), and Brisbane is `large_aircraft_only`, so no
-estimate applies there at all; the flag in those two only guards against a
-later data release or source change. Passing it also removes the official
-term from the level (see below), which moves Perth and, if passed there,
-Brisbane paid-API numbers near the airports.
+- `aircraft_estimate=false` (the one in use): the overflight feature is off
+  for that request. The result is exactly what `NOISE_AIRCRAFT_ACTIVITY=0`
+  gives for the same request: no counts block, no estimate, no `aircraft_db`
+  from it, the same notes, and the official term stays in the level as
+  today. So the estimate never appears anywhere in the area and nothing moves
+  for customers already served there. Accepted by `/scores`, `/scores/noise`
+  and `/scores/noise/surface`; independent of `exclude_aircraft` (both: no
+  official term and no estimate).
+- `exclude_aircraft=true` (kept as a capability; no caller uses it on point
+  queries today): no official contour is read, and the estimate decides from
+  overflight data alone, identically on both sides of any contour (tested by
+  `test_excluded_request_is_the_same_inside_and_outside_a_contour`). This
+  replaces the official term with ours, so it moves numbers. The paid API
+  noise grid already passes it in the Brisbane and Perth boxes; there it must
+  be combined with `aircraft_estimate=false` in WA, or the Perth grid would
+  start carrying the estimate.
 
-Two surfaces for one address do not leak by being compared. In WA and the
-Sydney box both surfaces pass the flag and get the same answer. In the
-Brisbane box the website does not pass it and shows the Brisbane contours
-openly, while the paid API passes it; the difference between the two can
-reveal only a contour that is already public on the website, and the paid
-payload itself carries nothing contour-shaped, which is what the licence is
-about. A caller that passes the flag also gets a level with no official
-term at all, which removes the existing trace through the total level
-(DA Leads strips contour fields but, by its own note, not the modelled dB).
+The caller's rule (Bo, 2026-11-29): wherever an official contour is withheld
+and the numbers must not change, currently WA, every noise request passes
+`aircraft_estimate=false`. Sydney needs nothing: the box is uniform without
+any parameter (no hit can switch the estimate off there), and the measured
+gate ran it there. Brisbane needs nothing today: it is `large_aircraft_only`,
+so no estimate applies; if a later release labels it `ok`, the Brisbane box
+on the paid API joins WA.
+
+Two surfaces for one address do not leak by being compared: in WA both pass
+the parameter and both look as they do today; in Brisbane the website shows
+the contours openly anyway, and no estimate applies on either surface.
 
 ## Export
 

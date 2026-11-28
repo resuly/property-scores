@@ -41,7 +41,7 @@ with coverage enforced and attribution added.
   Each city: `city, key, date_start, date_end, n_days, n_weekdays, n_weekend_days, missing_days_count,
   radius_m, ceiling_ft_agl, timezone, source, fixture, coverage, coverage_note, bounds [w,s,e,n], centre,
   cell_size_deg, shape, airports, metrics, scales, has_hourly, helipads, message?`.
-  `insufficient`: `metrics` and `helipads` empty, `airports` empty. `large_aircraft_only`: `metrics` = `["jet_per_day"]`, no helipads, no hourly.
+  `insufficient`: `metrics` and `helipads` empty; `airports` still listed (the low observed share is the evidence for the label). `large_aircraft_only`: `metrics` = `["jet_per_day"]`, no helipads, no hourly.
   (The prototype's `data_dir` is not returned: it is a server path.)
   `?helipads=false` returns `helipads: null` plus `helipad_count` (the 12-month release has 3,081 sites; fetch them per city below).
   `airports[]`: `icao, name, lat, lon, official_month` (Airservices months compared),

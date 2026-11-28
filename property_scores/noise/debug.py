@@ -91,7 +91,8 @@ def _rail_shapes_near(db, lat: float, lng: float, radius_m: int = 1000) -> list[
 
 
 def noise_debug(lat: float, lng: float, radius_m: int = 500,
-                include_overture_roads: bool = True) -> dict:
+                include_overture_roads: bool = True,
+                exclude_aircraft: bool = False) -> dict:
     """Full noise score plus source coordinates for map visualization.
 
     ``include_overture_roads`` covers the modelled background segments used by
@@ -99,7 +100,9 @@ def noise_debug(lat: float, lng: float, radius_m: int = 500,
     where ODbL segments cannot ship) should pass False: screening those ~30
     segments is the most expensive part of this function.
     """
-    result = noise_score(lat, lng, radius_m)
+    # exclude_aircraft only when set, so the default call is the old one.
+    result = (noise_score(lat, lng, radius_m, exclude_aircraft=True)
+              if exclude_aircraft else noise_score(lat, lng, radius_m))
     db = get_db()
 
     # Pre-fetch buildings once for screening calculations on each source

@@ -69,7 +69,8 @@ def _solar_with_footprint(lat: float, lng: float) -> dict:
 
 
 def _noise_for_batch(lat: float, lng: float, source: str | None = None,
-                     detail: bool = False) -> dict:
+                     detail: bool = False,
+                     exclude_aircraft: bool = False) -> dict:
     """Batch noise component, optionally carrying its per-source breakdown.
 
     The detail path skips the Overture road segments: they are ODbL-1.0 and the
@@ -77,9 +78,12 @@ def _noise_for_batch(lat: float, lng: float, source: str | None = None,
     so computing barrier screening for ~30 segments per address would be pure
     waste.
     """
+    # exclude_aircraft is passed only when set, so the default calls are the
+    # pre-existing ones (and every existing stub of them keeps working).
+    xa = {"exclude_aircraft": True} if exclude_aircraft else {}
     if not detail:
-        return noise_score(lat, lng, source=source)
-    debug = noise_debug(lat, lng, 500, include_overture_roads=False)
+        return noise_score(lat, lng, source=source, **xa)
+    debug = noise_debug(lat, lng, 500, include_overture_roads=False, **xa)
     result = dict(debug.get("score") or {})
     if debug.get("sources"):
         result["sources"] = debug["sources"]
@@ -332,12 +336,18 @@ def get_all_scores(
     source_roads: str | None = Query(None, description="Local roads parquet"),
     source_pois: str | None = Query(None, description="Local POI parquet"),
     noise_detail: bool = Query(False, description="Include road/rail source details"),
+    exclude_aircraft: bool = Query(
+        False, description="Read no official aircraft-noise contour for this "
+                           "request: noise is computed without them (see "
+                           "noise_score, echoed as noise.aircraft_excluded) "
+                           "and aircraft_noise answers not_assessed."),
 ):
     from concurrent.futures import ThreadPoolExecutor
 
     components = {
         "noise": lambda: _noise_for_batch(lat, lng, source=source_roads,
-                                          detail=noise_detail),
+                                          detail=noise_detail,
+                                          exclude_aircraft=exclude_aircraft),
         "walkability": lambda: walkability_score(lat, lng, source=source_pois),
         "solar": lambda: _solar_with_footprint(lat, lng),
         "flood": lambda: flood_score(lat, lng),
@@ -345,7 +355,13 @@ def get_all_scores(
         "heat_island": lambda: heat_island_score(lat, lng),
         "view_quality": lambda: view_quality_score(lat, lng),
         "contamination": lambda: contamination_score(lat, lng),
-        "aircraft_noise": lambda: aircraft_noise_penalty(lat, lng),
+        # Under exclude_aircraft no component may carry the contour either:
+        # a real aircraft_noise hit next to a contour-blind noise result
+        # would put the edge back (DA Leads strips noise.aircraft_db wherever
+        # this component reports a withheld hit).
+        "aircraft_noise": ((lambda: dict(_EXCLUDED_AIRCRAFT_NOISE))
+                           if exclude_aircraft
+                           else (lambda: aircraft_noise_penalty(lat, lng))),
     }
     # Stamped with what produced THIS payload, so a caching consumer records
     # provenance from the response itself rather than from a separate poll it
@@ -379,23 +395,56 @@ def get_all_scores(
     return out
 
 
+# /scores?exclude_aircraft=true: the aircraft_noise component without reading
+# any contour. Same keys and types as aircraft_noise_penalty's own not_assessed
+# answers (SA/TAS, the Sydney box), so a consumer's contract checks read it
+# unchanged.
+_EXCLUDED_AIRCRAFT_NOISE = {
+    "penalty_db": 0.0,
+    "assessment": "not_assessed",
+    "zone_code": None,
+    "zone_desc": "Official aircraft-noise contours not used for this request",
+    "anef_min": None,
+    "anef_max": None,
+    "lga": None,
+    "impact": ("Official aircraft-noise contours were not used for this "
+               "request; treat as not assessed, not as zero."),
+    "source": "national",
+    "airport_type": None,
+}
+
+# The two overflight blocks a noise result can carry. One export rule for both.
+_AIRCRAFT_ACTIVITY_BLOCKS = ("aircraft_activity", "aircraft_estimate")
+
+
 def _gate_aircraft_activity_export(out: dict) -> None:
-    """Keep the per-address overflight counts out of /scores unless enabled.
+    """Keep the per-address overflight blocks out of /scores unless enabled.
 
     /scores is the batch the licensed Property API is built from. The counts
-    block is an extract of an ODbL derived database: delivering it per address
-    through the API publishes that database, which ODbL then requires to be
-    offered under ODbL too. Whether to do that is Bo's call, so the block is
-    withheld here unless AIRCRAFT_ACTIVITY_API_EXPORT=1, independent of the
-    noise flag that creates it (the map panel reads /scores/noise, which this
-    does not touch). Read per request so flipping the env needs no code path
-    change, only a restart.
+    block (aircraft_activity) is an extract of an ODbL derived database:
+    delivering it per address through the API publishes that database, which
+    ODbL then requires to be offered under ODbL too. Whether to do that is
+    Bo's call, so it is withheld here unless AIRCRAFT_ACTIVITY_API_EXPORT=1,
+    independent of the noise flag that creates it (the map panel reads
+    /scores/noise, which this does not touch). Read per request so flipping
+    the env needs no code path change, only a restart.
+
+    aircraft_estimate follows the same rule. Its numbers are our own
+    computed output (the company terms, section 7: scores, distances and dB
+    we compute carry no ODbL condition), and those numbers still reach the
+    API as aircraft_db, lden_db and score. What the block adds is the
+    per-period breakdown with the ODbL source, licence and attribution
+    labels: shipping that while the counts block is held would put an
+    "ODbL-1.0" record in the feed the hold exists to keep it out of, and two
+    rules for the two halves of one feature is what the 2026-11-28 review
+    flagged. One switch decides both.
     """
     if os.environ.get("AIRCRAFT_ACTIVITY_API_EXPORT", "0") == "1":
         return
     noise = out.get("noise")
-    if isinstance(noise, dict) and "aircraft_activity" in noise:
-        out["noise"] = {k: v for k, v in noise.items() if k != "aircraft_activity"}
+    if isinstance(noise, dict) and any(k in noise for k in _AIRCRAFT_ACTIVITY_BLOCKS):
+        out["noise"] = {k: v for k, v in noise.items()
+                        if k not in _AIRCRAFT_ACTIVITY_BLOCKS}
 
 
 @app.get("/scores/noise")
@@ -405,12 +454,23 @@ def get_noise(
     radius: int = Query(500), source: str | None = Query(None),
     nocache: bool = Query(False),
     detail: bool = Query(False),
+    exclude_aircraft: bool = Query(
+        False, description="Compute without the official aircraft-noise "
+                           "contours (see noise_score). Echoed as "
+                           "aircraft_excluded."),
 ):
     ip = request.headers.get("x-real-ip") or request.client.host
     limit = 10 if detail else 30
     if not _check_rate(ip, limit=limit):
         return JSONResponse({"error": "Rate limit exceeded."}, status_code=429)
     try:
+        if exclude_aircraft:
+            # Never the precomputed grid: it was baked with the official
+            # aircraft term in.
+            if detail:
+                return noise_debug(lat, lng, radius, exclude_aircraft=True)
+            return noise_score(lat, lng, radius, source=source,
+                               exclude_aircraft=True)
         if detail:
             return noise_debug(lat, lng, radius)
         if not nocache and not source:

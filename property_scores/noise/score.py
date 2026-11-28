@@ -90,8 +90,17 @@ _TRANSFER_ENABLED = os.environ.get("NOISE_TRANSFER", "0") == "1"
 # behaves byte-for-byte as before: no block, no estimate, no change to either
 # cache signature (tests/test_aircraft_activity_noise.py asserts all three).
 #   show      adds the `aircraft_activity` counts block; no dB or score moves.
-#   estimate  (or 1) also fills the aircraft term from fixed-wing counts where
-#             NO official ANEF contour applies; official contours always win.
+#   estimate  (or 1) also fills the aircraft term from fixed-wing counts
+#             (coverage ok, Lden >= 45 dB) where NO official ANEF contour
+#             applies; official contours win wherever the caller may use
+#             them. With exclude_aircraft (the caller may not use them) the
+#             official sources are not read at all and the estimate decides
+#             from overflight data alone, identically inside and outside any
+#             contour. Which contours are withheld, and on which surface, is
+#             DA Leads' call (web/aircraft_noise_rights.py): Sydney Kingsford
+#             Smith and Perth Airport everywhere, Brisbane City Council
+#             (Brisbane + Archerfield) on the paid API only. This engine holds
+#             no city list for that; it only obeys the parameter.
 _AA_MODE = {"1": "estimate", "estimate": "estimate", "show": "show"}.get(
     os.environ.get("NOISE_AIRCRAFT_ACTIVITY", "0").strip().lower(), "off")
 
@@ -280,7 +289,12 @@ _CONFIG_SIG = ":".join((
 # Appended only when the aircraft-activity flag is on, so the default signature
 # (and through api/stamp.py the DA Leads per-parcel cache key) is unchanged.
 # Carries the mode, the estimate method and the data release, so a new 12-month
-# drop or a method change cannot be answered from a cached result.
+# drop or a method change cannot be answered from a cached result. Turning
+# `estimate` on therefore changes the api/stamp.py model stamp and DA Leads
+# recomputes every cached parcel score once; that is intended, since estimate
+# moves numbers. `show` moves none but is in here too, because it changes the
+# cached dict's shape (the block) and an off-result must never be served to a
+# show process or the other way round.
 if _AA_MODE != "off":
     from property_scores.aircraft_activity import noise as _aa_noise
     _CONFIG_SIG += (f":aa-{_AA_MODE}-{_aa_noise.METHOD}"
@@ -830,19 +844,31 @@ _AIRCRAFT_EXCLUDED_NOTE = (
     "Aircraft noise is not included in this level: it was computed from road "
     "and rail sources only.")
 
+# exclude_aircraft with the overflight estimate applied. Deliberately says
+# nothing about whether an official contour covers the point: this request
+# never read one, and the sentence must read the same on both sides of an edge.
+_AIRCRAFT_EXCLUDED_ESTIMATED_NOTE = (
+    "Official aircraft-noise contours are not used for this level; its "
+    "aircraft part is estimated from observed overflights (adsb.lol ADS-B, "
+    "ODbL) and is more likely to understate than overstate.")
+
 
 def noise_score(lat: float, lng: float, radius_m: int = 500,
                 *, source: str | None = None,
                 exclude_aircraft: bool = False) -> dict:
     """Modelled noise at a point.
 
-    `exclude_aircraft=True` computes the level with no aircraft term at all:
-    no ANEF source is queried and the result carries
-    aircraft_assessment "not_assessed" plus aircraft_excluded True. Used by
-    the noise surface where a caller may not redistribute anything shaped by
-    an airport's contours (DA Leads Property API, Brisbane and Perth airport
-    boxes, Bo 2026-11-24). The default path is unchanged, and so is its cache
-    key: the flag only adds a suffix when set.
+    `exclude_aircraft=True` computes the level with no OFFICIAL aircraft
+    term: no ANEF source is queried and the result carries
+    aircraft_assessment "not_assessed" plus aircraft_excluded True. With the
+    flag off (NOISE_AIRCRAFT_ACTIVITY unset) that means no aircraft term at
+    all. In estimate mode the overflight estimate may still fill it, decided
+    from overflight data only, so nothing in the result depends on whether
+    the point lies inside a contour the caller may not use. Used by DA Leads
+    where it may not redistribute anything shaped by an airport's contours
+    (the paid API noise surface in the Brisbane and Perth airport boxes, Bo
+    2026-11-24). The default path is unchanged, and so is its cache key: the
+    flag only adds a suffix when set.
     """
     _ck = f"{round(lat, 5)}:{round(lng, 5)}:{radius_m}:{source or ''}:{_CONFIG_SIG}"
     if exclude_aircraft:
@@ -1100,21 +1126,28 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
         aircraft_db = AMBIENT_DB + aircraft["penalty_db"]
 
     # Observed overflights (flag-gated, see _AA_MODE). The counts block never
-    # moves a number. The estimate fills the aircraft term only where no
-    # official contour hit (zone_code None: no_overlay or not_assessed), never
-    # with exclude_aircraft, and only above APPLY_FLOOR_DB.
+    # moves a number. Whether the estimate may enter a level at all is
+    # estimate_for_level (coverage ok, Lden >= APPLY_FLOOR_DB: overflight data
+    # only). Where it may, it fills the aircraft term when either
+    #   * the caller excluded the official contours (exclude_aircraft): then
+    #     no official source was read, and the estimate applies identically
+    #     inside and outside every contour, so a withheld contour cannot be
+    #     traced from whether it appears or from its size; or
+    #   * the official contours were read and none hit (zone_code None:
+    #     no_overlay or not_assessed). A hit always keeps the official term.
     _aa_block = _aa_estimate = _aa_periods = None
     if _AA_MODE != "off":
         from property_scores.aircraft_activity import noise as _aa_noise
         _aa_block, _aa_est = _aa_noise.activity_at(lat, lng)
-        if (_AA_MODE == "estimate" and _aa_est and not exclude_aircraft
-                and not aircraft.get("zone_code")
-                and _aa_est["lden_db"] >= _aa_noise.APPLY_FLOOR_DB):
+        _aa_use = (_aa_noise.estimate_for_level(_aa_block, _aa_est)
+                   if _AA_MODE == "estimate" else None)
+        _official_read = not exclude_aircraft
+        if _aa_use and (not _official_read or not aircraft.get("zone_code")):
             # The counts block is NOT marked here on purpose: it must be built
             # from the overflight data alone, so nothing in it changes at an
-            # official contour edge (Perth and Brisbane contours are withheld
-            # from customers, and a field that flips at the edge would trace
-            # them). Whether the level used the estimate is aircraft_estimate.
+            # official contour edge (a field that flips at the edge would
+            # trace a contour DA Leads withholds). Whether the level used the
+            # estimate is aircraft_estimate.
             aircraft_db = _aa_est["leq_24h_db"]
             _aa_periods = (_aa_est["leq_day_db"], _aa_est["leq_evening_db"],
                            _aa_est["leq_night_db"])
@@ -1127,7 +1160,11 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
                 "classes": _aa_est["classes"],
                 "method": _aa_est["method"],
                 "basis": ("observed fixed-wing overflights; used because no "
-                          "official aircraft-noise contour applies here"),
+                          "official aircraft-noise contour applies here"
+                          if _official_read else
+                          "observed fixed-wing overflights; official "
+                          "aircraft-noise contours are not used for this "
+                          "request"),
                 "source": _aa_block["source"],
                 "licence": _aa_block["licence"],
                 "licence_url": _aa_block["licence_url"],
@@ -1544,9 +1581,12 @@ def noise_score(lat: float, lng: float, radius_m: int = 500,
     # flushed from the result cache by the "air2" token in _CONFIG_SIG.
     if aircraft.get("assessment") == "not_assessed":
         result["aircraft_assessment"] = "not_assessed"
-        _air_note = (_AIRCRAFT_EXCLUDED_NOTE if exclude_aircraft
-                     else _AIRCRAFT_ESTIMATED_NOTE if _aa_estimate
-                     else _AIRCRAFT_NOT_ASSESSED_NOTE)
+        if exclude_aircraft:
+            _air_note = (_AIRCRAFT_EXCLUDED_ESTIMATED_NOTE if _aa_estimate
+                         else _AIRCRAFT_EXCLUDED_NOTE)
+        else:
+            _air_note = (_AIRCRAFT_ESTIMATED_NOTE if _aa_estimate
+                         else _AIRCRAFT_NOT_ASSESSED_NOTE)
         if exclude_aircraft:
             result["aircraft_excluded"] = True
         result["confidence_note"] = (f"{confidence_note} {_air_note}"

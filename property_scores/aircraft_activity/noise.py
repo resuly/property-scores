@@ -9,8 +9,12 @@ Two separate things, kept separate on purpose:
 
 2. ``estimate_lden(cell)`` -- an aircraft Lden from the FIXED-WING counts
    (jets and light aircraft; helicopters are counted but never converted to
-   dB). Used by noise_score only where no official ANEF contour applies, and
-   only with NOISE_AIRCRAFT_ACTIVITY=estimate.
+   dB). Only with NOISE_AIRCRAFT_ACTIVITY=estimate, and only when
+   ``estimate_for_level`` passes it (coverage ok, Lden >= APPLY_FLOOR_DB),
+   noise_score mixes it into the level: where no official ANEF contour
+   applies, or for every point of a request that excludes the official
+   contours (exclude_aircraft). That second case is what keeps a withheld
+   contour from being traced: the decision then reads overflight data only.
 
 Estimate method (one paragraph, because it has to be explainable):
 
@@ -68,6 +72,12 @@ PERIOD_S = (12 * 3600.0, 4 * 3600.0, 8 * 3600.0)
 # a typical suburban level by well under half a dB, and the counts behind it are
 # a handful of passes a day whose height and spread the estimate cannot resolve.
 APPLY_FLOOR_DB = 45.0
+# Coverage labels whose estimate may enter a level. Only ok: in a
+# large_aircraft_only city (Brisbane, Newcastle, Launceston) light aircraft and
+# helicopters are not reliably received, so a jets-only figure would read as an
+# assessed, low aircraft level beside a training field it cannot see
+# (Archerfield). estimate_lden still computes jets-only there for calibration.
+APPLY_COVERAGE = frozenset({aas.COVERAGE_OK})
 # Lden minus the Leq of a level held flat through day, evening and night:
 # Lden = L + 10*log10((12 + 4*10^0.5 + 8*10)/24) = L + 6.39. That is how the
 # engine's ANEF term behaves (one Leq in all periods); the calibration script
@@ -143,6 +153,23 @@ def estimate_lden(cell: dict, coverage: str) -> dict | None:
         "height_ft_used": round(h_ft),
         "method": METHOD,
     }
+
+
+def estimate_for_level(block: dict | None, est: dict | None) -> dict | None:
+    """The estimate if it may enter a noise level, else None.
+
+    Reads the overflight data only (the counts block's coverage label and the
+    estimate's own Lden), never an official contour: whether an official term
+    exists is the caller's separate question, so this answer is the same on
+    both sides of a contour edge.
+    """
+    if not est or not isinstance(block, dict):
+        return None
+    if block.get("coverage") not in APPLY_COVERAGE:
+        return None
+    if not est["lden_db"] >= APPLY_FLOOR_DB:
+        return None
+    return est
 
 
 def _r(x, nd=2):

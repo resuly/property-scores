@@ -76,6 +76,9 @@ def main():
     ap.add_argument("--corpus", default=CORPUS)
     ap.add_argument("--drop-snapshot", action="store_true",
                     help="exclude QLD attended short readings")
+    ap.add_argument("--points-out", default=None,
+                    help="also write one JSON line per scored point (for A/B "
+                         "runs of the same corpus under two configurations)")
     a = ap.parse_args()
 
     from property_scores.noise.score import noise_score
@@ -92,6 +95,7 @@ def main():
     by_state = defaultdict(list)
     by_metric = defaultdict(list)
     missing = 0
+    points = open(a.points_out, "w") if a.points_out else None
     for row in rows:
         key = f"{row['state']}|{row['address']}"
         hit = cache.get(key)
@@ -109,6 +113,24 @@ def main():
         d = mod - ml
         by_state[row["state"]].append(d)
         by_metric[row.get("metric", "LAeq")].append(d)
+        if points:
+            est = r.get("aircraft_estimate") or {}
+            points.write(json.dumps({
+                "key": key, "state": row["state"],
+                "metric": row.get("metric", "LAeq"),
+                "lat": lat, "lng": lng,
+                "measured_lden": round(ml, 2), "model_lden": mod,
+                "diff": round(d, 2),
+                "lden_source": r.get("lden_source"),
+                "aircraft_db": r.get("aircraft_db"),
+                "aircraft_zone": (r.get("aircraft") or {}).get("zone_code"),
+                "aircraft_assessment": r.get("aircraft_assessment"),
+                "estimate_lden": est.get("lden_db"),
+                "activity_status": (r.get("aircraft_activity") or {}).get("status"),
+                "dominant_source": r.get("dominant_source"),
+            }) + "\n")
+    if points:
+        points.close()
 
     scored = sum(len(v) for v in by_state.values())
     cov = scored / max(len(rows), 1)

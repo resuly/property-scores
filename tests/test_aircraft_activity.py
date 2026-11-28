@@ -289,18 +289,34 @@ def test_routes_unavailable_without_dir(monkeypatch):
         assert r.status_code == 503 and r.json()["status"] == "unavailable", path
 
 
-def test_batch_withholds_counts_unless_export_enabled(monkeypatch):
+def test_batch_gates_both_overflight_blocks_with_one_rule(monkeypatch):
+    """aircraft_activity and aircraft_estimate follow ONE export rule; the
+    numbers the estimate moved (aircraft_db, lden_db, score) always ship."""
     from property_scores.api import main
-    out = {"noise": {"score": 50, "aircraft_activity": {"status": "ok"},
-                     "aircraft_estimate": {"lden_db": 50}}}
+
+    def payload():
+        return {"noise": {"score": 50, "aircraft_db": 48.2, "lden_db": 60.1,
+                          "aircraft_activity": {"status": "ok"},
+                          "aircraft_estimate": {"lden_db": 50}}}
     monkeypatch.delenv("AIRCRAFT_ACTIVITY_API_EXPORT", raising=False)
+    out = payload()
     main._gate_aircraft_activity_export(out)
     assert "aircraft_activity" not in out["noise"]
-    assert out["noise"]["score"] == 50 and "aircraft_estimate" in out["noise"]
-    out2 = {"noise": {"score": 50, "aircraft_activity": {"status": "ok"}}}
+    assert "aircraft_estimate" not in out["noise"]
+    assert out["noise"] == {"score": 50, "aircraft_db": 48.2, "lden_db": 60.1}
+    # each block alone is gated too (no "only when both" shortcut)
+    only_est = {"noise": {"score": 50, "aircraft_estimate": {"lden_db": 50}}}
+    main._gate_aircraft_activity_export(only_est)
+    assert only_est["noise"] == {"score": 50}
+    # a payload with neither is left as the same object, untouched
+    plain = {"noise": {"score": 50}}
+    before = plain["noise"]
+    main._gate_aircraft_activity_export(plain)
+    assert plain["noise"] is before
     monkeypatch.setenv("AIRCRAFT_ACTIVITY_API_EXPORT", "1")
+    out2 = payload()
     main._gate_aircraft_activity_export(out2)
-    assert out2["noise"]["aircraft_activity"] == {"status": "ok"}
+    assert out2 == payload()
 
 
 def test_helipads_endpoint_filters_and_shapes(client):

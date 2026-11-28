@@ -56,6 +56,10 @@ def test_off_never_touches_the_data(monkeypatch, ns):
     r = ns.noise_score(*KEILOR, 500)
     assert "aircraft_activity" not in r and "aircraft_estimate" not in r
     assert "aircraft_db" not in r
+    # the excluded path too: off means no estimate whatever the caller asks
+    x = ns.noise_score(*KEILOR, 500, exclude_aircraft=True)
+    assert "aircraft_estimate" not in x and "aircraft_db" not in x
+    assert x["confidence_note"].endswith(ns._AIRCRAFT_EXCLUDED_NOTE)
 
 
 def test_off_signatures_are_the_pre_change_strings():
@@ -120,10 +124,12 @@ def test_estimate_fills_only_without_official_contour(monkeypatch, ns):
     # cannot be used to trace a withheld contour
     assert block == est["aircraft_activity"]
 
-    # excluded-aircraft grids never get the estimate either
+    # exclude_aircraft (official contours not usable): the estimate applies
+    # from overflight data alone; see the test below for the edge property
     _vic(monkeypatch, None)
     ex = ns.noise_score(*KEILOR, 500, exclude_aircraft=True)
-    assert "aircraft_estimate" not in ex and ex.get("aircraft_excluded") is True
+    assert ex.get("aircraft_excluded") is True
+    assert ex["aircraft_estimate"]["lden_db"] == e["lden_db"]
 
 
 def test_insufficient_city_is_untouched(monkeypatch, ns):
@@ -134,3 +140,219 @@ def test_insufficient_city_is_untouched(monkeypatch, ns):
     block = est.pop("aircraft_activity")
     assert block["status"] == "insufficient" and block["flights_per_day"] is None
     assert est == off
+
+
+# ---- the rules added for withheld contours (2026-11-29 review P1) ----------
+
+def _counting_vic(monkeypatch, hit):
+    calls = []
+
+    def q(lat, lng):
+        calls.append((lat, lng))
+        return hit
+    monkeypatch.setattr(aircraft, "_query_vic", q)
+    aircraft._aircraft_cached.cache_clear()
+    return calls
+
+
+def test_excluded_request_is_the_same_inside_and_outside_a_contour(monkeypatch, ns):
+    """With exclude_aircraft the estimate must not depend on the official
+    contour at all: whether it appears and how big it is are identical for a
+    point inside a contour and the same point outside it. This is what stops
+    a withheld contour (Perth everywhere, Brisbane on the paid API) being
+    traced from the estimate's presence, size, aircraft_db or the note."""
+    monkeypatch.setattr(ns, "_AA_MODE", "estimate")
+    calls = _counting_vic(monkeypatch, MAEO_HIT)
+    inside = ns.noise_score(*KEILOR, 500, exclude_aircraft=True)
+    calls_out = _counting_vic(monkeypatch, None)
+    outside = ns.noise_score(*KEILOR, 500, exclude_aircraft=True)
+    assert calls == [] and calls_out == [], "excluded path read a contour"
+    assert inside == outside
+    e = inside["aircraft_estimate"]
+    assert e["lden_db"] >= 45 and inside["aircraft_db"] == e["leq_db"]
+    assert "not used for this request" in e["basis"]
+    assert inside["aircraft_excluded"] is True
+    assert inside["aircraft_assessment"] == "not_assessed"
+    assert "aircraft" not in inside  # no contour block
+    note = inside["confidence_note"]
+    assert note.endswith(ns._AIRCRAFT_EXCLUDED_ESTIMATED_NOTE)
+    assert "outside" not in note and "No official" not in note
+
+    # and the sanity half: WITHOUT the flag the same two inputs differ, so the
+    # equality above is the rule working, not the stub being ignored
+    _vic(monkeypatch, MAEO_HIT)
+    in_default = ns.noise_score(*KEILOR, 500)
+    _vic(monkeypatch, None)
+    out_default = ns.noise_score(*KEILOR, 500)
+    assert "aircraft_estimate" not in in_default
+    assert in_default["aircraft"]["zone_code"] == "MAEO2"
+    # the official term, not the estimate, is what entered the level
+    assert in_default["aircraft_db"] == round(
+        ns.AMBIENT_DB + in_default["aircraft"]["penalty_db"], 1)
+    assert out_default["aircraft_estimate"]["lden_db"] == e["lden_db"]
+
+
+def _cell_point(city, i, j):
+    return (city.lat0 + i * city.dlat, city.lon0 + j * city.dlon)
+
+
+def test_estimate_below_the_floor_is_not_mixed(monkeypatch, ns):
+    from property_scores.aircraft_activity import noise as aan
+    from property_scores.aircraft_activity import store as aas
+    c = aas.Store(FIX).cities["melbourne"]
+    est = aan.estimate_lden(c.cell_values(0, 0), c.coverage)
+    assert est and est["lden_db"] < aan.APPLY_FLOOR_DB  # really a quiet cell
+    pt = _cell_point(c, 0, 0)
+    _vic(monkeypatch, None)
+    for kw in ({}, {"exclude_aircraft": True}):
+        monkeypatch.setattr(ns, "_AA_MODE", "off")
+        off = ns.noise_score(*pt, 500, **kw)
+        monkeypatch.setattr(ns, "_AA_MODE", "estimate")
+        on = ns.noise_score(*pt, 500, **kw)
+        assert on.pop("aircraft_activity")["status"] == "ok"
+        assert on == off, kw
+
+
+def test_large_aircraft_only_city_is_not_estimated(monkeypatch, ns):
+    """Brisbane's receivers miss light aircraft, so no estimate enters a
+    level there even where the jets-only figure is above the floor."""
+    from property_scores.aircraft_activity import noise as aan
+    from property_scores.aircraft_activity import store as aas
+    c = aas.Store(FIX).cities["brisbane"]
+    assert c.coverage == aas.COVERAGE_LARGE_ONLY
+    best = max(((aan.estimate_lden(c.cell_values(i, j), c.coverage)["lden_db"], i, j)
+                for i in range(c.ny) for j in range(c.nx)))
+    assert best[0] >= aan.APPLY_FLOOR_DB  # would have applied under coverage ok
+    pt = _cell_point(c, best[1], best[2])
+    monkeypatch.setattr(aircraft, "_query_qld", lambda lat, lng: None)
+    monkeypatch.setattr(aircraft, "_query_gold_coast", lambda lat, lng: None)
+    aircraft._aircraft_cached.cache_clear()
+    for kw in ({}, {"exclude_aircraft": True}):
+        monkeypatch.setattr(ns, "_AA_MODE", "off")
+        off = ns.noise_score(*pt, 500, **kw)
+        monkeypatch.setattr(ns, "_AA_MODE", "estimate")
+        on = ns.noise_score(*pt, 500, **kw)
+        block = on.pop("aircraft_activity")
+        assert block["status"] == "large_aircraft_only"
+        assert on == off, kw
+
+
+def test_insufficient_city_is_untouched_when_excluded(monkeypatch, ns):
+    monkeypatch.setattr(ns, "_AA_MODE", "off")
+    off = ns.noise_score(*HOBART, 500, exclude_aircraft=True)
+    monkeypatch.setattr(ns, "_AA_MODE", "estimate")
+    on = ns.noise_score(*HOBART, 500, exclude_aircraft=True)
+    assert on.pop("aircraft_activity")["status"] == "insufficient"
+    assert on == off
+
+
+def test_helicopters_never_become_db(monkeypatch, ns):
+    """A cell of helicopters only (jets and light aircraft zeroed) gives no
+    estimate, so no level moves however many helicopters pass."""
+    from property_scores.aircraft_activity import noise as aan
+    from property_scores.aircraft_activity import store as aas
+    st = aas.Store(FIX)
+    real = aan.activity_at
+
+    def heli_only(lat, lng, store=None):
+        block, _ = real(lat, lng, store=st)
+        c = st.city_for(lat, lng)
+        cell = c.cell_values(*c.cell_index(lat, lng))
+        m = dict(cell["metrics"], jet_per_day=0.0, light_per_day=0.0,
+                 heli_per_day=500.0)
+        return block, aan.estimate_lden(dict(cell, metrics=m), c.coverage)
+    monkeypatch.setattr(aan, "activity_at", heli_only)
+    _vic(monkeypatch, None)
+    monkeypatch.setattr(ns, "_AA_MODE", "off")
+    off = ns.noise_score(*KEILOR, 500, exclude_aircraft=True)
+    monkeypatch.setattr(ns, "_AA_MODE", "estimate")
+    on = ns.noise_score(*KEILOR, 500, exclude_aircraft=True)
+    on.pop("aircraft_activity")
+    assert on == off
+
+
+def test_estimate_for_level_reads_overflight_data_only():
+    from property_scores.aircraft_activity import noise as aan
+    est = {"lden_db": 50.0}
+    assert aan.estimate_for_level({"coverage": "ok"}, est) is est
+    assert aan.estimate_for_level({"coverage": "large_aircraft_only"}, est) is None
+    assert aan.estimate_for_level({"coverage": "insufficient"}, est) is None
+    assert aan.estimate_for_level({"coverage": "ok"}, {"lden_db": 44.9}) is None
+    assert aan.estimate_for_level({"coverage": "ok"}, {"lden_db": 45.0})
+    assert aan.estimate_for_level({"coverage": "ok"}, None) is None
+    assert aan.estimate_for_level(None, est) is None
+
+
+def test_endpoints_forward_exclude_aircraft_and_skip_the_grid(monkeypatch):
+    from fastapi.testclient import TestClient
+    from property_scores.api import main
+    seen = []
+
+    def fake_score(lat, lng, radius_m=500, **kw):
+        seen.append(kw)
+        return {"score": 50, **({"aircraft_excluded": True}
+                                if kw.get("exclude_aircraft") else {})}
+
+    def no_grid(*a, **k):
+        raise AssertionError("excluded request must not read the baked grid")
+    monkeypatch.setattr(main, "noise_score", fake_score)
+    monkeypatch.setattr(main, "noise_cache_lookup", no_grid)
+    monkeypatch.setattr(main, "_check_rate", lambda *a, **k: True)
+    client = TestClient(main.app)
+    r = client.get("/scores/noise", params={"lat": KEILOR[0], "lng": KEILOR[1],
+                                            "exclude_aircraft": "true"})
+    assert r.status_code == 200 and r.json()["aircraft_excluded"] is True
+    assert seen[-1].get("exclude_aircraft") is True
+    # batch component: forwarded only when set, default call unchanged
+    main._noise_for_batch(*KEILOR, exclude_aircraft=True)
+    assert seen[-1].get("exclude_aircraft") is True
+    main._noise_for_batch(*KEILOR)
+    assert "exclude_aircraft" not in seen[-1]
+
+
+def test_surface_counts_estimate_nodes_only_when_present(monkeypatch):
+    from property_scores.noise import surface as nsurf
+
+    def fake(lat, lng, exclude_aircraft=False):
+        return {"lden_db": 55.0, "score": 50, "lden_source": "transfer",
+                **({"aircraft_estimate": {"lden_db": 50.0}}
+                   if exclude_aircraft else {})}
+    monkeypatch.setattr(nsurf, "noise_score", fake)
+    monkeypatch.setattr(nsurf, "_coverage_gap", lambda lat, lng: False)
+    on = nsurf.noise_surface(*KEILOR, radius_m=1500, cells=5,
+                             require_path="transfer", exclude_aircraft=True)
+    assert on["aircraft_estimate_nodes"] == 25
+    off = nsurf.noise_surface(*KEILOR, radius_m=1500, cells=5,
+                              require_path="transfer")
+    assert "aircraft_estimate_nodes" not in off
+
+
+def test_batch_with_exclude_reads_no_contour_in_any_component(monkeypatch):
+    """/scores?exclude_aircraft=true: the aircraft_noise component must not
+    report a contour hit either, or a consumer that strips noise.aircraft_db
+    on a withheld hit (DA Leads) would re-draw the edge from it."""
+    from fastapi.testclient import TestClient
+    from property_scores.api import main
+    hits = []
+
+    def contour(lat, lng):
+        hits.append((lat, lng))
+        return {"assessment": None, "zone_code": "30-35 Zone", "source": "wa_slip"}
+    monkeypatch.setattr(main, "aircraft_noise_penalty", contour)
+    noise_kw = []
+    monkeypatch.setattr(main, "_noise_for_batch",
+                        lambda lat, lng, **kw: noise_kw.append(kw) or {"score": 50})
+    for name in ("walkability_score", "_solar_with_footprint", "flood_score",
+                 "bushfire_score", "heat_island_score", "view_quality_score",
+                 "contamination_score"):
+        monkeypatch.setattr(main, name, lambda *a, **k: {"score": 1})
+    client = TestClient(main.app)
+    r = client.get("/scores", params={"lat": -31.938, "lng": 115.944,
+                                      "exclude_aircraft": "true"})
+    body = r.json()
+    assert r.status_code == 200 and hits == []
+    assert body["aircraft_noise"] == main._EXCLUDED_AIRCRAFT_NOISE
+    assert noise_kw[-1].get("exclude_aircraft") is True
+    r = client.get("/scores", params={"lat": -31.938, "lng": 115.944})
+    assert hits and r.json()["aircraft_noise"]["source"] == "wa_slip"
+    assert noise_kw[-1].get("exclude_aircraft") is False

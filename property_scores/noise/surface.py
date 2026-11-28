@@ -183,12 +183,16 @@ def noise_surface(lat: float, lng: float, radius_m: int = RADIUS_DEFAULT_M,
     falls back to its own environment, which cannot detect a deployment that
     was never configured in the first place.
 
-    `exclude_aircraft=True` computes every node with no aircraft term (road,
-    rail and ambient only; see noise_score). A grid's level steps trace the
+    `exclude_aircraft=True` computes every node with no OFFICIAL aircraft
+    term (see noise_score): road, rail and ambient, plus, in estimate mode
+    only, the overflight estimate, which is decided from overflight data
+    alone and so carries no contour shape. A grid's level steps trace the
     shape of any ANEF contour inside the window, so a caller that may not
     redistribute that contour asks for the grid without it. The response
     echoes the flag as `aircraft_excluded`; a caller must check the echo
     rather than assume, because an older build ignores the parameter.
+    `aircraft_estimate_nodes` (present only when non-zero) counts nodes whose
+    level includes the overflight estimate.
     """
     if cells not in CELLS_ALLOWED:
         cells = CELLS_DEFAULT
@@ -213,6 +217,7 @@ def noise_surface(lat: float, lng: float, radius_m: int = RADIUS_DEFAULT_M,
     lden = [[None] * cells for _ in range(cells)]
     score = [[None] * cells for _ in range(cells)]
     paths: dict[str, int] = {}
+    estimate_nodes = 0
     # Off-expected nodes whose fallback the rasters explain (see _coverage_gap).
     coverage_gaps = 0
     started = time.monotonic()
@@ -243,6 +248,8 @@ def noise_surface(lat: float, lng: float, radius_m: int = RADIUS_DEFAULT_M,
                     score[r][c] = int(got["score"])
                 path = got.get("lden_source") or "physics"
                 paths[path] = paths.get(path, 0) + 1
+                if got.get("aircraft_estimate"):
+                    estimate_nodes += 1
                 if path != expected and gap:
                     coverage_gaps += 1
         except (TimeoutError, FuturesTimeoutError):
@@ -308,9 +315,14 @@ def noise_surface(lat: float, lng: float, radius_m: int = RADIUS_DEFAULT_M,
         "model_path_coverage_gap_nodes": coverage_gaps if inputs_ok else 0,
         "model_path_expected_nodes": on_expected,
         # Echo of the request, set only from what every node was actually
-        # asked for (no node path computes aircraft when this is True).
+        # asked for (no node path reads an official contour when this is
+        # True; see aircraft_estimate_nodes for the overflight estimate).
         "aircraft_excluded": bool(exclude_aircraft),
     }
+    # Only when non-zero, so a grid built with NOISE_AIRCRAFT_ACTIVITY off (no
+    # node can carry an estimate) keeps its exact pre-change shape.
+    if estimate_nodes:
+        out["aircraft_estimate_nodes"] = estimate_nodes
     if exclude_aircraft:
         out["aircraft_assessment"] = "not_assessed"
     if not out["model_path_as_configured"]:

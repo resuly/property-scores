@@ -130,9 +130,10 @@ Before all of these: a request with `aircraft_estimate=false` skips the
 feature entirely (next section). Result-cache keys carry `:noaa` for such a
 request whenever the process flag is on, so a result with the estimate never
 answers one without it, or the other way round; with the flag off the key is
-the old one. `/scores/noise` never reads the precomputed grid for it: in
-estimate mode a grid only matches the process stamp if it was baked with the
-estimate (`-aa1`).
+the old one. While the flag is on, `/scores/noise` never reads the
+precomputed grid for it: in estimate mode a grid only matches the process
+stamp if it was baked with the estimate (`-aa1`). With the flag off the
+request takes the pre-existing path, grid included, as on master.
 
 `exclude_aircraft` is accepted by `/scores` (where `aircraft_noise` then
 answers `not_assessed` without reading any contour: a real hit there beside a

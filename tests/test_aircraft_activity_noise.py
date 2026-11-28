@@ -435,6 +435,8 @@ def test_endpoints_forward_aircraft_estimate_and_skip_the_grid(monkeypatch):
 
     def no_grid(*a, **k):
         raise AssertionError("aircraft_estimate=false must not read the grid")
+    from property_scores.noise import score as ns
+    monkeypatch.setattr(ns, "_AA_MODE", "estimate")
     monkeypatch.setattr(main, "noise_score", fake_score)
     monkeypatch.setattr(main, "noise_cache_lookup", no_grid)
     monkeypatch.setattr(main, "_check_rate", lambda *a, **k: True)
@@ -489,3 +491,64 @@ def test_surface_forwards_aircraft_estimate(monkeypatch):
     seen.clear()
     nsurf.noise_surface(*KEILOR, radius_m=1500, cells=5, require_path="transfer")
     assert all(k == {} for k in seen)
+
+
+def test_flag_off_no_estimate_request_still_reads_the_grid(monkeypatch):
+    """With the overflight flag off, aircraft_estimate=false changes nothing,
+    so /scores/noise takes the master path: the precomputed grid first."""
+    from fastapi.testclient import TestClient
+    from property_scores.api import main
+    from property_scores.noise import score as ns
+    monkeypatch.setattr(ns, "_AA_MODE", "off")
+    grid_reads = []
+    monkeypatch.setattr(main, "noise_cache_lookup",
+                        lambda lat, lng: grid_reads.append((lat, lng)) or {"score": 77, "grid": True})
+    monkeypatch.setattr(main, "noise_score",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("grid hit expected")))
+    monkeypatch.setattr(main, "_check_rate", lambda *a, **k: True)
+    client = TestClient(main.app)
+    r = client.get("/scores/noise", params={"lat": KEILOR[0], "lng": KEILOR[1],
+                                            "aircraft_estimate": "false"})
+    assert r.status_code == 200 and r.json() == {"score": 77, "grid": True}
+    assert len(grid_reads) == 1
+
+
+def _stub_debug(monkeypatch):
+    """noise_debug with its data reads stubbed; records noise_score kwargs."""
+    from property_scores.noise import debug
+    seen = []
+
+    def fake_score(lat, lng, radius_m=500, **kw):
+        seen.append(kw)
+        return {"score": 50, "lden_db": 55.0}
+    monkeypatch.setattr(debug, "noise_score", fake_score)
+    monkeypatch.setattr(debug, "get_db", lambda *a, **k: object())
+    for name in ("aadt_near", "nfdh_near", "gtfs_rail_near", "rail_near",
+                 "roads_near", "buildings_in_radius", "_rail_shapes_near"):
+        if hasattr(debug, name):
+            monkeypatch.setattr(debug, name, lambda *a, **k: [])
+    monkeypatch.setattr(debug, "barrier_attenuation", lambda *a, **k: 0.0)
+    return seen
+
+
+def test_detail_paths_forward_both_flags_to_noise_score(monkeypatch):
+    """The website panel (/scores/noise?detail=true) and the paid point query
+    (/scores?noise_detail=true) both end in noise_debug."""
+    from fastapi.testclient import TestClient
+    from property_scores.api import main
+    from property_scores.noise import score as ns
+    monkeypatch.setattr(ns, "_AA_MODE", "estimate")
+    seen = _stub_debug(monkeypatch)
+    monkeypatch.setattr(main, "_check_rate", lambda *a, **k: True)
+    client = TestClient(main.app)
+    r = client.get("/scores/noise", params={"lat": KEILOR[0], "lng": KEILOR[1],
+                                            "detail": "true",
+                                            "aircraft_estimate": "false",
+                                            "exclude_aircraft": "true"})
+    assert r.status_code == 200, r.text
+    assert seen[-1] == {"aircraft_estimate": False, "exclude_aircraft": True}
+    main._noise_for_batch(*KEILOR, detail=True, aircraft_estimate=False,
+                          exclude_aircraft=True)
+    assert seen[-1] == {"aircraft_estimate": False, "exclude_aircraft": True}
+    main._noise_for_batch(*KEILOR, detail=True)
+    assert seen[-1] == {}

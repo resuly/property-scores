@@ -101,7 +101,6 @@ def noise_debug(lat: float, lng: float, radius_m: int = 500,
     where ODbL segments cannot ship) should pass False: screening those ~30
     segments is the most expensive part of this function.
     """
-    # exclude_aircraft only when set, so the default call is the old one.
     # Each flag is passed only when it differs from the default, so the
     # default call is the old one.
     kw = {}

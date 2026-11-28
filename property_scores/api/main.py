@@ -475,11 +475,15 @@ def get_noise(
     if not _check_rate(ip, limit=limit):
         return JSONResponse({"error": "Rate limit exceeded."}, status_code=429)
     try:
-        if exclude_aircraft or not aircraft_estimate:
+        from property_scores.noise import score as _ns
+        if exclude_aircraft or (not aircraft_estimate and _ns._AA_MODE != "off"):
             # Never the precomputed grid: it was baked with the official
             # aircraft term in, and in estimate mode it only matches the
             # process stamp if it was baked WITH the estimate (-aa1), so it
-            # can answer neither an excluded nor a no-estimate request.
+            # can answer neither an excluded nor a no-estimate request. With
+            # the overflight flag off, aircraft_estimate=false changes
+            # nothing, so that request takes the pre-existing path below
+            # (grid included), identical to origin/master.
             kw = {}
             if exclude_aircraft:
                 kw["exclude_aircraft"] = True
